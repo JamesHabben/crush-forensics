@@ -1,0 +1,245 @@
+"""Virtual Filesystem (VFS) abstraction.
+
+All source types (ZIP archive, directory, future: AFF4, tar) are presented
+through a single interface so viewers never need to know the origin.
+"""
+from __future__ import annotations
+
+import zipfile
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import IO
+
+
+@dataclass
+class VFSNode:
+    """A single node in the virtual filesystem tree."""
+    name: str
+    path: str          # Full virtual path e.g. "/var/mobile/Library/SMS/sms.db"
+    is_dir: bool
+    size: int = 0
+    modified: float = 0.0
+    children: list[VFSNode] = field(default_factory=list)
+
+    @property
+    def extension(self) -> str:
+        return Path(self.name).suffix.lower()
+
+
+class VFS(ABC):
+    """Abstract virtual filesystem."""
+
+    @abstractmethod
+    def root(self) -> VFSNode: ...
+
+    @abstractmethod
+    def read(self, node: VFSNode) -> bytes: ...
+
+    @abstractmethod
+    def open(self, node: VFSNode) -> IO[bytes]: ...
+
+    def close(self) -> None:
+        """Optional cleanup for VFS implementations."""
+        return None
+
+    @abstractmethod
+    def file_count(self, node: VFSNode) -> int:
+        """Return number of files under node (including the node if it's a file)."""
+        ...
+
+    @abstractmethod
+    def total_size(self, node: VFSNode) -> int:
+        """Return total size of files under node (including the node if it's a file)."""
+        ...
+
+    def peek(self, node: VFSNode, n: int = 16) -> bytes:
+        """Return first n bytes for magic-byte sniffing."""
+        with self.open(node) as src:
+            return src.read(n)
+
+
+class DirectoryVFS(VFS):
+    """VFS backed by a plain directory on disk."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._root_path = Path(path)
+        self._tree = self._build_node(self._root_path)
+        self._file_counts: dict[str, int] = {}
+        self._total_sizes: dict[str, int] = {}
+        self._compute_file_counts(self._tree)
+        self._compute_total_sizes(self._tree)
+
+    def root(self) -> VFSNode:
+        return self._tree
+
+    def _build_node(self, path: Path) -> VFSNode:
+        stat = path.stat()
+        node = VFSNode(
+            name=path.name or str(path),
+            path=str(path),
+            is_dir=path.is_dir(),
+            size=stat.st_size if path.is_file() else 0,
+            modified=stat.st_mtime,
+        )
+        if path.is_dir():
+            node.children = sorted(
+                [self._build_node(child) for child in path.iterdir()],
+                key=lambda n: (not n.is_dir, n.name.lower()),
+            )
+        return node
+
+    def read(self, node: VFSNode) -> bytes:
+        return Path(node.path).read_bytes()
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return open(node.path, "rb")
+
+    def file_count(self, node: VFSNode) -> int:
+        return self._file_counts.get(node.path, 0)
+
+    def total_size(self, node: VFSNode) -> int:
+        return self._total_sizes.get(node.path, 0)
+
+    def _compute_file_counts(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._file_counts[node.path] = 1
+            return 1
+        total = 0
+        for child in node.children:
+            total += self._compute_file_counts(child)
+        self._file_counts[node.path] = total
+        return total
+
+    def _compute_total_sizes(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._total_sizes[node.path] = node.size
+            return node.size
+        total = 0
+        for child in node.children:
+            total += self._compute_total_sizes(child)
+        self._total_sizes[node.path] = total
+        return total
+
+
+class ZipVFS(VFS):
+    """VFS backed by a ZIP archive (iOS/Android full-fs extractions)."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._zip_path = Path(path)
+        self._zf = zipfile.ZipFile(self._zip_path, "r")
+        self._zip_names: dict[str, str] = {}
+        self._tree = self._build_tree()
+        self._file_counts: dict[str, int] = {}
+        self._total_sizes: dict[str, int] = {}
+        self._compute_file_counts(self._tree)
+        self._compute_total_sizes(self._tree)
+
+    def _build_tree(self) -> VFSNode:
+        root = VFSNode(name=self._zip_path.name, path="/", is_dir=True)
+        nodes: dict[str, VFSNode] = {"/": root}
+
+        for info in sorted(self._zf.infolist(), key=lambda i: i.filename):
+            parts = info.filename.rstrip("/").split("/")
+            for depth, _ in enumerate(parts, 1):
+                virtual_path = "/" + "/".join(parts[:depth])
+                if virtual_path not in nodes:
+                    is_dir = depth < len(parts) or info.filename.endswith("/")
+                    node = VFSNode(
+                        name=parts[depth - 1],
+                        path=virtual_path,
+                        is_dir=is_dir,
+                        size=info.file_size if not is_dir else 0,
+                    )
+                    parent_path = "/" + "/".join(parts[: depth - 1]) if depth > 1 else "/"
+                    nodes[parent_path].children.append(node)
+                    nodes[virtual_path] = node
+                if depth == len(parts) and not info.filename.endswith("/"):
+                    self._zip_names[virtual_path] = info.filename
+
+        for node in nodes.values():
+            node.children.sort(key=lambda n: (not n.is_dir, n.name.lower()))
+        return root
+
+    def root(self) -> VFSNode:
+        return self._tree
+
+    def read(self, node: VFSNode) -> bytes:
+        return self._zf.read(self._zip_name(node))
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return self._zf.open(self._zip_name(node))
+
+    def _zip_name(self, node: VFSNode) -> str:
+        return self._zip_names.get(node.path, node.path.lstrip("/"))
+
+    def close(self) -> None:
+        self._zf.close()
+
+    def file_count(self, node: VFSNode) -> int:
+        return self._file_counts.get(node.path, 0)
+
+    def total_size(self, node: VFSNode) -> int:
+        return self._total_sizes.get(node.path, 0)
+
+    def _compute_file_counts(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._file_counts[node.path] = 1
+            return 1
+        total = 0
+        for child in node.children:
+            total += self._compute_file_counts(child)
+        self._file_counts[node.path] = total
+        return total
+
+    def _compute_total_sizes(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._total_sizes[node.path] = node.size
+            return node.size
+        total = 0
+        for child in node.children:
+            total += self._compute_total_sizes(child)
+        self._total_sizes[node.path] = total
+        return total
+
+
+def open_vfs(path: str | Path) -> VFS:
+    """Factory — open the right VFS type based on the source path."""
+    p = Path(path)
+    if p.is_dir():
+        return DirectoryVFS(p)
+    if p.suffix.lower() == ".zip":
+        return ZipVFS(p)
+    if p.is_file():
+        return FileVFS(p)
+    raise ValueError(f"Unsupported source type: {p}")
+
+
+class FileVFS(VFS):
+    """VFS backed by a single file."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        stat = self._path.stat()
+        self._root = VFSNode(
+            name=self._path.name,
+            path=str(self._path),
+            is_dir=False,
+            size=stat.st_size,
+            modified=stat.st_mtime,
+        )
+
+    def root(self) -> VFSNode:
+        return self._root
+
+    def read(self, node: VFSNode) -> bytes:
+        return Path(node.path).read_bytes()
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return open(node.path, "rb")
+
+    def file_count(self, node: VFSNode) -> int:
+        return 1
+
+    def total_size(self, node: VFSNode) -> int:
+        return node.size
