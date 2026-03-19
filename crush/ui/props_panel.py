@@ -3,6 +3,7 @@
 """Properties panel — right dock, shows file metadata for the selected artifact."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -41,6 +42,12 @@ class PropertiesPanel(QScrollArea):
         path_label.setWordWrap(True)
         self._layout.addRow("Path:", path_label)
 
+        # Timestamps (MACB) if available
+        self._add_timestamp("Modified (UTC)", node.modified)
+        self._add_timestamp("Accessed (UTC)", node.accessed)
+        self._add_timestamp("Changed (UTC)", node.changed)
+        self._add_timestamp("Birth (UTC)", node.birth)
+
         # Parser-supplied metadata
         for key, val in metadata.items():
             lbl = QLabel(str(val))
@@ -50,3 +57,14 @@ class PropertiesPanel(QScrollArea):
                 | Qt.TextInteractionFlag.TextSelectableByMouse
             )
             self._layout.addRow(f"{key}:", lbl)
+
+    def _add_timestamp(self, label: str, ts_value: float) -> None:
+        if not ts_value:
+            return
+        ts = datetime.fromtimestamp(ts_value, tz=timezone.utc)
+        lbl = QLabel(ts.strftime("%Y-%m-%d %H:%M:%S"))
+        lbl.setTextInteractionFlags(
+            lbl.textInteractionFlags()
+            | Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._layout.addRow(f"{label}:", lbl)

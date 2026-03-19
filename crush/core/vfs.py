@@ -20,6 +20,9 @@ class VFSNode:
     is_dir: bool
     size: int = 0
     modified: float = 0.0
+    accessed: float = 0.0
+    changed: float = 0.0
+    birth: float = 0.0
     children: list[VFSNode] = field(default_factory=list)
 
     @property
@@ -81,6 +84,9 @@ class DirectoryVFS(VFS):
             is_dir=path.is_dir(),
             size=stat.st_size if path.is_file() else 0,
             modified=stat.st_mtime,
+            accessed=stat.st_atime,
+            changed=stat.st_ctime,
+            birth=getattr(stat, "st_birthtime", 0.0),
         )
         if path.is_dir():
             node.children = sorted(
@@ -145,11 +151,16 @@ class ZipVFS(VFS):
                 virtual_path = "/" + "/".join(parts[:depth])
                 if virtual_path not in nodes:
                     is_dir = depth < len(parts) or info.filename.endswith("/")
+                    zip_ts = 0.0
+                    if info.date_time:
+                        from datetime import datetime
+                        zip_ts = datetime(*info.date_time).timestamp()
                     node = VFSNode(
                         name=parts[depth - 1],
                         path=virtual_path,
                         is_dir=is_dir,
                         size=info.file_size if not is_dir else 0,
+                        modified=zip_ts,
                     )
                     parent_path = "/" + "/".join(parts[: depth - 1]) if depth > 1 else "/"
                     nodes[parent_path].children.append(node)
@@ -227,6 +238,9 @@ class FileVFS(VFS):
             is_dir=False,
             size=stat.st_size,
             modified=stat.st_mtime,
+            accessed=stat.st_atime,
+            changed=stat.st_ctime,
+            birth=getattr(stat, "st_birthtime", 0.0),
         )
 
     def root(self) -> VFSNode:

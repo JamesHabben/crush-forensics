@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 import logging
 import shutil
 import tempfile
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QEventLoop, QCoreApplication, QSettings
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QPalette, QColor, QAction
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
@@ -24,6 +25,9 @@ from PySide6.QtWidgets import (
     QTabBar,
     QTabWidget,
     QTextEdit,
+    QWidget,
+    QHBoxLayout,
+    QPushButton,
 )
 
 import crush
@@ -32,6 +36,7 @@ from crush.parsers.base import ParseResult
 from crush.core.session import Session
 from crush.ui.fs_panel import FilesystemPanel
 from crush.ui.props_panel import PropertiesPanel
+from crush.ui.loading_dialog import LoadingDialog
 
 
 class _LoadSourceWorker(QObject):
@@ -74,6 +79,34 @@ class _LogSignalHandler(QObject, logging.Handler):
         self.log_line.emit(msg)
 
 
+class _DockTitleBar(QWidget):
+    def __init__(self, title: str, dock: QDockWidget) -> None:
+        super().__init__(dock)
+        self._dock = dock
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(6)
+        label = QLabel(title)
+        layout.addWidget(label)
+        layout.addStretch()
+        dock_btn = QPushButton("Dock")
+        dock_btn.setFixedHeight(20)
+        dock_btn.clicked.connect(self._dock_back)
+        layout.addWidget(dock_btn)
+
+    def mousePressEvent(self, event: object) -> None:  # type: ignore[override]
+        if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
+            if self._dock.isFloating() and self._dock.windowHandle() is not None:
+                self._dock.windowHandle().startSystemMove()
+                return
+        super().mousePressEvent(event)  # type: ignore[arg-type]
+
+    def _dock_back(self) -> None:
+        mw = self._dock.parent()
+        if hasattr(mw, "_dock_to_default"):
+            mw._dock_to_default(self._dock)  # type: ignore[attr-defined]
+
+
 class _ExportWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
@@ -107,6 +140,7 @@ class _ExportWorker(QObject):
                 child_target.parent.mkdir(parents=True, exist_ok=True)
                 self._export_file(child, child_target)
 
+
     def _export_file(self, node: VFSNode, target: Path) -> None:
         with self._vfs.open(node) as src, open(target, "wb") as dst:
             shutil.copyfileobj(src, dst)
@@ -125,6 +159,7 @@ class MainWindow(QMainWindow):
         self.session = Session()
         self._always_hex = False
         self._pending_open: tuple[VFSNode, VFS] | None = None
+        self._load_queue: list[tuple[str, bool, bool]] = []
         self._settings = QSettings("Crush DFIR", "Crush")
         self.setWindowTitle(f"Crush {crush.__version__}")
         self.resize(1280, 800)
@@ -137,6 +172,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        self.setDockOptions(
+            QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AnimatedDocks
+        )
+        self._dock_defaults: dict[QDockWidget, Qt.DockWidgetArea] = {}
         # Center: tabbed viewer area
         self._viewer_tabs = QTabWidget()
         self._viewer_tabs.setTabBar(_ClosableTabBar())
@@ -151,30 +192,64 @@ class MainWindow(QMainWindow):
         self._fs_panel.node_selected.connect(self._on_node_selected)
         self._fs_panel.open_requested.connect(self._open_node_mode)
         self._fs_panel.export_requested.connect(self._export_node)
+        self._fs_panel.background_status.connect(self._on_background_status)
         self._fs_dock = QDockWidget("Filesystem", self)
+        self._fs_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._fs_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self._fs_dock.setWidget(self._fs_panel)
         self._fs_dock.setMinimumWidth(220)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._fs_dock)
+        self._dock_defaults[self._fs_dock] = Qt.DockWidgetArea.LeftDockWidgetArea
+        self._fs_dock.topLevelChanged.connect(
+            lambda floating, dock=self._fs_dock: self._sync_dock_titlebar(dock, floating)
+        )
 
         # Right dock: properties panel
         self._props_panel = PropertiesPanel(self)
         self._props_dock = QDockWidget("Properties", self)
+        self._props_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._props_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self._props_dock.setWidget(self._props_panel)
         self._props_dock.setMinimumWidth(200)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._props_dock)
+        self._dock_defaults[self._props_dock] = Qt.DockWidgetArea.RightDockWidgetArea
+        self._props_dock.topLevelChanged.connect(
+            lambda floating, dock=self._props_dock: self._sync_dock_titlebar(dock, floating)
+        )
 
         # Bottom dock: log panel
         self._log_view = QTextEdit()
         self._log_view.setReadOnly(True)
         self._log_dock = QDockWidget("Log", self)
+        self._log_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._log_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self._log_dock.setWidget(self._log_view)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._log_dock)
+        self._dock_defaults[self._log_dock] = Qt.DockWidgetArea.BottomDockWidgetArea
         self._log_dock.hide()
+        self._log_dock.topLevelChanged.connect(
+            lambda floating, dock=self._log_dock: self._sync_dock_titlebar(dock, floating)
+        )
 
         # Status bar
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status.showMessage(f"Crush {crush.__version__} — ready")
+        self._bg_status = QLabel("")
+        self._bg_status.setVisible(False)
+        self._status.addPermanentWidget(self._bg_status)
 
         self._build_menus()
 
@@ -194,6 +269,10 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._props_dock.toggleViewAction())
         view_menu.addAction(self._log_dock.toggleViewAction())
         view_menu.addSeparator()
+        view_menu.addAction("Dock Filesystem Panel", lambda: self._dock_to_default(self._fs_dock))
+        view_menu.addAction("Dock Properties Panel", lambda: self._dock_to_default(self._props_dock))
+        view_menu.addAction("Dock Log Panel", lambda: self._dock_to_default(self._log_dock))
+        view_menu.addAction("Reset Panel Layout", self._reset_panel_layout)
         self._always_hex_action = QAction("Always show Hex tab", self, checkable=True)
         self._always_hex_action.toggled.connect(self._set_always_hex)
         view_menu.addAction(self._always_hex_action)
@@ -226,24 +305,23 @@ class MainWindow(QMainWindow):
             self._load_source(path)
 
     def _open_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open file", "", "All files (*)")
-        if path:
-            self._load_source(path, open_after_load=True)
+        paths, _ = QFileDialog.getOpenFileNames(self, "Open file", "", "All files (*)")
+        for path in paths:
+            self._load_source(path, open_after_load=True, append_to_tree=True)
 
-    def _load_source(self, path: str, open_after_load: bool = False) -> None:
-        if hasattr(self, "_load_thread") and self._load_thread.isRunning():
-            QMessageBox.information(self, "Loading", "A source is already loading.")
+    def _load_source(self, path: str, open_after_load: bool = False, append_to_tree: bool = False) -> None:
+        if self._thread_is_running(getattr(self, "_load_thread", None)):
+            self._load_queue.append((path, open_after_load, append_to_tree))
+            self._status.showMessage("Queued source for loading…")
             return
 
         self._logger.info("Loading source: %s", path)
         self._loading_path = path
         self._open_after_load = open_after_load
+        self._append_to_tree = append_to_tree
+        self._tree_build_started = time.monotonic()
         self._status.showMessage(f"Loading: {path}")
-        self._progress = QProgressDialog("Loading source…", None, 0, 0, self)
-        self._progress.setWindowTitle("Loading")
-        self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._progress.setCancelButton(None)
-        self._progress.setMinimumDuration(0)
+        self._progress = LoadingDialog("Loading source…", self)
         self._progress.show()
 
         self._load_thread = QThread(self)
@@ -260,15 +338,22 @@ class MainWindow(QMainWindow):
 
     def _on_load_finished(self, vfs: VFS) -> None:
         if hasattr(self, "_progress"):
-            self._progress.setLabelText("Building tree…")
+            self._progress.set_text("Building tree…")
         if getattr(self, "_open_after_load", False) and not vfs.root().is_dir:
             self._pending_open = (vfs.root(), vfs)
-        try:
-            self._fs_panel.load_finished.disconnect(self._on_tree_loaded)
-        except Exception:
-            pass
+        if getattr(self, "_tree_loaded_connected", False):
+            try:
+                self._fs_panel.load_finished.disconnect(self._on_tree_loaded)
+            except Exception:
+                pass
+            self._tree_loaded_connected = False
         self._fs_panel.load_finished.connect(self._on_tree_loaded)
-        self._fs_panel.load_vfs(vfs)
+        self._tree_loaded_connected = True
+        self._loading_vfs = vfs
+        if getattr(self, "_append_to_tree", False):
+            self._fs_panel.append_vfs(vfs)
+        else:
+            self._fs_panel.load_vfs(vfs)
 
     def _on_load_failed(self, message: str) -> None:
         if hasattr(self, "_progress"):
@@ -278,11 +363,33 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Load error", message)
 
     def _on_tree_loaded(self) -> None:
-        self._fs_panel.load_finished.disconnect(self._on_tree_loaded)
+        if getattr(self, "_tree_loaded_connected", False):
+            try:
+                self._fs_panel.load_finished.disconnect(self._on_tree_loaded)
+            except Exception:
+                pass
+            self._tree_loaded_connected = False
         if hasattr(self, "_progress"):
             self._progress.close()
         self._status.showMessage(f"Loaded: {self._loading_path}")
         self._logger.info("Loaded: %s", self._loading_path)
+        if hasattr(self, "_tree_build_started"):
+            elapsed = time.monotonic() - self._tree_build_started
+            if hasattr(self, "_loading_vfs"):
+                root = self._loading_vfs.root()
+                try:
+                    file_count = self._loading_vfs.file_count(root)
+                    total_size = self._loading_vfs.total_size(root)
+                    self._logger.info(
+                        "Load + initial tree render: %.3f s (files: %s, size: %s)",
+                        elapsed,
+                        f"{file_count:,}",
+                        _format_size(total_size),
+                    )
+                except Exception:
+                    self._logger.info("Load + initial tree render: %.3f s", elapsed)
+            else:
+                self._logger.info("Load + initial tree render: %.3f s", elapsed)
         if self._pending_open:
             node, vfs = self._pending_open
             self._pending_open = None
@@ -373,6 +480,16 @@ class MainWindow(QMainWindow):
             result = ParseResult(viewer_type="hex", data=hex_bytes)
             self._show_result(node, result, vfs)
             return
+        if mode == "text":
+            from crush.parsers.base import ParseResult
+            raw = vfs.read(node)
+            try:
+                text = raw.decode("utf-8")
+            except Exception:
+                text = raw.decode("utf-8", errors="replace")
+            result = ParseResult(viewer_type="text", data=text)
+            self._show_result(node, result, vfs)
+            return
         self._open_node(node, vfs)
 
     def _on_node_selected(self, node: VFSNode, vfs: VFS) -> None:
@@ -384,9 +501,6 @@ class MainWindow(QMainWindow):
             metadata["Total size"] = _format_size(vfs.total_size(node))
         else:
             metadata["Size"] = _format_size(node.size)
-        if node.modified:
-            ts = datetime.fromtimestamp(node.modified, tz=timezone.utc)
-            metadata["Modified (UTC)"] = ts.strftime("%Y-%m-%d %H:%M:%S")
         self._props_panel.update_properties(node, metadata)
 
     def _show_result(self, node: VFSNode, result: ParseResult, vfs: VFS) -> None:
@@ -408,6 +522,21 @@ class MainWindow(QMainWindow):
                 widget = tabbed
 
         label = node.path
+        existing_idx = -1
+        for i in range(self._viewer_tabs.count()):
+            w = self._viewer_tabs.widget(i)
+            if w is None:
+                continue
+            if w.property("crush_path") == node.path and w.property("crush_viewer") == result.viewer_type:
+                existing_idx = i
+                break
+        if existing_idx >= 0:
+            self._viewer_tabs.setCurrentIndex(existing_idx)
+            return
+        if result.viewer_type == "hex":
+            label = f"{node.path} [Hex]"
+        widget.setProperty("crush_path", node.path)
+        widget.setProperty("crush_viewer", result.viewer_type)
         idx = self._viewer_tabs.addTab(widget, label)
         self._viewer_tabs.setTabToolTip(idx, node.path)
         self._viewer_tabs.setCurrentIndex(idx)
@@ -433,17 +562,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_logger"):
             self._logger.info("Closing application")
 
-        self._closing_progress = QProgressDialog("Closing application…", None, 0, 0, None)
-        self._closing_progress.setWindowTitle("Closing")
-        self._closing_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._closing_progress.setCancelButton(None)
-        self._closing_progress.setMinimumDuration(0)
-        self._closing_progress.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self._closing_progress.show()
-        self.repaint()
-        self._closing_progress.repaint()
-        QCoreApplication.processEvents(QEventLoop.AllEvents, 200)
-
         if self._thread_is_running(getattr(self, "_load_thread", None)):
             self._load_thread.quit()
             self._load_thread.wait(2000)
@@ -457,9 +575,41 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_logger"):
                 self._logger.error("Error during shutdown: %s", exc)
 
-        if hasattr(self, "_closing_progress"):
-            self._closing_progress.close()
         event.accept()
+
+    def _reset_panel_layout(self) -> None:
+        for dock, area in (
+            (self._fs_dock, Qt.DockWidgetArea.LeftDockWidgetArea),
+            (self._props_dock, Qt.DockWidgetArea.RightDockWidgetArea),
+            (self._log_dock, Qt.DockWidgetArea.BottomDockWidgetArea),
+        ):
+            try:
+                self._dock_to_default(dock)
+                dock.show()
+            except Exception:
+                continue
+
+    def _on_background_status(self, text: str) -> None:
+        if not text:
+            self._bg_status.setVisible(False)
+            self._bg_status.setText("")
+            self._bg_status.setToolTip("")
+            return
+        self._bg_status.setText(text)
+        self._bg_status.setToolTip(text)
+        self._bg_status.setVisible(True)
+
+    def _sync_dock_titlebar(self, dock: QDockWidget, floating: bool) -> None:
+        if floating:
+            dock.setTitleBarWidget(_DockTitleBar(dock.windowTitle(), dock))
+        else:
+            dock.setTitleBarWidget(None)
+
+    def _dock_to_default(self, dock: QDockWidget) -> None:
+        area = self._dock_defaults.get(dock, Qt.DockWidgetArea.LeftDockWidgetArea)
+        if dock.isFloating():
+            dock.setFloating(False)
+        self.addDockWidget(area, dock)
 
     def _thread_is_running(self, thread: QThread | None) -> bool:
         if thread is None:
@@ -473,6 +623,9 @@ class MainWindow(QMainWindow):
 
     def _on_load_thread_finished(self) -> None:
         self._load_thread = None
+        if self._load_queue:
+            path, open_after_load, append_to_tree = self._load_queue.pop(0)
+            self._load_source(path, open_after_load=open_after_load, append_to_tree=append_to_tree)
 
     def _on_export_thread_finished(self) -> None:
         self._export_thread = None

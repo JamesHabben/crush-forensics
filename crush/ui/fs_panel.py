@@ -20,6 +20,8 @@ from crush.core.vfs import VFS, VFSNode
 
 _ROLE_NODE = Qt.ItemDataRole.UserRole + 1
 _ROLE_VFS  = Qt.ItemDataRole.UserRole + 2
+_ROLE_LOADED = Qt.ItemDataRole.UserRole + 3
+_ROLE_PLACEHOLDER = Qt.ItemDataRole.UserRole + 4
 
 # Extension → badge label (shown in the Type column)
 _SQLITE_MAGIC = b"SQLite format 3\x00"
@@ -48,6 +50,7 @@ class FilesystemPanel(QWidget):
     open_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
     load_finished = Signal()
+    background_status = Signal(str)
 
     def __init__(self, session: Session, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,6 +70,11 @@ class FilesystemPanel(QWidget):
         self._build_timer.timeout.connect(self._process_build_queue)
         self._build_queue: deque[tuple[QStandardItem, VFSNode, VFS]] = deque()
         self._build_batch = 200
+        self._type_queue: deque[tuple[QStandardItem, VFSNode, VFS]] = deque()
+        self._type_timer = QTimer(self)
+        self._type_timer.setInterval(0)
+        self._type_timer.timeout.connect(self._process_type_queue)
+        self._activities: set[str] = set()
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -94,14 +102,19 @@ class FilesystemPanel(QWidget):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self._tree.expanded.connect(self._on_expanded)
         layout.addWidget(self._tree)
 
     def load_vfs(self, vfs: VFS) -> None:
-        """Append a new VFS source to the tree."""
+        """Replace the tree with a new VFS source."""
         self._vfs = vfs
         self._build_timer.stop()
         self._build_queue.clear()
+        self._type_timer.stop()
+        self._type_queue.clear()
         self._type_cache.clear()
+        self._activities.clear()
+        self._emit_background_status()
 
         # Recreate model to avoid slow row-by-row clears on large trees.
         self._model = QStandardItemModel()
@@ -113,10 +126,20 @@ class FilesystemPanel(QWidget):
         self._model.appendRow(row)
         self._tree.expand(self._proxy.mapFromSource(self._model.indexFromItem(row[0])))
         if root_node.children:
-            self._build_queue.append((row[0], root_node, vfs))
-            self._build_timer.start()
-        else:
-            self.load_finished.emit()
+            self._add_placeholder(row[0])
+        self.load_finished.emit()
+
+    def append_vfs(self, vfs: VFS) -> None:
+        """Append a new VFS source to the existing tree."""
+        self._vfs = vfs
+        root_node = vfs.root()
+        row = self._node_to_row_shallow(root_node, vfs)
+        self._model.appendRow(row)
+        self._proxy.invalidateFilter()
+        self._tree.expand(self._proxy.mapFromSource(self._model.indexFromItem(row[0])))
+        if root_node.children:
+            self._add_placeholder(row[0])
+        self.load_finished.emit()
 
     # ------------------------------------------------------------------
     # Internals
@@ -126,6 +149,7 @@ class FilesystemPanel(QWidget):
         name_item = QStandardItem(node.name)
         name_item.setData(node, _ROLE_NODE)
         name_item.setData(vfs, _ROLE_VFS)
+        name_item.setData(False, _ROLE_LOADED)
         name_item.setEditable(False)
 
         size_item = QStandardItem(_format_size(node.size) if not node.is_dir else "")
@@ -144,9 +168,16 @@ class FilesystemPanel(QWidget):
         total_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         total_item.setEditable(False)
 
-        type_label = self._detect_type_label(node, vfs)
-        type_item = QStandardItem(type_label)
+        type_item = QStandardItem("")
         type_item.setEditable(False)
+
+        if node.is_dir and node.children:
+            self._add_placeholder(name_item)
+        if not node.is_dir:
+            self._type_queue.append((type_item, node, vfs))
+            if not self._type_timer.isActive():
+                self._activity_start("Type detection")
+                self._type_timer.start()
 
         return [name_item, size_item, files_item, total_item, type_item]
 
@@ -176,6 +207,17 @@ class FilesystemPanel(QWidget):
         if node and vfs:
             self.node_selected.emit(node, vfs)
 
+    def _on_expanded(self, index: QModelIndex) -> None:
+        proxy_index = index.siblingAtColumn(0)
+        source_index = self._proxy.mapToSource(proxy_index)
+        item = self._model.itemFromIndex(source_index)
+        if item is None:
+            return
+        node: VFSNode | None = item.data(_ROLE_NODE)
+        vfs: VFS | None = item.data(_ROLE_VFS)
+        if node and vfs:
+            self._ensure_children_loaded(item, node, vfs)
+
     def _on_context_menu(self, pos: object) -> None:
         index = self._tree.indexAt(pos)
         if not index.isValid():
@@ -192,6 +234,7 @@ class FilesystemPanel(QWidget):
         menu = QMenu(self)
         open_action = menu.addAction("Open")
         open_hex_action = menu.addAction("Open in Hex")
+        open_text_action = menu.addAction("Open as Plain Text")
         menu.addSeparator()
         export_action = menu.addAction("Export…")
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
@@ -199,6 +242,8 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "default")
         elif action == open_hex_action:
             self.open_requested.emit(node, vfs, "hex")
+        elif action == open_text_action:
+            self.open_requested.emit(node, vfs, "text")
         elif action == export_action:
             self.export_requested.emit(node, vfs)
 
@@ -212,7 +257,7 @@ class FilesystemPanel(QWidget):
     def _process_build_queue(self) -> None:
         if not self._build_queue:
             self._build_timer.stop()
-            self.load_finished.emit()
+            self._activity_end("Loading folders")
             return
 
         processed = 0
@@ -222,12 +267,27 @@ class FilesystemPanel(QWidget):
                 row = self._node_to_row_shallow(child, vfs)
                 parent_item.appendRow(row)
                 if child.is_dir and child.children:
-                    self._build_queue.append((row[0], child, vfs))
+                    self._add_placeholder(row[0])
             processed += 1
 
         if not self._build_queue:
             self._build_timer.stop()
-            self.load_finished.emit()
+            self._activity_end("Loading folders")
+
+    def _process_type_queue(self) -> None:
+        if not self._type_queue:
+            self._type_timer.stop()
+            self._activity_end("Type detection")
+            return
+        processed = 0
+        while self._type_queue and processed < 300:
+            type_item, node, vfs = self._type_queue.popleft()
+            label = self._detect_type_label(node, vfs)
+            type_item.setText(label)
+            processed += 1
+        if not self._type_queue:
+            self._type_timer.stop()
+            self._activity_end("Type detection")
 
     def _detect_type_label(self, node: VFSNode, vfs: VFS) -> str:
         if node.is_dir:
@@ -250,6 +310,47 @@ class FilesystemPanel(QWidget):
             label = ""
         self._type_cache[cache_key] = label
         return label
+
+    def _ensure_children_loaded(self, parent_item: QStandardItem, node: VFSNode, vfs: VFS) -> None:
+        if parent_item.data(_ROLE_LOADED):
+            return
+        parent_item.setData(True, _ROLE_LOADED)
+        if parent_item.rowCount() == 1:
+            first = parent_item.child(0, 0)
+            if first is not None and first.data(_ROLE_PLACEHOLDER):
+                parent_item.removeRows(0, parent_item.rowCount())
+        if node.children:
+            self._build_queue.append((parent_item, node, vfs))
+            if not self._build_timer.isActive():
+                self._activity_start("Loading folders")
+                self._build_timer.start()
+
+    def _activity_start(self, name: str) -> None:
+        if name not in self._activities:
+            self._activities.add(name)
+            self._emit_background_status()
+
+    def _activity_end(self, name: str) -> None:
+        if name in self._activities:
+            self._activities.discard(name)
+            self._emit_background_status()
+
+    def _emit_background_status(self) -> None:
+        if not self._activities:
+            self.background_status.emit("")
+            return
+        items = ", ".join(sorted(self._activities))
+        self.background_status.emit(f"Background: {items}")
+
+    def _add_placeholder(self, parent_item: QStandardItem) -> None:
+        if parent_item.rowCount() > 0:
+            return
+        placeholder = QStandardItem("")
+        placeholder.setData(True, _ROLE_PLACEHOLDER)
+        placeholder.setEditable(False)
+        parent_item.appendRow(
+            [placeholder, QStandardItem(""), QStandardItem(""), QStandardItem(""), QStandardItem("")]
+        )
 
     def _label_from_registry(self, node: VFSNode, vfs: VFS) -> str:
         try:

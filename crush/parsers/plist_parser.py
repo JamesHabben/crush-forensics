@@ -1,11 +1,18 @@
 """plist parser — handles both binary and XML plist files."""
 from __future__ import annotations
 
+from io import BytesIO
 import plistlib
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
+from crush.third_party.ccl_bplist import (
+    load as bplist_load,
+    deserialise_NsKeyedArchiver,
+    NSKeyedArchiver_common_objects_convertor,
+    set_object_converter,
+)
 
 _BPLIST_MAGIC = b"bplist"
 _XML_PLIST_SIG = b"<?xml"
@@ -20,8 +27,19 @@ class PlistParser(AbstractParser):
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         raw = vfs.read(node)
-        data = plistlib.loads(raw)
-        fmt = "binary" if raw[:6] == _BPLIST_MAGIC else "XML"
+        if raw[:6] == _BPLIST_MAGIC:
+            fmt = "binary"
+            set_object_converter(NSKeyedArchiver_common_objects_convertor)
+            data = bplist_load(BytesIO(raw))
+            if isinstance(data, dict) and data.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
+                try:
+                    data = deserialise_NsKeyedArchiver(data)
+                    fmt = "binary (NSKeyedArchiver)"
+                except Exception:
+                    pass
+        else:
+            fmt = "XML"
+            data = plistlib.loads(raw)
         return ParseResult(
             viewer_type="tree",
             data=data,

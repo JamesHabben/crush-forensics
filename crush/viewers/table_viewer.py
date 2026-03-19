@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -46,11 +47,18 @@ class TableViewer(QWidget):
         self._data = data
         self._db_path = Path(data.get("__db_path", "")) if isinstance(data, dict) else None
         self._db_conn: sqlite3.Connection | None = None
+        self._summary_label = "Summary (generated)"
         self._build_ui()
         if data:
             table_names = [k for k in data.keys() if not k.startswith("__")]
-            if table_names:
-                self._load_table(table_names[0])
+            if self._db_path and self._db_path.exists():
+                self._table_combo.clear()
+                self._table_combo.addItem(self._summary_label)
+                self._table_combo.addItems(table_names)
+                self._load_summary()
+            else:
+                if table_names:
+                    self._load_table(table_names[0])
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -130,6 +138,9 @@ class TableViewer(QWidget):
 
     def _load_table(self, table_name: str) -> None:
         """Populate the model with the selected table's data."""
+        if table_name == self._summary_label:
+            self._load_summary()
+            return
         table = self._data.get(table_name)
         if table is None:
             return
@@ -150,10 +161,11 @@ class TableViewer(QWidget):
                 if val is None:
                     cell = QStandardItem("")
                     cell.setForeground(Qt.GlobalColor.gray)
-                elif isinstance(val, bytes):
-                    cell = QStandardItem(f"<BLOB {len(val):,} B>")
+                elif isinstance(val, (bytes, bytearray, memoryview)):
+                    blob = val if isinstance(val, bytes) else bytes(val)
+                    cell = QStandardItem(f"<BLOB {len(blob):,} B>")
                     cell.setForeground(Qt.GlobalColor.blue)
-                    cell.setData(val, Qt.ItemDataRole.UserRole)
+                    cell.setData(blob, Qt.ItemDataRole.UserRole)
                 else:
                     cell = QStandardItem(str(val))
                 if isinstance(val, (int, float)):
@@ -165,6 +177,43 @@ class TableViewer(QWidget):
         self._table_view.resizeColumnsToContents()
         row_word = "row" if len(rows) == 1 else "rows"
         self._row_count_label.setText(f"({len(rows):,} {row_word})")
+
+    def _load_summary(self) -> None:
+        """Show table list + row counts for SQLite databases."""
+        conn = self._ensure_db()
+        if conn is None:
+            return
+        cursor = conn.cursor()
+        try:
+            tables = [
+                r[0]
+                for r in cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                ).fetchall()
+            ]
+        except Exception as exc:
+            self._sql_status.setText(str(exc))
+            return
+
+        self._source_model.clear()
+        self._source_model.setHorizontalHeaderLabels(["Table (generated)", "Rows"])
+        self._sql_status.setText("Counting rows…")
+        for table in tables:
+            try:
+                count = cursor.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]  # noqa: S608
+            except Exception:
+                count = "?"
+            name_item = QStandardItem(table)
+            name_item.setEditable(False)
+            count_item = QStandardItem(str(count))
+            count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            count_item.setEditable(False)
+            self._source_model.appendRow([name_item, count_item])
+
+        self._table_view.resizeColumnsToContents()
+        word = "table" if len(tables) == 1 else "tables"
+        self._row_count_label.setText(f"({len(tables):,} {word})")
+        self._sql_status.setText(f"{len(tables):,} {word}")
 
     def _apply_filter(self, text: str) -> None:
         self._proxy_model.setFilterFixedString(text)
@@ -280,27 +329,48 @@ class TableViewer(QWidget):
         copy_cell = menu.addAction("Copy cell")
         copy_row = menu.addAction("Copy row (TSV)")
         copy_sel = menu.addAction("Copy selection (TSV)")
-        blob_preview = menu.addAction("Preview BLOB")
-        blob_hex = menu.addAction("Open BLOB in Hex")
-        blob_export = menu.addAction("Export BLOB…")
-        if not isinstance(blob, (bytes, bytearray)):
+        blob_preview = menu.addAction("Inspect Cell…")
+        blob_hex = menu.addAction("Open in Hex")
+        blob_export = menu.addAction("Export…")
+        blob_bytes = _coerce_blob(blob)
+        display_val = self._table_view.model().data(index, Qt.ItemDataRole.DisplayRole)
+        has_display = display_val is not None and str(display_val) != ""
+        if blob_bytes is None and not has_display:
             blob_preview.setEnabled(False)
             blob_hex.setEnabled(False)
             blob_export.setEnabled(False)
+        if blob_bytes is None and has_display:
+            blob_preview.setEnabled(True)
+            blob_hex.setEnabled(True)
+            blob_export.setEnabled(True)
         action = menu.exec(self._table_view.viewport().mapToGlobal(pos))
         if action == copy_cell:
-            QApplication.clipboard().setText(str(self._table_view.model().data(index)))
+            cell_val = self._table_view.model().data(index, Qt.ItemDataRole.UserRole)
+            blob_bytes = _coerce_blob(cell_val)
+            if blob_bytes is not None:
+                QApplication.clipboard().setText(blob_bytes.hex())
+            else:
+                QApplication.clipboard().setText(str(self._table_view.model().data(index)))
         elif action == copy_row:
             self._copy_rows([index.row()])
         elif action == copy_sel:
             rows = sorted({i.row() for i in self._table_view.selectedIndexes()})
             self._copy_rows(rows)
         elif action == blob_preview:
-            self._preview_blob(bytes(blob))
+            if blob_bytes is not None:
+                self._preview_blob(blob_bytes)
+            elif has_display:
+                self._preview_blob(str(display_val).encode("utf-8", errors="replace"))
         elif action == blob_hex:
-            self._open_blob_hex(bytes(blob))
+            if blob_bytes is not None:
+                self._open_blob_hex(blob_bytes)
+            elif has_display:
+                self._open_blob_hex(str(display_val).encode("utf-8", errors="replace"))
         elif action == blob_export:
-            self._export_blob(bytes(blob))
+            if blob_bytes is not None:
+                self._export_blob(blob_bytes)
+            elif has_display:
+                self._export_blob(str(display_val).encode("utf-8", errors="replace"))
 
     def _copy_rows(self, rows: list[int]) -> None:
         lines: list[str] = []
@@ -335,46 +405,8 @@ class TableViewer(QWidget):
             self._sql_status.setText(str(exc))
 
     def _preview_blob(self, blob: bytes) -> None:
-        # Try image first
-        try:
-            from PySide6.QtGui import QPixmap
-            pixmap = QPixmap()
-            if pixmap.loadFromData(blob):
-                dialog = QDialog(self)
-                dialog.setWindowTitle(f"BLOB Preview ({len(blob):,} B)")
-                layout = QVBoxLayout(dialog)
-                label = QLabel()
-                label.setPixmap(pixmap)
-                layout.addWidget(label)
-                dialog.resize(800, 600)
-                dialog.exec()
-                return
-        except Exception:
-            pass
-
-        # Try text (utf-8 with fallback)
-        try:
-            text = blob.decode("utf-8")
-        except Exception:
-            try:
-                text = blob.decode("latin-1")
-            except Exception:
-                text = ""
-
-        if text:
-            dialog = QDialog(self)
-            dialog.setWindowTitle(f"BLOB Preview (text, {len(blob):,} B)")
-            layout = QVBoxLayout(dialog)
-            viewer = QPlainTextEdit()
-            viewer.setReadOnly(True)
-            viewer.setPlainText(text[:200_000])
-            layout.addWidget(viewer)
-            dialog.resize(900, 600)
-            dialog.exec()
-            return
-
-        # Fallback to hex
-        self._open_blob_hex(blob)
+        dialog = _BlobInspector(blob, self)
+        dialog.exec()
 
     def keyPressEvent(self, event: object) -> None:  # type: ignore[override]
         if hasattr(event, "matches") and event.matches(QKeySequence.StandardKey.Copy):
@@ -405,3 +437,150 @@ class _NumericSortProxy(QSortFilterProxyModel):
         if isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
             return left_data < right_data
         return super().lessThan(left, right)
+
+
+class _BlobInspector(QDialog):
+    def __init__(self, blob: bytes, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._blob = blob
+        self._build_ui()
+        self._apply_view()
+
+    def _build_ui(self) -> None:
+        self.setWindowTitle(f"BLOB Inspector ({len(self._blob):,} B)")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        top = QWidget()
+        top_layout = QHBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(6)
+
+        top_layout.addWidget(QLabel("Open as:"))
+        self._format = QComboBox()
+        self._format.addItems([
+            "Auto",
+            "Hex",
+            "UTF-8 text",
+            "Latin-1 text",
+            "Base64 (decode)",
+            "Plist / bplist",
+            "XML",
+        ])
+        self._format.currentIndexChanged.connect(self._apply_view)
+        top_layout.addWidget(self._format)
+
+        self._copy_btn = QPushButton("Copy")
+        self._copy_btn.clicked.connect(self._copy_current)
+        top_layout.addWidget(self._copy_btn)
+        top_layout.addStretch()
+        layout.addWidget(top)
+
+        self._viewer = QPlainTextEdit()
+        self._viewer.setReadOnly(True)
+        self._viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(self._viewer, stretch=1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _apply_view(self) -> None:
+        fmt = self._format.currentText()
+        content = ""
+        if fmt == "Auto":
+            content = (
+                self._try_plist()
+                or self._try_xml()
+                or self._try_utf8()
+                or self._try_latin1()
+                or self._hex()
+            )
+        elif fmt == "Hex":
+            content = self._hex()
+        elif fmt == "UTF-8 text":
+            content = self._try_utf8() or "[decode error]"
+        elif fmt == "Latin-1 text":
+            content = self._try_latin1() or "[decode error]"
+        elif fmt == "Base64 (decode)":
+            content = self._try_base64() or "[decode error]"
+        elif fmt == "Plist / bplist":
+            content = self._try_plist() or "[parse error]"
+        elif fmt == "XML":
+            content = self._try_xml() or "[parse error]"
+        self._viewer.setPlainText(content[:500_000])
+
+    def _copy_current(self) -> None:
+        QApplication.clipboard().setText(self._viewer.toPlainText())
+
+    def _hex(self) -> str:
+        return _bytes_to_hexview(self._blob, max_bytes=200_000)
+
+    def _try_utf8(self) -> str:
+        try:
+            return self._blob.decode("utf-8")
+        except Exception:
+            return ""
+
+    def _try_latin1(self) -> str:
+        try:
+            return self._blob.decode("latin-1")
+        except Exception:
+            return ""
+
+    def _try_base64(self) -> str:
+        import base64
+        try:
+            decoded = base64.b64decode(self._blob, validate=False)
+            return decoded.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def _try_plist(self) -> str:
+        import plistlib
+        try:
+            obj = plistlib.loads(self._blob)
+            return _pretty(obj)
+        except Exception:
+            return ""
+
+    def _try_xml(self) -> str:
+        try:
+            from lxml import etree
+            root = etree.fromstring(self._blob)
+            return etree.tostring(root, pretty_print=True, encoding="unicode")
+        except Exception:
+            return ""
+
+
+def _pretty(obj: object) -> str:
+    try:
+        import pprint
+        return pprint.pformat(obj, width=120)
+    except Exception:
+        return str(obj)
+
+
+def _bytes_to_hexview(b: bytes, width: int = 16, max_bytes: int = 200_000) -> str:
+    if max_bytes > -1:
+        b = b[:max_bytes]
+    offset = 0
+    lines: list[str] = []
+    while offset < len(b):
+        chunk = b[offset:offset + width]
+        ascii_part = "".join(chr(x) if 0x20 <= x < 0x7F else "." for x in chunk)
+        hex_part = " ".join(f"{x:02x}" for x in chunk).ljust(width * 3)
+        lines.append(f"{offset:08x}: {hex_part} {ascii_part}")
+        offset += width
+    return "\n".join(lines)
+
+
+def _coerce_blob(value: object) -> bytes | None:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    return None

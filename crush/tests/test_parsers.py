@@ -10,6 +10,7 @@ from pathlib import Path
 from crush.core.vfs import DirectoryVFS
 from crush.parsers.sqlite_parser import SQLiteParser
 from crush.parsers.plist_parser import PlistParser
+from crush.parsers.abx_parser import AbxParser
 from crush.parsers.hex_fallback import HexFallbackParser
 
 
@@ -85,3 +86,47 @@ def test_hex_fallback_parse(tmp_path: Path) -> None:
     result = parser.parse(node, vfs)
     assert result.viewer_type == "hex"
     assert result.data == raw
+
+
+def _u16(value: int) -> bytes:
+    return bytes([(value >> 8) & 0xFF, value & 0xFF])
+
+
+def _utf(s: str) -> bytes:
+    data = s.encode("utf-8")
+    return _u16(len(data)) + data
+
+
+def _interned(s: str) -> bytes:
+    return _u16(0xFFFF) + _utf(s)
+
+
+def _make_abx_bytes() -> bytes:
+    # Minimal ABX for: <root attr="value"/>
+    magic = b"ABX\x00"
+    start_doc = bytes([0x00])
+    start_tag = bytes([0x22]) + _utf("root")  # TYPE_STRING + START_TAG
+    attr = bytes([0x2F]) + _interned("attr") + _utf("value")  # ATTRIBUTE token
+    end_tag = bytes([0x23]) + _utf("root")  # TYPE_STRING + END_TAG
+    end_doc = bytes([0x01])
+    return magic + start_doc + start_tag + attr + end_tag + end_doc
+
+
+def test_abx_parser_parse(tmp_path: Path) -> None:
+    abx_path = tmp_path / "binary.xml"
+    abx_path.write_bytes(_make_abx_bytes())
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "binary.xml")
+
+    parser = AbxParser()
+    assert parser.can_parse(node.path, vfs.peek(node))
+
+    result = parser.parse(node, vfs)
+    assert result.viewer_type == "abx"
+    assert "<root" in result.data["xml_str"]
+    assert "attr" in result.data["xml_str"]
+    tree = result.data["tree"]
+    assert tree["@tag"] == "root"
+    assert tree["@attribs"]["attr"] == "value"
