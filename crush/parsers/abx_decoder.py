@@ -178,22 +178,22 @@ class _AbxReader:
         return val
 
     def read_i32(self) -> int:
-        val = struct.unpack(">i", self.data[self.pos : self.pos + 4])[0]
+        val = int(struct.unpack(">i", self.data[self.pos : self.pos + 4])[0])
         self.pos += 4
         return val
 
     def read_i64(self) -> int:
-        val = struct.unpack(">q", self.data[self.pos : self.pos + 8])[0]
+        val = int(struct.unpack(">q", self.data[self.pos : self.pos + 8])[0])
         self.pos += 8
         return val
 
     def read_f32(self) -> float:
-        val = struct.unpack(">f", self.data[self.pos : self.pos + 4])[0]
+        val = float(struct.unpack(">f", self.data[self.pos : self.pos + 4])[0])
         self.pos += 4
         return val
 
     def read_f64(self) -> float:
-        val = struct.unpack(">d", self.data[self.pos : self.pos + 8])[0]
+        val = float(struct.unpack(">d", self.data[self.pos : self.pos + 8])[0])
         self.pos += 8
         return val
 

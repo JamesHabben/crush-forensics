@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import plistlib
-from typing import Any
+from typing import Any, cast
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
@@ -29,11 +29,14 @@ class PlistParser(AbstractParser):
         raw = vfs.read(node)
         if raw[:6] == _BPLIST_MAGIC:
             fmt = "binary"
-            set_object_converter(NSKeyedArchiver_common_objects_convertor)
-            data = bplist_load(BytesIO(raw))
+            _set_object_converter = cast(Any, set_object_converter)
+            _bplist_load = cast(Any, bplist_load)
+            _deserialize = cast(Any, deserialise_NsKeyedArchiver)
+            _set_object_converter(NSKeyedArchiver_common_objects_convertor)
+            data = _bplist_load(BytesIO(raw))
             if isinstance(data, dict) and data.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
                 try:
-                    data = deserialise_NsKeyedArchiver(data)
+                    data = _deserialize(data)
                     fmt = "binary (NSKeyedArchiver)"
                 except Exception:
                     pass

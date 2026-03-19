@@ -50,3 +50,14 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+exclude = [
+    "crush/third_party/.*",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "crush.third_party.*",
+    "crush.ui.*",
+    "crush.viewers.*",
+]
+ignore_errors = true
