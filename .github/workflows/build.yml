@@ -34,7 +34,8 @@ jobs:
             libgl1 \
             libegl1 \
             libxcb-xinerama0 \
-            libxkbcommon-x11-0
+            libxkbcommon-x11-0 \
+            libpulse0
 
       - name: Install Python deps
         run: |
