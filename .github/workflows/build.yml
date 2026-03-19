@@ -1,0 +1,66 @@
+name: Build Portable Apps
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 \
+            libegl1 \
+            libxcb-xinerama0 \
+            libxkbcommon-x11-0
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install .
+
+      - name: Build (PyInstaller)
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name crush --collect-all PySide6 crush/__main__.py
+
+      - name: Package artifact (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf crush-linux.tar.gz -C dist crush
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows.zip
+
+      - name: Upload release asset (Linux)
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: crush-linux.tar.gz
+
+      - name: Upload release asset (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: crush-windows.zip
