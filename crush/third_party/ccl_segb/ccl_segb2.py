@@ -121,7 +121,7 @@ def read_segb2_stream(stream: typing.BinaryIO) -> typing.Iterable[Segb2Entry]:
     if magic_number != MAGIC:
         raise ValueError(f"Unexpected file magic. Expected: {MAGIC.hex()}; got: {magic_number.hex()}")
 
-    creation_date = decode_cocoa_time(creation_timestamp_raw)  # nothing done with this at the moment...
+    _creation_date = decode_cocoa_time(creation_timestamp_raw)  # nothing done with this at the moment...
 
     # To read the trailer we can just calculate its size and seek from end:
     trailer_reverse_offset = TRAILER_ENTRY_LENGTH * entries_count
@@ -153,7 +153,7 @@ def read_segb2_stream(stream: typing.BinaryIO) -> typing.Iterable[Segb2Entry]:
         entry_raw = stream.read(entry_length)
         data = entry_raw[ENTRY_HEADER_LENGTH:]
         crc32_stored, unknown_raw = struct.unpack("Ii", entry_raw[:ENTRY_HEADER_LENGTH])
-        crc32_calculated = calculated_crc = zlib.crc32(data)
+        calculated_crc = zlib.crc32(data)
 
         # align to 4 bytes
         if (remainder := trailer_entry.end_offset % 4) != 0:

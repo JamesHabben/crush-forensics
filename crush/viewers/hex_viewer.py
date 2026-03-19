@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont
 
 
 _BYTES_PER_ROW = 16
