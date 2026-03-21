@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 
+from crush.core.formatters import pretty_json
+
 
 class _LineNumberArea(QWidget):
     def __init__(self, editor: "_CodeEditor") -> None:
@@ -132,11 +134,9 @@ class TextView(QWidget):
 
         # Pretty-print JSON if possible
         if text.lstrip().startswith(("{", "[")):
-            try:
-                import json
-                text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-            except Exception:
-                pass
+            pretty = pretty_json(text)
+            if pretty is not None:
+                text = pretty
 
         self._raw_text = text
         self._editor.setPlainText(text)

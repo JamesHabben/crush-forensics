@@ -18,6 +18,34 @@ When navigating and open file you can use the following feature atm:
 - XML-Viewer
 - PLIST and BPLIST Viewer
 
+## Install and Run
+
+### From source (recommended for development)
+
+1. Create a virtual environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+2. Install dependencies
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+3. Run Crush
+```bash
+crush
+```
+
+### Alternative run command
+
+```bash
+python -m crush
+```
+
+If you see missing Qt or media errors, install the system dependencies below.
 
 ## System Dependencies
 

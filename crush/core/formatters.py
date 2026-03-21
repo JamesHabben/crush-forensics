@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 - now Marco Neumann (kalink0)
+"""Pure formatting/parsing helpers (non-Qt) for viewers and parsers."""
+from __future__ import annotations
+
+from typing import Any
+
+
+def pretty_json(text: str) -> str | None:
+    try:
+        import json
+        return json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+    except Exception:
+        return None
+
+
+def try_base64_text(blob: bytes) -> str | None:
+    try:
+        import base64
+        decoded = base64.b64decode(blob, validate=False)
+        return decoded.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def try_plist_text(blob: bytes) -> str | None:
+    try:
+        import plistlib
+        obj = plistlib.loads(blob)
+        return pretty_object(obj)
+    except Exception:
+        return None
+
+
+def try_xml_text(blob: bytes) -> str | None:
+    try:
+        from lxml import etree
+        root = etree.fromstring(blob)
+        return etree.tostring(root, pretty_print=True, encoding="unicode")
+    except Exception:
+        return None
+
+
+def pretty_object(obj: Any) -> str:
+    try:
+        import pprint
+        return pprint.pformat(obj, width=120)
+    except Exception:
+        return str(obj)
+
+
+def bytes_to_hexview(b: bytes, width: int = 16, max_bytes: int = 200_000) -> str:
+    if max_bytes > -1:
+        b = b[:max_bytes]
+    offset = 0
+    lines: list[str] = []
+    while offset < len(b):
+        chunk = b[offset:offset + width]
+        ascii_part = "".join(chr(x) if 0x20 <= x < 0x7F else "." for x in chunk)
+        hex_part = " ".join(f"{x:02x}" for x in chunk).ljust(width * 3 - 1)
+        lines.append(f"{offset:08x}: {hex_part}  {ascii_part}")
+        offset += width
+    return "\n".join(lines)

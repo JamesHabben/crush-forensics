@@ -28,6 +28,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crush.core.formatters import (
+    bytes_to_hexview,
+    pretty_object,
+    try_base64_text,
+    try_plist_text,
+    try_xml_text,
+)
+
 
 class TableViewer(QWidget):
     """Viewer for SQLite databases.
@@ -530,50 +538,21 @@ class _BlobInspector(QDialog):
             return ""
 
     def _try_base64(self) -> str:
-        import base64
-        try:
-            decoded = base64.b64decode(self._blob, validate=False)
-            return decoded.decode("utf-8", errors="replace")
-        except Exception:
-            return ""
+        return try_base64_text(self._blob) or ""
 
     def _try_plist(self) -> str:
-        import plistlib
-        try:
-            obj = plistlib.loads(self._blob)
-            return _pretty(obj)
-        except Exception:
-            return ""
+        return try_plist_text(self._blob) or ""
 
     def _try_xml(self) -> str:
-        try:
-            from lxml import etree
-            root = etree.fromstring(self._blob)
-            return etree.tostring(root, pretty_print=True, encoding="unicode")
-        except Exception:
-            return ""
+        return try_xml_text(self._blob) or ""
 
 
 def _pretty(obj: object) -> str:
-    try:
-        import pprint
-        return pprint.pformat(obj, width=120)
-    except Exception:
-        return str(obj)
+    return pretty_object(obj)
 
 
 def _bytes_to_hexview(b: bytes, width: int = 16, max_bytes: int = 200_000) -> str:
-    if max_bytes > -1:
-        b = b[:max_bytes]
-    offset = 0
-    lines: list[str] = []
-    while offset < len(b):
-        chunk = b[offset:offset + width]
-        ascii_part = "".join(chr(x) if 0x20 <= x < 0x7F else "." for x in chunk)
-        hex_part = " ".join(f"{x:02x}" for x in chunk).ljust(width * 3 - 1)
-        lines.append(f"{offset:08x}: {hex_part}  {ascii_part}")
-        offset += width
-    return "\n".join(lines)
+    return bytes_to_hexview(b, width=width, max_bytes=max_bytes)
 
 
 def _coerce_blob(value: object) -> bytes | None:
