@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """ABX (Android Binary XML) parser.
 
 Uses the best-effort decoder in `abx_decoder` to reconstruct XML, then
@@ -70,7 +70,47 @@ def _element_to_dict(el: Any) -> dict[str, Any]:
         result["@attribs"] = dict(el.attrib)
     if el.text and el.text.strip():
         result["@text"] = el.text.strip()
-    children = [_element_to_dict(child) for child in el]
+    children: list[dict[str, Any]] = []
+    map_entries: dict[str, list[Any]] = {}
+    for child in el:
+        child_dict = _element_to_dict(child)
+        children.append(child_dict)
+
+        name_attr = _get_attrib(child, "name")
+        if name_attr is not None:
+            value: Any | None = _get_attrib(child, "value")
+            if value is None:
+                if child.text and child.text.strip():
+                    value = child.text.strip()
+                elif len(child):
+                    value = child_dict
+                else:
+                    value = ""
+            map_entries.setdefault(name_attr, []).append(value)
+
     if children:
         result["@children"] = children
+    if map_entries:
+        normalized_map = {
+            key: values[0] if len(values) == 1 else values
+            for key, values in map_entries.items()
+        }
+        if _local_tag(el) == "map":
+            result.update(normalized_map)
+        else:
+            result["@map"] = normalized_map
     return result
+
+
+def _local_tag(el: Any) -> str:
+    tag = str(getattr(el, "tag", ""))
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _get_attrib(el: Any, name: str) -> str | None:
+    for key, value in getattr(el, "attrib", {}).items():
+        if key == name or key.endswith(f"}}{name}"):
+            return value
+    return None

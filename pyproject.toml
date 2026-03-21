@@ -9,7 +9,7 @@ description = "Crush — Digital Forensic Analysis Workbench"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
-authors = [{ name = "Crush Contributors" }]
+authors = [{ name = "Marco Neumann (kalink0)" }]
 keywords = ["forensics", "dfir", "ios", "android", "artifact", "analysis"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -25,6 +25,7 @@ dependencies = [
     "lxml>=5.0",
     "construct>=2.10",
     "python-magic>=0.4.27",
+    "filetype>=1.2.0",
 ]
 
 [project.optional-dependencies]

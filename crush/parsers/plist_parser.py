@@ -23,7 +23,11 @@ class PlistParser(AbstractParser):
     DISPLAY_NAME = "Property list (plist)"
 
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:
-        return peek_bytes[:6] == _BPLIST_MAGIC or peek_bytes[:5] == _XML_PLIST_SIG
+        if peek_bytes[:6] == _BPLIST_MAGIC:
+            return True
+        if peek_bytes[:5] == _XML_PLIST_SIG:
+            return _is_plist_xml(peek_bytes)
+        return False
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         raw = vfs.read(node)
@@ -69,3 +73,35 @@ def _walk(obj: Any, parts: list[str], limit: int) -> None:
     elif isinstance(obj, (list, tuple)):
         for item in obj:
             _walk(item, parts, limit)
+
+
+def _is_plist_xml(peek_bytes: bytes) -> bool:
+    text = peek_bytes[:2048].decode("utf-8", errors="ignore")
+    i = 0
+    while True:
+        lt = text.find("<", i)
+        if lt == -1:
+            return False
+        if lt + 1 >= len(text):
+            return False
+        nxt = text[lt + 1]
+        # Skip declarations, comments, and doctypes
+        if nxt in ("?", "!"):
+            gt = text.find(">", lt + 1)
+            if gt == -1:
+                return False
+            i = gt + 1
+            continue
+        # Parse tag name
+        j = lt + 1
+        name_chars: list[str] = []
+        while j < len(text):
+            ch = text[j]
+            if ch.isspace() or ch in (">", "/"):
+                break
+            name_chars.append(ch)
+            j += 1
+        if not name_chars:
+            return False
+        tag = "".join(name_chars).split(":")[-1].lower()
+        return tag == "plist"

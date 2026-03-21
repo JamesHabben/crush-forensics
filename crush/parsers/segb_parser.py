@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """SEGB v1/v2 parser (vendored from ccl-segb, MIT)."""
 from __future__ import annotations
 

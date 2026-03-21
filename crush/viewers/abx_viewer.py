@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """ABX viewer — split pane showing the parsed tree and reconstructed XML.
 
 The left pane reuses the standard TreeViewer for the nested dict structure.

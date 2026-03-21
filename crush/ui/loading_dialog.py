@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """Loading dialog with lightweight ASCII art."""
 from __future__ import annotations
 

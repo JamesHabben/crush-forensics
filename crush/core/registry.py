@@ -17,7 +17,12 @@ class ParserRegistry:
     @classmethod
     def candidates(cls, node: "VFSNode", vfs: "VFS") -> list["AbstractParser"]:
         if node.is_dir:
-            return []
+            parsers: list["AbstractParser"] = []
+            for p in cls._parsers:
+                can_dir = getattr(p, "can_parse_dir", None)
+                if callable(can_dir) and can_dir(node):
+                    parsers.append(p)
+            return parsers
         peek = vfs.peek(node)
         return [p for p in cls._parsers if p.can_parse(node.path, peek)]
 

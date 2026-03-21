@@ -570,8 +570,8 @@ def _bytes_to_hexview(b: bytes, width: int = 16, max_bytes: int = 200_000) -> st
     while offset < len(b):
         chunk = b[offset:offset + width]
         ascii_part = "".join(chr(x) if 0x20 <= x < 0x7F else "." for x in chunk)
-        hex_part = " ".join(f"{x:02x}" for x in chunk).ljust(width * 3)
-        lines.append(f"{offset:08x}: {hex_part} {ascii_part}")
+        hex_part = " ".join(f"{x:02x}" for x in chunk).ljust(width * 3 - 1)
+        lines.append(f"{offset:08x}: {hex_part}  {ascii_part}")
         offset += width
     return "\n".join(lines)
 

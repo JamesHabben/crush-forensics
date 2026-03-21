@@ -5,12 +5,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import time
+import os
+import subprocess
+import sys
 from pathlib import Path
 import logging
 import shutil
 import tempfile
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings, QTimer
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QPalette, QColor, QAction
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
@@ -31,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 import crush
-from crush.core.vfs import VFS, VFSNode
+from crush.core.vfs import VFS, VFSNode, DirectoryVFS
 from crush.parsers.base import ParseResult
 from crush.core.session import Session
 from crush.ui.fs_panel import FilesystemPanel
@@ -191,6 +194,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.node_activated.connect(self._open_node)
         self._fs_panel.node_selected.connect(self._on_node_selected)
         self._fs_panel.open_requested.connect(self._open_node_mode)
+        self._fs_panel.open_external_requested.connect(self._open_external_mode)
         self._fs_panel.export_requested.connect(self._export_node)
         self._fs_panel.background_status.connect(self._on_background_status)
         self._fs_dock = QDockWidget("Filesystem", self)
@@ -313,9 +317,11 @@ class MainWindow(QMainWindow):
         if self._thread_is_running(getattr(self, "_load_thread", None)):
             self._load_queue.append((path, open_after_load, append_to_tree))
             self._status.showMessage("Queued source for loading…")
+            self._logger.debug("Load queued: %s (open_after_load=%s append=%s)", path, open_after_load, append_to_tree)
             return
 
         self._logger.info("Loading source: %s", path)
+        self._logger.debug("Load start: %s (open_after_load=%s append=%s)", path, open_after_load, append_to_tree)
         self._loading_path = path
         self._open_after_load = open_after_load
         self._append_to_tree = append_to_tree
@@ -337,6 +343,7 @@ class MainWindow(QMainWindow):
         self._load_thread.start()
 
     def _on_load_finished(self, vfs: VFS) -> None:
+        self._logger.debug("Load worker finished; preparing tree build")
         if hasattr(self, "_progress"):
             self._progress.set_text("Building tree…")
         if getattr(self, "_open_after_load", False) and not vfs.root().is_dir:
@@ -350,12 +357,16 @@ class MainWindow(QMainWindow):
         self._fs_panel.load_finished.connect(self._on_tree_loaded)
         self._tree_loaded_connected = True
         self._loading_vfs = vfs
+        self._tree_loaded = False
+        self._logger.debug("Dispatching to FilesystemPanel (%s)", "append" if getattr(self, "_append_to_tree", False) else "load")
         if getattr(self, "_append_to_tree", False):
             self._fs_panel.append_vfs(vfs)
         else:
             self._fs_panel.load_vfs(vfs)
+        QTimer.singleShot(0, self._ensure_tree_loaded)
 
     def _on_load_failed(self, message: str) -> None:
+        self._logger.debug("Load worker failed: %s", message)
         if hasattr(self, "_progress"):
             self._progress.close()
         self._status.showMessage(f"Error loading source: {message}")
@@ -363,6 +374,8 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Load error", message)
 
     def _on_tree_loaded(self) -> None:
+        self._logger.debug("Tree load finished")
+        self._tree_loaded = True
         if getattr(self, "_tree_loaded_connected", False):
             try:
                 self._fs_panel.load_finished.disconnect(self._on_tree_loaded)
@@ -394,6 +407,11 @@ class MainWindow(QMainWindow):
             node, vfs = self._pending_open
             self._pending_open = None
             self._open_node(node, vfs)
+
+    def _ensure_tree_loaded(self) -> None:
+        if not getattr(self, "_tree_loaded", False):
+            self._logger.warning("Tree load signal not received; closing progress dialog.")
+            self._on_tree_loaded()
 
     def _export_node(self, node: VFSNode, vfs: VFS) -> None:
         dest_dir = QFileDialog.getExistingDirectory(self, "Export to folder")
@@ -492,6 +510,59 @@ class MainWindow(QMainWindow):
             return
         self._open_node(node, vfs)
 
+    def _open_external_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
+        if node.is_dir:
+            if isinstance(vfs, DirectoryVFS) and Path(node.path).exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(node.path))))
+            else:
+                QMessageBox.information(
+                    self,
+                    "Open External",
+                    "Opening directories from archives is not supported yet.",
+                )
+            return
+        path = self._materialize_node_for_external(node, vfs)
+        if path is None:
+            QMessageBox.warning(self, "Open External", "Unable to materialize file.")
+            return
+        if mode == "choose":
+            self._open_external_with_app(path)
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _materialize_node_for_external(self, node: VFSNode, vfs: VFS) -> Path | None:
+        try:
+            if isinstance(vfs, DirectoryVFS) and Path(node.path).exists():
+                return Path(node.path)
+            if not hasattr(self, "_external_temp_paths"):
+                self._external_temp_paths: list[Path] = []
+            tmp_dir = Path(tempfile.mkdtemp(prefix="crush-open-"))
+            suffix = node.extension or ""
+            tmp_path = tmp_dir / (node.name or f"file{suffix}")
+            with vfs.open(node) as src, open(tmp_path, "wb") as dst:
+                dst.write(src.read())
+            self._external_temp_paths.append(tmp_path)
+            return tmp_path
+        except Exception as exc:
+            if hasattr(self, "_logger"):
+                self._logger.error("Open external failed: %s", exc)
+            return None
+
+    def _open_external_with_app(self, path: Path) -> None:
+        title = "Choose application"
+        app_path, _ = QFileDialog.getOpenFileName(self, title, "", "Applications (*)")
+        if not app_path:
+            return
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen([app_path, str(path)], close_fds=True)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-a", app_path, str(path)])
+            else:
+                subprocess.Popen([app_path, str(path)])
+        except Exception as exc:
+            QMessageBox.warning(self, "Open External", str(exc))
+
     def _on_node_selected(self, node: VFSNode, vfs: VFS) -> None:
         metadata: dict[str, str] = {
             "Type": "Directory" if node.is_dir else "File",
@@ -575,6 +646,16 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_logger"):
                 self._logger.error("Error during shutdown: %s", exc)
 
+        # Best-effort cleanup for temp files created for external open.
+        for tmp_path in getattr(self, "_external_temp_paths", []):
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                if tmp_path.parent.exists():
+                    tmp_path.parent.rmdir()
+            except Exception:
+                pass
+
         event.accept()
 
     def _reset_panel_layout(self) -> None:
@@ -632,10 +713,16 @@ class MainWindow(QMainWindow):
 
     def _setup_logging(self) -> None:
         self._logger = logging.getLogger("crush")
-        self._logger.setLevel(logging.INFO)
+        level_name = os.getenv("CRUSH_LOG_LEVEL", "INFO").upper()
+        level = logging.getLevelName(level_name)
+        if not isinstance(level, int):
+            level = logging.INFO
+        self._logger.setLevel(level)
+        self._log_level = level
         self._logger.propagate = False
 
         self._log_signal_handler = _LogSignalHandler()
+        self._log_signal_handler.setLevel(level)
         self._log_signal_handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(message)s")
         )
@@ -656,6 +743,7 @@ class MainWindow(QMainWindow):
             self._logger.removeHandler(self._file_handler)
             self._file_handler.close()
         self._file_handler = logging.FileHandler(path, encoding="utf-8")
+        self._file_handler.setLevel(getattr(self, "_log_level", logging.INFO))
         self._file_handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(message)s")
         )
@@ -735,10 +823,14 @@ class MainWindow(QMainWindow):
         pal.setColor(QPalette.ColorRole.Text, QColor(25, 25, 25))
         pal.setColor(QPalette.ColorRole.Button, QColor(240, 242, 245))
         pal.setColor(QPalette.ColorRole.ButtonText, QColor(25, 25, 25))
-        pal.setColor(QPalette.ColorRole.Menu, QColor(248, 249, 251))
-        pal.setColor(QPalette.ColorRole.MenuText, QColor(25, 25, 25))
-        pal.setColor(QPalette.ColorRole.MenuBar, QColor(248, 249, 251))
-        pal.setColor(QPalette.ColorRole.MenuBarText, QColor(25, 25, 25))
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, QColor(248, 249, 251))
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, QColor(25, 25, 25))
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, QColor(248, 249, 251))
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, QColor(25, 25, 25))
         pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
         pal.setColor(QPalette.ColorRole.Highlight, QColor(56, 120, 255))
         pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
@@ -764,10 +856,14 @@ class MainWindow(QMainWindow):
         pal.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
         pal.setColor(QPalette.ColorRole.Button, QColor(45, 48, 52))
         pal.setColor(QPalette.ColorRole.ButtonText, QColor(220, 220, 220))
-        pal.setColor(QPalette.ColorRole.Menu, QColor(32, 34, 37))
-        pal.setColor(QPalette.ColorRole.MenuText, QColor(220, 220, 220))
-        pal.setColor(QPalette.ColorRole.MenuBar, QColor(32, 34, 37))
-        pal.setColor(QPalette.ColorRole.MenuBarText, QColor(220, 220, 220))
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, QColor(32, 34, 37))
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, QColor(220, 220, 220))
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, QColor(32, 34, 37))
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, QColor(220, 220, 220))
         pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
         pal.setColor(QPalette.ColorRole.Highlight, QColor(64, 128, 255))
         pal.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))

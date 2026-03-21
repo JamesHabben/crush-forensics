@@ -11,6 +11,7 @@
 - Generic text view — any file (basic)
 - ABXv1 and v2
 - SEGB v1/v2 (vendored ccl-segb, MIT)
+- LevelDB (vendored ccl_leveldb, MIT)
 - JSON — tree viewer
 
 ### Planned
@@ -20,5 +21,7 @@
 - filter by type
 - filter by extension
 - Protobuf viewer
-- LEveldb viewer
-- 
+- LEveldb viewer (in progress)
+- Video thumbnail
+- PDFS
+- Optional; open external (system default, app default)

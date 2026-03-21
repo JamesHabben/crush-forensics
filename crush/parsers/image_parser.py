@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """Image parser — routes image files to the image viewer."""
 from __future__ import annotations
 

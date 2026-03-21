@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2026 Crush Contributors
+# Copyright 2026 - now Marco Neumann (kalink0)
 """Vendored ccl_bplist (see LICENSE)."""
 
 from .ccl_bplist import (  # noqa: F401

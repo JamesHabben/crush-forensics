@@ -68,7 +68,14 @@ class TreeViewer(QWidget):
     def _load(self, data: Any) -> None:
         self._model.removeRows(0, self._model.rowCount())
         root = self._model.invisibleRootItem()
-        self._build_items(root, data, "root")
+        if isinstance(data, dict):
+            for key, value in data.items():
+                self._build_items(root, value, str(key))
+        elif isinstance(data, (list, tuple)):
+            for i, value in enumerate(data):
+                self._build_items(root, value, str(i))
+        else:
+            self._build_items(root, data, "value")
         self._tree.expandToDepth(1)
 
     def _build_items(self, parent: QStandardItem, obj: Any, key: str) -> None:

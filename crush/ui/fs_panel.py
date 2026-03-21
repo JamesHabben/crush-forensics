@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections import deque
+import logging
 
 from PySide6.QtCore import QModelIndex, Qt, Signal, QSortFilterProxyModel, QTimer
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -17,18 +18,15 @@ from PySide6.QtWidgets import (
 
 from crush.core.session import Session
 from crush.core.vfs import VFS, VFSNode
+from crush.core.magic import detect_fast_label
 
 _ROLE_NODE = Qt.ItemDataRole.UserRole + 1
 _ROLE_VFS  = Qt.ItemDataRole.UserRole + 2
 _ROLE_LOADED = Qt.ItemDataRole.UserRole + 3
 _ROLE_PLACEHOLDER = Qt.ItemDataRole.UserRole + 4
 
-# Extension → badge label (shown in the Type column)
-_SQLITE_MAGIC = b"SQLite format 3\x00"
-_BPLIST_MAGIC = b"bplist"
-_XML_PLIST_SIG = b"<?xml"
-
 _SIZE_UNITS: list[str] = ["B", "KB", "MB", "GB", "TB", "PB"]
+_logger = logging.getLogger(__name__)
 
 
 def _format_size(size: int) -> str:
@@ -48,6 +46,7 @@ class FilesystemPanel(QWidget):
     node_activated = Signal(object, object)  # (VFSNode, VFS)
     node_selected = Signal(object, object)  # (VFSNode, VFS)
     open_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
+    open_external_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
     load_finished = Signal()
     background_status = Signal(str)
@@ -75,6 +74,7 @@ class FilesystemPanel(QWidget):
         self._type_timer.setInterval(0)
         self._type_timer.timeout.connect(self._process_type_queue)
         self._activities: set[str] = set()
+        self.background_status.emit("")
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -107,6 +107,7 @@ class FilesystemPanel(QWidget):
 
     def load_vfs(self, vfs: VFS) -> None:
         """Replace the tree with a new VFS source."""
+        _logger.debug("FilesystemPanel.load_vfs: start")
         self._vfs = vfs
         self._build_timer.stop()
         self._build_queue.clear()
@@ -114,7 +115,7 @@ class FilesystemPanel(QWidget):
         self._type_queue.clear()
         self._type_cache.clear()
         self._activities.clear()
-        self._emit_background_status()
+        self.background_status.emit("")
 
         # Recreate model to avoid slow row-by-row clears on large trees.
         self._model = QStandardItemModel()
@@ -128,9 +129,11 @@ class FilesystemPanel(QWidget):
         if root_node.children:
             self._add_placeholder(row[0])
         self.load_finished.emit()
+        _logger.debug("FilesystemPanel.load_vfs: emitted load_finished")
 
     def append_vfs(self, vfs: VFS) -> None:
         """Append a new VFS source to the existing tree."""
+        _logger.debug("FilesystemPanel.append_vfs: start")
         self._vfs = vfs
         root_node = vfs.root()
         row = self._node_to_row_shallow(root_node, vfs)
@@ -140,6 +143,7 @@ class FilesystemPanel(QWidget):
         if root_node.children:
             self._add_placeholder(row[0])
         self.load_finished.emit()
+        _logger.debug("FilesystemPanel.append_vfs: emitted load_finished")
 
     # ------------------------------------------------------------------
     # Internals
@@ -235,6 +239,12 @@ class FilesystemPanel(QWidget):
         open_action = menu.addAction("Open")
         open_hex_action = menu.addAction("Open in Hex")
         open_text_action = menu.addAction("Open as Plain Text")
+        open_external_default = None
+        open_external_choose = None
+        if not node.is_dir:
+            menu.addSeparator()
+            open_external_default = menu.addAction("Open External (Default)")
+            open_external_choose = menu.addAction("Open External (Choose App…)")
         menu.addSeparator()
         export_action = menu.addAction("Export…")
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
@@ -244,6 +254,10 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "hex")
         elif action == open_text_action:
             self.open_requested.emit(node, vfs, "text")
+        elif action == open_external_default:
+            self.open_external_requested.emit(node, vfs, "default")
+        elif action == open_external_choose:
+            self.open_external_requested.emit(node, vfs, "choose")
         elif action == export_action:
             self.export_requested.emit(node, vfs)
 
@@ -297,20 +311,14 @@ class FilesystemPanel(QWidget):
             return self._type_cache[cache_key]
         label = ""
         try:
-            peek = vfs.peek(node, 16)
-            if peek.startswith(_SQLITE_MAGIC):
-                label = "SQLite"
-            elif peek.startswith(_BPLIST_MAGIC):
-                label = "bplist"
-            elif peek.startswith(_XML_PLIST_SIG):
-                label = "plist"
-            else:
+            peek = vfs.peek(node, 2048)
+            label = detect_fast_label(peek, node.path)
+            if not label:
                 label = self._label_from_registry(node, vfs)
         except Exception:
             label = ""
         self._type_cache[cache_key] = label
         return label
-
     def _ensure_children_loaded(self, parent_item: QStandardItem, node: VFSNode, vfs: VFS) -> None:
         if parent_item.data(_ROLE_LOADED):
             return
@@ -328,12 +336,16 @@ class FilesystemPanel(QWidget):
     def _activity_start(self, name: str) -> None:
         if name not in self._activities:
             self._activities.add(name)
-            self._emit_background_status()
+            if hasattr(self, "_emit_background_status"):
+                self._emit_background_status()
+            _logger.debug("FilesystemPanel activity start: %s", name)
 
     def _activity_end(self, name: str) -> None:
         if name in self._activities:
             self._activities.discard(name)
-            self._emit_background_status()
+            if hasattr(self, "_emit_background_status"):
+                self._emit_background_status()
+            _logger.debug("FilesystemPanel activity end: %s", name)
 
     def _emit_background_status(self) -> None:
         if not self._activities:
