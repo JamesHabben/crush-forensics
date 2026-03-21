@@ -112,5 +112,5 @@ def _local_tag(el: Any) -> str:
 def _get_attrib(el: Any, name: str) -> str | None:
     for key, value in getattr(el, "attrib", {}).items():
         if key == name or key.endswith(f"}}{name}"):
-            return value
+            return str(value)
     return None

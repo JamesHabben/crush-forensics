@@ -3,6 +3,8 @@
 """Text viewer — plain text and JSON with line numbers."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import QRect, QSize, Qt, QRegularExpression
 from PySide6.QtGui import (
     QFont,
@@ -308,7 +310,7 @@ class _SyntaxHighlighter(QSyntaxHighlighter):
     def __init__(self, document: object) -> None:
         super().__init__(document)  # type: ignore[arg-type]
         self._mode = "none"
-        self._rules: dict[str, list[tuple["re.Pattern[str]", QTextCharFormat]]] = {}
+        self._rules: dict[str, list[tuple[re.Pattern[str], QTextCharFormat]]] = {}
         self._init_formats()
         self._init_rules()
 
