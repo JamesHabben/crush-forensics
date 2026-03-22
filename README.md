@@ -14,7 +14,7 @@ Crush — Digital Forensic Analysis Workbench
 Open and navigate in ZIP and TAR archives (eg. for mobile phone acquisitions).
 Open single files and folder.
 
-When navigating and open file you can use the following features atm (more to come):
+When navigating and open file you can use the currently supported viewers (more planned):
 
 - ABX Viewer
 - Hex Viewer
@@ -33,8 +33,8 @@ Android ABX (Linux)
 Android Video (Linux)
 ![Android Video (Linux)](crush/docs/pictures/example_android_lin_video.png)
 
-Loading Speed
-![iOS Loading Speed](crush/docs/pictures/example_ios_lin_ingest_speed.png)
+Loading Speed - How fast we can load from zips
+![Loading Speed](crush/docs/pictures/example_ios_lin_ingest_speed.png)
 
 iOS SEGB (Windows)
 ![iOS SEGB (Windows)](crush/docs/pictures/example_ios_win_segb.png)
