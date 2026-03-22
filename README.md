@@ -2,12 +2,19 @@
 
 Crush — Digital Forensic Analysis Workbench
 
+[![CI](https://github.com/kalink0/crush-forensics/actions/workflows/ci.yml/badge.svg)](https://github.com/kalink0/crush-forensics/actions/workflows/ci.yml)
+![Linux](https://img.shields.io/badge/linux-supported-success)
+![Windows](https://img.shields.io/badge/windows-supported-success)
+[![Release](https://img.shields.io/github/v/release/kalink0/crush-forensics?display_name=tag)](https://github.com/kalink0/crush-forensics/releases)
+[![License](https://img.shields.io/github/license/kalink0/crush-forensics)](https://github.com/kalink0/crush-forensics/blob/main/LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+
 ## Features
 
-Open and navigate in ZIP and TAR archives (eg. for mobile phone acquisitions)
+Open and navigate in ZIP and TAR archives (eg. for mobile phone acquisitions).
 Open single files and folder.
 
-When navigating and open file you can use the following feature atm:
+When navigating and open file you can use the following features atm (more to come):
 
 - ABX Viewer
 - Hex Viewer
@@ -17,6 +24,23 @@ When navigating and open file you can use the following feature atm:
 - JSON Viewer
 - XML-Viewer
 - PLIST and BPLIST Viewer
+
+## Screenshots
+
+Android ABX (Linux)
+![Android ABX (Linux)](crush/docs/pictures/example_android_lin_abx.png)
+
+Android Video (Linux)
+![Android Video (Linux)](crush/docs/pictures/example_android_lin_video.png)
+
+Loading Speed
+![iOS Loading Speed](crush/docs/pictures/example_ios_lin_ingest_speed.png)
+
+iOS SEGB (Windows)
+![iOS SEGB (Windows)](crush/docs/pictures/example_ios_win_segb.png)
+
+iOS SQLite Summary (Windows)
+![iOS SQLite Summary (Windows)](crush/docs/pictures/example_ios_win_sqlite_summary.png)
 
 ## Install and Run
 

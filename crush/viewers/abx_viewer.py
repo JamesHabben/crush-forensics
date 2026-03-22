@@ -14,7 +14,9 @@ The data dict passed in has the shape:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+import re
+
+from PySide6.QtGui import QFont, QColor, QSyntaxHighlighter, QTextCharFormat, QTextOption
 from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
@@ -72,10 +74,14 @@ class AbxViewer(QWidget):
 
         xml_editor = QPlainTextEdit()
         xml_editor.setReadOnly(True)
-        xml_editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        # Visual wrap to avoid horizontal scrolling; no actual line breaks inserted.
+        xml_editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        xml_editor.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+        xml_editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         font = QFont("Courier New", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         xml_editor.setFont(font)
+        _XmlHighlighter(xml_editor.document())
         xml_editor.setPlainText(data.get("xml_str", ""))
         right_layout.addWidget(xml_editor)
 
@@ -83,3 +89,25 @@ class AbxViewer(QWidget):
         splitter.setSizes([400, 400])
 
         layout.addWidget(splitter)
+
+
+class _XmlHighlighter(QSyntaxHighlighter):
+    def __init__(self, document: object) -> None:
+        super().__init__(document)  # type: ignore[arg-type]
+        self._fmt_tag = QTextCharFormat()
+        self._fmt_tag.setForeground(QColor("#005a9c"))
+        self._fmt_attr = QTextCharFormat()
+        self._fmt_attr.setForeground(QColor("#7a3e9d"))
+        self._fmt_attr_value = QTextCharFormat()
+        self._fmt_attr_value.setForeground(QColor("#2a7b2e"))
+        self._tag_re = re.compile(r"</?\s*[^>\s/]+")
+        self._attr_re = re.compile(r"\s+([A-Za-z_:\-][\w:.-]*)\s*=")
+        self._attr_value_re = re.compile(r"=\s*\"([^\"\\]|\\.)*\"")
+
+    def highlightBlock(self, text: str) -> None:  # type: ignore[override]
+        for m in self._tag_re.finditer(text):
+            self.setFormat(m.start(), m.end() - m.start(), self._fmt_tag)
+        for m in self._attr_re.finditer(text):
+            self.setFormat(m.start(1), m.end(1) - m.start(1), self._fmt_attr)
+        for m in self._attr_value_re.finditer(text):
+            self.setFormat(m.start(), m.end() - m.start(), self._fmt_attr_value)

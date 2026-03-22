@@ -53,13 +53,18 @@ class TableViewer(QWidget):
     def __init__(self, data: dict[str, Any], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
-        self._db_path = Path(data.get("__db_path", "")) if isinstance(data, dict) else None
+        db_path_value = data.get("__db_path") if isinstance(data, dict) else None
+        if isinstance(db_path_value, str) and db_path_value:
+            candidate = Path(db_path_value)
+            self._db_path = candidate if candidate.is_file() else None
+        else:
+            self._db_path = None
         self._db_conn: sqlite3.Connection | None = None
         self._summary_label = "Summary (generated)"
         self._build_ui()
         if data:
             table_names = [k for k in data.keys() if not k.startswith("__")]
-            if self._db_path and self._db_path.exists():
+            if self._db_path:
                 self._table_combo.clear()
                 self._table_combo.addItem(self._summary_label)
                 self._table_combo.addItems(table_names)
