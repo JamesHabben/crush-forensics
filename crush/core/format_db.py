@@ -4,10 +4,21 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-_DB_PATH = Path(__file__).parent.parent / "data" / "formats.db"
+
+def _resolve_db_path() -> Path:
+    # PyInstaller extracts data files to sys._MEIPASS when frozen
+    if getattr(sys, "frozen", False):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        base = Path(__file__).parent.parent
+    return base / "data" / "formats.db"
+
+
+_DB_PATH = _resolve_db_path()
 
 
 @dataclass
