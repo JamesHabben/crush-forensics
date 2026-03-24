@@ -2,7 +2,14 @@
 
 All notable changes to Crush will be documented in this file.
 
-## [0.2.0] — 2026-03-24
+## [0.2.0] — 2026-03-24 (updated)
+
+### Fixes (post-release)
+
+- **Portable build: `formats.db` not found** — corrected `--add-data` destination path in PyInstaller build and added `sys._MEIPASS` path resolution for frozen executables
+- **Portable build: `libmagic` missing on Windows** — Windows build now installs `python-magic-bin` which bundles the required `magic1.dll`
+- **About dialog unreadable in dark mode** — acknowledgements table now uses palette colours instead of hardcoded light-mode values
+- **`MediaViewer` import failure on systems without PulseAudio** — guarded with `try/except ImportError`; app starts cleanly without audio support
 
 ### New Features
 

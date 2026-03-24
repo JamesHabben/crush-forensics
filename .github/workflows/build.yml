@@ -57,8 +57,8 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name crush \
             --collect-all PySide6 \
-            --collect-data python_magic \
-            --add-data "crush/data/formats.db:crush/data" \
+            --collect-all magic \
+            --add-data "crush/data/formats.db:data" \
             crush/__main__.py
 
       - name: Build (PyInstaller) Windows
@@ -66,8 +66,8 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name crush `
             --collect-all PySide6 `
-            --collect-data python_magic `
-            --add-data "crush/data/formats.db;crush/data" `
+            --collect-all magic `
+            --add-data "crush/data/formats.db;data" `
             crush/__main__.py
 
       - name: Package artifact (Linux)
