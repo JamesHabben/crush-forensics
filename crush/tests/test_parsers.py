@@ -12,7 +12,7 @@ from crush.parsers.sqlite_parser import SQLiteParser
 from crush.parsers.plist_parser import PlistParser
 from crush.parsers.abx_parser import AbxParser
 from crush.parsers.hex_fallback import HexFallbackParser
-from crush.viewers.text_viewer import _detect_encoding
+from crush.core.encodings import detect_encoding as _detect_encoding
 
 
 def _make_sqlite(path: Path) -> None:

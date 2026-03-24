@@ -722,14 +722,8 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _about(self) -> None:
-        QMessageBox.about(
-            self,
-            "About Crush",
-            f"<b>Crush {crush.__version__}</b><br>"
-            "Digital Forensic Analysis Workbench<br><br>"
-            "Licensed under Apache 2.0<br>"
-            "<a href='https://github.com/kalink0/crush-forensics'>github.com/kalink0/crush-forensics</a>",
-        )
+        from crush.ui.about_dialog import AboutDialog
+        AboutDialog(self).exec()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status.showMessage("Closing…")
