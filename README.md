@@ -42,6 +42,9 @@ iOS SEGB (Windows)
 iOS SQLite Summary (Windows)
 ![iOS SQLite Summary (Windows)](crush/docs/pictures/example_ios_win_sqlite_summary.png)
 
+Format Reference (Linux)
+![Format Reference (Linux)](crush/docs/pictures/example_lin_file_formats.png)
+
 ## Install and Run
 
 ### From source (recommended for development)
