@@ -32,6 +32,32 @@ from PySide6.QtWidgets import (
 from crush.core.formatters import pretty_json
 
 
+def _detect_encoding(raw: bytes) -> tuple[str, str]:
+    """Return (decoded_text, encoding_label). Handles BOM and common iOS encodings."""
+    # Explicit BOM — most reliable
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw[3:].decode("utf-8", errors="replace"), "UTF-8 BOM"
+    if raw[:2] == b"\xff\xfe":
+        return raw[2:].decode("utf-16-le", errors="replace"), "UTF-16 LE"
+    if raw[:2] == b"\xfe\xff":
+        return raw[2:].decode("utf-16-be", errors="replace"), "UTF-16 BE"
+    # Strict UTF-8
+    try:
+        return raw.decode("utf-8"), "UTF-8"
+    except UnicodeDecodeError:
+        pass
+    # Heuristic: UTF-16 LE without BOM — ASCII chars have null byte in odd positions
+    if len(raw) >= 8:
+        sample = raw[: min(len(raw), 256)]
+        odd_nulls = sum(1 for i in range(1, len(sample), 2) if sample[i] == 0)
+        if odd_nulls > len(sample) // 4:
+            try:
+                return raw.decode("utf-16-le", errors="replace"), "UTF-16 LE (no BOM)"
+            except Exception:
+                pass
+    return raw.decode("utf-8", errors="replace"), "UTF-8 (lossy)"
+
+
 class _LineNumberArea(QWidget):
     def __init__(self, editor: "_CodeEditor") -> None:
         super().__init__(editor)
@@ -128,9 +154,11 @@ class TextView(QWidget):
         self._build_ui()
 
         if isinstance(data, bytes):
-            text = data.decode("utf-8", errors="replace")
+            text, enc = _detect_encoding(data)
+            self._encoding_label.setText(enc)
         else:
             text = str(data)
+            self._encoding_label.setText("str")
 
         # Pretty-print JSON if possible
         if text.lstrip().startswith(("{", "[")):
@@ -160,6 +188,10 @@ class TextView(QWidget):
         self._highlight_combo.currentTextChanged.connect(self._on_highlight_changed)
         tb_layout.addWidget(self._highlight_combo)
         tb_layout.addStretch()
+        tb_layout.addWidget(QLabel("Encoding:"))
+        self._encoding_label = QLabel("")
+        self._encoding_label.setStyleSheet("color: gray;")
+        tb_layout.addWidget(self._encoding_label)
         layout.addWidget(toolbar)
 
         search_bar = QWidget()

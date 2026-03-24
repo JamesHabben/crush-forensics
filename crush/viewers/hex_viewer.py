@@ -18,7 +18,7 @@ from PySide6.QtGui import QFont
 
 
 _BYTES_PER_ROW = 16
-_MAX_BYTES = 1024 * 256  # Render at most 256 KB to keep the UI responsive
+_PAGE_BYTES = 1024 * 256  # 256 KB per page
 
 
 class HexViewer(QWidget):
@@ -27,9 +27,9 @@ class HexViewer(QWidget):
     def __init__(self, data: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
-        self._view_data = data[:_MAX_BYTES]
+        self._page = 0
         self._build_ui()
-        self._load(self._view_data)
+        self._load_page()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -57,6 +57,19 @@ class HexViewer(QWidget):
 
         toolbar.addStretch(1)
 
+        self._prev_btn = QPushButton("◀ Prev")
+        self._prev_btn.clicked.connect(self._prev_page)
+        toolbar.addWidget(self._prev_btn)
+
+        self._page_label = QLabel("")
+        toolbar.addWidget(self._page_label)
+
+        self._next_btn = QPushButton("Next ▶")
+        self._next_btn.clicked.connect(self._next_page)
+        toolbar.addWidget(self._next_btn)
+
+        toolbar.addSpacing(8)
+
         self._copy_hex_btn = QPushButton("Copy Hex")
         self._copy_hex_btn.clicked.connect(self._copy_hex)
         toolbar.addWidget(self._copy_hex_btn)
@@ -81,37 +94,47 @@ class HexViewer(QWidget):
 
         layout.addWidget(self._text)
 
-    def _load(self, data: bytes) -> None:
+    def _page_count(self) -> int:
+        return max(1, (len(self._data) + _PAGE_BYTES - 1) // _PAGE_BYTES)
+
+    def _page_data(self) -> bytes:
+        start = self._page * _PAGE_BYTES
+        return self._data[start : start + _PAGE_BYTES]
+
+    def _load_page(self) -> None:
+        page_data = self._page_data()
+        base_offset = self._page * _PAGE_BYTES
         lines: list[str] = []
 
-        for offset in range(0, len(data), _BYTES_PER_ROW):
-            chunk = data[offset : offset + _BYTES_PER_ROW]
-
-            # Offset column
-            off_str = f"{offset:08X}"
-
-            # Hex columns (two groups of 8, space-separated in the middle)
+        for i in range(0, len(page_data), _BYTES_PER_ROW):
+            chunk = page_data[i : i + _BYTES_PER_ROW]
+            off_str = f"{base_offset + i:08X}"
             hex_parts = [f"{b:02X}" for b in chunk]
             hex_left  = " ".join(hex_parts[:8])
             hex_right = " ".join(hex_parts[8:])
             hex_str   = f"{hex_left:<23}  {hex_right:<23}"
-
-            # ASCII column
-            ascii_str = "".join(
-                chr(b) if 0x20 <= b < 0x7F else "." for b in chunk
-            )
-
+            ascii_str = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in chunk)
             lines.append(f"{off_str}  {hex_str}  {ascii_str}")
 
-        if len(self._data) > _MAX_BYTES:
-            lines.append(
-                f"\n... truncated — showing first {_MAX_BYTES:,} of {len(self._data):,} bytes"
-            )
-        self._status.setText(
-            f"{min(len(self._data), _MAX_BYTES):,} / {len(self._data):,} bytes"
-        )
-
         self._text.setPlainText("\n".join(lines))
+
+        pages = self._page_count()
+        self._page_label.setText(f"Page {self._page + 1} / {pages}")
+        self._prev_btn.setEnabled(self._page > 0)
+        self._next_btn.setEnabled(self._page < pages - 1)
+        start = base_offset
+        end = base_offset + len(page_data)
+        self._status.setText(f"0x{start:X}–0x{end:X}  ({len(self._data):,} B total)")
+
+    def _prev_page(self) -> None:
+        if self._page > 0:
+            self._page -= 1
+            self._load_page()
+
+    def _next_page(self) -> None:
+        if self._page < self._page_count() - 1:
+            self._page += 1
+            self._load_page()
 
     def _search(self) -> None:
         query = self._search_input.text().strip()
@@ -125,20 +148,26 @@ class HexViewer(QWidget):
             if pattern is None:
                 self._status.setText("Invalid hex pattern")
                 return
-            idx = self._view_data.find(pattern)
+            idx = self._data.find(pattern)
         else:
-            hay = self._view_data.decode("latin-1")
-            idx = hay.find(query)
+            idx = self._data.decode("latin-1").find(query)
 
         if idx < 0:
             self._status.setText("Not found")
             return
 
-        self._scroll_to_offset(idx)
+        # Jump to the page containing the match
+        target_page = idx // _PAGE_BYTES
+        if target_page != self._page:
+            self._page = target_page
+            self._load_page()
+
+        page_offset = idx - self._page * _PAGE_BYTES
+        self._scroll_to_offset(page_offset)
         self._status.setText(f"Found at 0x{idx:08X}")
 
-    def _scroll_to_offset(self, offset: int) -> None:
-        line = offset // _BYTES_PER_ROW
+    def _scroll_to_offset(self, page_offset: int) -> None:
+        line = page_offset // _BYTES_PER_ROW
         block = self._text.document().findBlockByNumber(line)
         if not block.isValid():
             return
@@ -148,12 +177,14 @@ class HexViewer(QWidget):
         self._text.centerCursor()
 
     def _copy_hex(self) -> None:
-        text = " ".join(f"{b:02X}" for b in self._view_data)
-        QApplication.clipboard().setText(text)
+        QApplication.clipboard().setText(
+            " ".join(f"{b:02X}" for b in self._page_data())
+        )
 
     def _copy_ascii(self) -> None:
-        text = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in self._view_data)
-        QApplication.clipboard().setText(text)
+        QApplication.clipboard().setText(
+            "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in self._page_data())
+        )
 
     def _copy_all(self) -> None:
         QApplication.clipboard().setText(self._text.toPlainText())

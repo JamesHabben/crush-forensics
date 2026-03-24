@@ -23,87 +23,119 @@ class SegbParser(AbstractParser):
         return peek_bytes.startswith(b"SEGB")
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
-        raw = vfs.read(node)
-        stream = BytesIO(raw)
+        import logging
+        _logger = logging.getLogger(__name__)
+        try:
+            raw = vfs.read(node)
+            stream = BytesIO(raw)
 
-        is_v2 = ccl_segb2.stream_matches_segbv2_signature(stream)
-        stream.seek(0)
-        is_v1 = ccl_segb1.stream_matches_segbv1_signature(stream) if not is_v2 else False
-        stream.seek(0)
+            is_v2 = ccl_segb2.stream_matches_segbv2_signature(stream)
+            stream.seek(0)
+            is_v1 = ccl_segb1.stream_matches_segbv1_signature(stream) if not is_v2 else False
+            stream.seek(0)
 
-        if is_v2:
-            rows = _read_v2(stream)
-            version = "v2"
-        elif is_v1:
-            rows = _read_v1(stream)
-            version = "v1"
-        else:
-            raise ValueError("Not a SEGB v1/v2 file")
+            if is_v2:
+                rows, parse_error = _read_v2(stream)
+                version = "v2"
+            elif is_v1:
+                rows, parse_error = _read_v1(stream)
+                version = "v1"
+            else:
+                return ParseResult(
+                    viewer_type="hex",
+                    data=raw,
+                    metadata={
+                        "Parse error": "Not a recognized SEGB v1/v2 file",
+                        "Format": "SEGB (unrecognized)",
+                        "File size": f"{node.size:,} B",
+                    },
+                )
 
-        data = {
-            "SEGB": {
-                "columns": [
-                    "Index",
-                    "Offset",
-                    "State",
-                    "Timestamp1",
-                    "Timestamp2",
-                    "CRC Passed",
-                    "Data Length",
-                    "Data (hex preview)",
-                ],
-                "rows": rows,
+            data = {
+                "SEGB": {
+                    "columns": [
+                        "Index", "Offset", "State",
+                        "Timestamp1", "Timestamp2",
+                        "CRC Passed", "Data Length", "Data (hex preview)",
+                    ],
+                    "rows": rows,
+                }
             }
-        }
-        meta: dict[str, Any] = {
-            "Format": "SEGB",
-            "Version": version,
-            "File size": f"{node.size:,} B",
-            "Records": f"{len(rows):,}",
-        }
-        return ParseResult(
-            viewer_type="table",
-            data=data,
-            metadata=meta,
-        )
+            meta: dict[str, Any] = {
+                "Format": "SEGB",
+                "Version": version,
+                "File size": f"{node.size:,} B",
+                "Records": f"{len(rows):,}",
+            }
+            if parse_error:
+                meta["Parse warning"] = parse_error
+            return ParseResult(viewer_type="table", data=data, metadata=meta)
+
+        except Exception as exc:
+            _logger.warning("SEGB parse error for %s: %s", node.path, exc)
+            try:
+                raw_bytes = vfs.read(node)
+            except Exception:
+                raw_bytes = b""
+            return ParseResult(
+                viewer_type="hex",
+                data=raw_bytes,
+                metadata={
+                    "Parse error": str(exc),
+                    "Format": "SEGB (parse failed)",
+                    "File size": f"{node.size:,} B",
+                },
+            )
 
 
-def _read_v1(stream: BytesIO) -> list[list[Any]]:
+def _read_v1(stream: BytesIO) -> tuple[list[list[Any]], str]:
     rows: list[list[Any]] = []
-    for idx, entry in enumerate(ccl_segb1.read_segb1_stream(stream)):
-        preview = bytes_to_hexview(entry.data, max_bytes=64)
-        rows.append(
-            [
-                idx,
-                entry.data_start_offset,
-                entry.state.name,
-                _fmt_ts(entry.timestamp1),
-                _fmt_ts(entry.timestamp2),
-                entry.crc_passed,
-                len(entry.data),
-                preview,
-            ]
-        )
-    return rows
+    error = ""
+    try:
+        for idx, entry in enumerate(ccl_segb1.read_segb1_stream(stream)):
+            try:
+                preview = bytes_to_hexview(entry.data, max_bytes=64)
+                rows.append([
+                    idx,
+                    entry.data_start_offset,
+                    entry.state.name,
+                    _fmt_ts(entry.timestamp1),
+                    _fmt_ts(entry.timestamp2),
+                    entry.crc_passed,
+                    len(entry.data),
+                    preview,
+                ])
+            except Exception as exc:
+                error = f"Record {idx} failed: {exc}"
+                break
+    except Exception as exc:
+        error = str(exc)
+    return rows, error
 
 
-def _read_v2(stream: BytesIO) -> list[list[Any]]:
+def _read_v2(stream: BytesIO) -> tuple[list[list[Any]], str]:
     rows: list[list[Any]] = []
-    for idx, entry in enumerate(ccl_segb2.read_segb2_stream(stream)):
-        preview = bytes_to_hexview(entry.data, max_bytes=64)
-        rows.append(
-            [
-                idx,
-                entry.data_start_offset,
-                entry.state.name,
-                _fmt_ts(entry.metadata.creation),
-                "",
-                entry.crc_passed,
-                len(entry.data),
-                preview,
-            ]
-        )
-    return rows
+    error = ""
+    try:
+        for idx, entry in enumerate(ccl_segb2.read_segb2_stream(stream)):
+            try:
+                preview = bytes_to_hexview(entry.data, max_bytes=64)
+                rows.append([
+                    idx,
+                    entry.data_start_offset,
+                    entry.state.name,
+                    _fmt_ts(entry.metadata.creation),
+                    "",
+                    entry.crc_passed,
+                    len(entry.data),
+                    preview,
+                ])
+            except Exception as exc:
+                error = f"Record {idx} failed: {exc}"
+                break
+    except Exception as exc:
+        error = str(exc)
+    return rows, error
 
 
 def _fmt_ts(ts: object) -> str:

@@ -5,9 +5,11 @@ through a single interface so viewers never need to know the origin.
 """
 from __future__ import annotations
 
+import tarfile
 import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import IO
 
@@ -214,13 +216,158 @@ class ZipVFS(VFS):
         return total
 
 
+class TarVFS(VFS):
+    """VFS backed by a TAR archive (plain, gzip, bzip2, or xz compressed)."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._tar_path = Path(path)
+        self._tf = tarfile.open(str(self._tar_path), "r:*")
+        self._members: dict[str, tarfile.TarInfo] = {}
+        self._tree = self._build_tree()
+        self._file_counts: dict[str, int] = {}
+        self._total_sizes: dict[str, int] = {}
+        self._compute_file_counts(self._tree)
+        self._compute_total_sizes(self._tree)
+
+    def _build_tree(self) -> VFSNode:
+        root = VFSNode(name=self._tar_path.name, path="/", is_dir=True)
+        nodes: dict[str, VFSNode] = {"/": root}
+
+        for member in self._tf.getmembers():
+            raw_name = member.name.lstrip("./")
+            if not raw_name:
+                continue
+            parts = raw_name.split("/")
+            for depth in range(1, len(parts) + 1):
+                virtual_path = "/" + "/".join(parts[:depth])
+                if virtual_path in nodes:
+                    continue
+                is_dir = depth < len(parts) or member.isdir()
+                node = VFSNode(
+                    name=parts[depth - 1],
+                    path=virtual_path,
+                    is_dir=is_dir,
+                    size=member.size if (not is_dir and member.isfile()) else 0,
+                    modified=float(member.mtime),
+                )
+                parent_path = "/" + "/".join(parts[: depth - 1]) if depth > 1 else "/"
+                if parent_path in nodes:
+                    nodes[parent_path].children.append(node)
+                nodes[virtual_path] = node
+            if member.isfile():
+                self._members[virtual_path] = member
+
+        for node in nodes.values():
+            node.children.sort(key=lambda n: (not n.is_dir, n.name.lower()))
+        return root
+
+    def root(self) -> VFSNode:
+        return self._tree
+
+    def read(self, node: VFSNode) -> bytes:
+        member = self._members.get(node.path)
+        if member is None:
+            raise FileNotFoundError(f"Not in TAR: {node.path}")
+        f = self._tf.extractfile(member)
+        if f is None:
+            raise OSError(f"Cannot extract (symlink or special file): {node.path}")
+        with f:
+            return f.read()
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return BytesIO(self.read(node))
+
+    def close(self) -> None:
+        self._tf.close()
+
+    def file_count(self, node: VFSNode) -> int:
+        return self._file_counts.get(node.path, 0)
+
+    def total_size(self, node: VFSNode) -> int:
+        return self._total_sizes.get(node.path, 0)
+
+    def _compute_file_counts(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._file_counts[node.path] = 1
+            return 1
+        total = 0
+        for child in node.children:
+            total += self._compute_file_counts(child)
+        self._file_counts[node.path] = total
+        return total
+
+    def _compute_total_sizes(self, node: VFSNode) -> int:
+        if not node.is_dir:
+            self._total_sizes[node.path] = node.size
+            return node.size
+        total = 0
+        for child in node.children:
+            total += self._compute_total_sizes(child)
+        self._total_sizes[node.path] = total
+        return total
+
+
+class BytesVFS(VFS):
+    """VFS backed by a single in-memory bytes object (for artifact chaining)."""
+
+    def __init__(self, data: bytes, name: str = "blob") -> None:
+        self._data = data
+        self._root = VFSNode(
+            name=name,
+            path=f"/{name}",
+            is_dir=False,
+            size=len(data),
+        )
+
+    def root(self) -> VFSNode:
+        return self._root
+
+    def read(self, node: VFSNode) -> bytes:
+        return self._data
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return BytesIO(self._data)
+
+    def file_count(self, node: VFSNode) -> int:
+        return 1
+
+    def total_size(self, node: VFSNode) -> int:
+        return len(self._data)
+
+
+def find_sibling(node: VFSNode, vfs: VFS, name_suffix: str) -> "VFSNode | None":
+    """Find a sibling VFSNode whose name equals node.name + name_suffix."""
+    target_name = node.name + name_suffix
+    parent_path = node.path.rsplit("/", 1)[0] or "/"
+    target_path = (parent_path.rstrip("/") + "/" + target_name).replace("//", "/")
+    return _find_node_by_path(vfs.root(), target_path)
+
+
+def _find_node_by_path(node: VFSNode, path: str) -> "VFSNode | None":
+    if node.path == path:
+        return node
+    for child in node.children:
+        result = _find_node_by_path(child, path)
+        if result is not None:
+            return result
+    return None
+
+
 def open_vfs(path: str | Path) -> VFS:
     """Factory — open the right VFS type based on the source path."""
     p = Path(path)
     if p.is_dir():
         return DirectoryVFS(p)
+    name_lower = p.name.lower()
     if p.suffix.lower() == ".zip":
         return ZipVFS(p)
+    if (
+        p.suffix.lower() in (".tar", ".tgz", ".tbz2", ".txz")
+        or name_lower.endswith(".tar.gz")
+        or name_lower.endswith(".tar.bz2")
+        or name_lower.endswith(".tar.xz")
+    ):
+        return TarVFS(p)
     if p.is_file():
         return FileVFS(p)
     raise ValueError(f"Unsupported source type: {p}")

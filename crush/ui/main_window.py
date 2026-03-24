@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.open_external_requested.connect(self._open_external_mode)
         self._fs_panel.export_requested.connect(self._export_node)
         self._fs_panel.background_status.connect(self._on_background_status)
+        self._fs_panel.format_info_requested.connect(self._show_format_info)
         self._fs_dock = QDockWidget("Filesystem", self)
         self._fs_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self._fs_dock.setFeatures(
@@ -263,6 +264,7 @@ class MainWindow(QMainWindow):
         file_menu = menu.addMenu("File")
         file_menu.addAction("Open file…", self._open_file)
         file_menu.addAction("Open ZIP archive…", self._open_zip)
+        file_menu.addAction("Open TAR archive…", self._open_tar)
         file_menu.addAction("Open folder…", self._open_folder)
         file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit", self.close)
@@ -290,6 +292,8 @@ class MainWindow(QMainWindow):
         theme_menu.addAction("Dark", self._set_theme_dark)
 
         help_menu = menu.addMenu("Help")
+        help_menu.addAction("Format Reference…", self._show_format_reference)
+        help_menu.addSeparator()
         help_menu.addAction("About Crush", self._about)
 
     # ------------------------------------------------------------------
@@ -299,6 +303,16 @@ class MainWindow(QMainWindow):
     def _open_zip(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Open ZIP extraction", "", "ZIP archives (*.zip);;All files (*)"
+        )
+        if path:
+            self._load_source(path)
+    
+    def _open_tar(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open TAR archive",
+            "",
+            "TAR archives (*.tar *.tar.gz *.tgz *.tar.bz2 *.tbz2 *.tar.xz *.txz);;All files (*)",
         )
         if path:
             self._load_source(path)
@@ -479,6 +493,7 @@ class MainWindow(QMainWindow):
 
         try:
             result = parser.parse(node, vfs)
+            result = self._enrich_with_format_info(parser, node, vfs, result)
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata)
             self._status.showMessage(
@@ -496,7 +511,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Hex view", "Unable to load hex view.")
                 return
             result = ParseResult(viewer_type="hex", data=hex_bytes)
+            result = self._enrich_with_format_info(None, node, vfs, result)
             self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata)
             return
         if mode == "text":
             from crush.parsers.base import ParseResult
@@ -506,7 +523,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 text = raw.decode("utf-8", errors="replace")
             result = ParseResult(viewer_type="text", data=text)
+            result = self._enrich_with_format_info(None, node, vfs, result)
             self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata)
             return
         self._open_node(node, vfs)
 
@@ -529,6 +548,26 @@ class MainWindow(QMainWindow):
             self._open_external_with_app(path)
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_bytes_as_artifact(self, data: bytes, name: str) -> None:
+        """Open in-memory bytes (e.g. a BLOB cell) as a new tab using the best parser."""
+        import crush.parsers  # noqa: F401 — triggers parser registration
+        from crush.core.registry import ParserRegistry
+        from crush.core.vfs import BytesVFS
+
+        vfs = BytesVFS(data, name=name)
+        node = vfs.root()
+        parser = ParserRegistry.best(node, vfs)
+        if parser is None:
+            return
+        try:
+            result = parser.parse(node, vfs)
+            self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata)
+            self._status.showMessage(f"Opened artifact: {name}  [{parser.DISPLAY_NAME}]")
+        except Exception as exc:
+            self._status.showMessage(f"Artifact parse error: {exc}")
+            QMessageBox.warning(self, "Parse error", str(exc))
 
     def _materialize_node_for_external(self, node: VFSNode, vfs: VFS) -> Path | None:
         try:
@@ -577,6 +616,8 @@ class MainWindow(QMainWindow):
     def _show_result(self, node: VFSNode, result: ParseResult, vfs: VFS) -> None:
         from crush.ui.viewer_factory import make_viewer
         base_view = make_viewer(result, node, vfs, self)
+        if hasattr(base_view, "open_bytes_requested"):
+            base_view.open_bytes_requested.connect(self._open_bytes_as_artifact)
         widget: QWidget = base_view
         if self._always_hex:
             hex_bytes = self._read_hex_bytes(vfs, node)
@@ -617,6 +658,68 @@ class MainWindow(QMainWindow):
 
     def _close_all_tabs(self) -> None:
         self._viewer_tabs.clear()
+
+    def _enrich_with_format_info(self, parser: object, node: VFSNode, vfs: VFS, result: object) -> object:
+        """Prepend format knowledge-base metadata to a ParseResult without overriding parser data."""
+        try:
+            from crush.core.format_db import FormatDatabase
+            from crush.parsers.base import ParseResult
+            fmt = FormatDatabase.get().by_parser_class(type(parser).__name__) if parser else None
+            if fmt is None:
+                peek = vfs.peek(node)
+                fmt = FormatDatabase.get().identify(peek, node.name)
+            if fmt is None:
+                return result
+            fmt_meta: dict = {"Format": fmt.name}
+            if fmt.platforms:
+                fmt_meta["Platforms"] = fmt.platforms.replace(",", ", ")
+            if fmt.forensic_relevance:
+                fmt_meta["Forensic relevance"] = fmt.forensic_relevance
+            if fmt.links:
+                fmt_meta["Reference"] = fmt.links[0][1]
+            # Parser metadata takes precedence over format defaults
+            merged = {**fmt_meta, **result.metadata}  # type: ignore[union-attr]
+            return ParseResult(
+                result.viewer_type,  # type: ignore[union-attr]
+                result.data,  # type: ignore[union-attr]
+                result.sub_nodes,  # type: ignore[union-attr]
+                merged,
+                result.text_index,  # type: ignore[union-attr]
+            )
+        except Exception:
+            return result
+
+    def _show_format_info(self, node: VFSNode, vfs: VFS) -> None:
+        """Show a format info popup and also update the Properties panel."""
+        try:
+            from crush.core.format_db import FormatDatabase
+            from crush.ui.format_info_dialog import FormatInfoDialog
+            peek = vfs.peek(node)
+            fmt = FormatDatabase.get().identify(peek, node.name)
+            dlg = FormatInfoDialog(node, fmt, self)
+            dlg.exec()
+            # Also update the Properties panel
+            if fmt:
+                meta: dict = {"Format": fmt.name}
+                if fmt.category:
+                    meta["Category"] = fmt.category
+                if fmt.platforms:
+                    meta["Platforms"] = fmt.platforms.replace(",", ", ")
+                if fmt.forensic_relevance:
+                    meta["Forensic relevance"] = fmt.forensic_relevance
+                meta["Parser support"] = "Supported" if fmt.parser_class else "Not yet supported"
+                if fmt.links:
+                    meta["Reference"] = fmt.links[0][1]
+                self._props_panel.update_properties(node, meta)
+                self._props_dock.show()
+                self._props_dock.raise_()
+        except Exception as exc:
+            self._status.showMessage(f"Format info error: {exc}")
+
+    def _show_format_reference(self) -> None:
+        from crush.ui.format_reference import FormatReferenceDialog
+        dlg = FormatReferenceDialog(self)
+        dlg.exec()
 
     def _about(self) -> None:
         QMessageBox.about(

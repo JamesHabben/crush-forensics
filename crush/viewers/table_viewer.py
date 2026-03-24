@@ -9,7 +9,7 @@ import csv
 import sqlite3
 from pathlib import Path
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt
+from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
@@ -49,7 +49,7 @@ class TableViewer(QWidget):
           ...
         }
     """
-
+    open_bytes_requested = Signal(bytes, str)
     def __init__(self, data: dict[str, Any], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
@@ -188,8 +188,13 @@ class TableViewer(QWidget):
             self._source_model.appendRow(items)
 
         self._table_view.resizeColumnsToContents()
+        table_meta = self._data.get(table_name, {}) if isinstance(self._data, dict) else {}
+        was_truncated = isinstance(table_meta, dict) and table_meta.get("truncated", False)
         row_word = "row" if len(rows) == 1 else "rows"
-        self._row_count_label.setText(f"({len(rows):,} {row_word})")
+        if was_truncated:
+            self._row_count_label.setText(f"(first {len(rows):,} {row_word} — use SQL to load more)")
+        else:
+            self._row_count_label.setText(f"({len(rows):,} {row_word})")
 
     def _load_summary(self) -> None:
         """Show table list + row counts for SQLite databases."""
@@ -345,13 +350,16 @@ class TableViewer(QWidget):
         blob_preview = menu.addAction("Inspect Cell…")
         blob_hex = menu.addAction("Open in Hex")
         blob_export = menu.addAction("Export…")
+        open_tab = menu.addAction("Open as new tab")
         blob_bytes = _coerce_blob(blob)
         display_val = self._table_view.model().data(index, Qt.ItemDataRole.DisplayRole)
         has_display = display_val is not None and str(display_val) != ""
         if blob_bytes is None and not has_display:
+            open_tab.setEnabled(False)
             blob_preview.setEnabled(False)
             blob_hex.setEnabled(False)
             blob_export.setEnabled(False)
+            open_tab.setEnabled(False)
         if blob_bytes is None and has_display:
             blob_preview.setEnabled(True)
             blob_hex.setEnabled(True)
@@ -384,6 +392,15 @@ class TableViewer(QWidget):
                 self._export_blob(blob_bytes)
             elif has_display:
                 self._export_blob(str(display_val).encode("utf-8", errors="replace"))
+        elif action == open_tab:
+            data_to_open = blob_bytes
+            if data_to_open is None and has_display:
+                data_to_open = str(display_val).encode("utf-8", errors="replace")
+            if data_to_open is not None:
+                col_header = self._table_view.model().headerData(
+                    index.column(), Qt.Orientation.Horizontal
+                ) or "blob"
+                self.open_bytes_requested.emit(data_to_open, str(col_header))
 
     def _copy_rows(self, rows: list[int]) -> None:
         lines: list[str] = []

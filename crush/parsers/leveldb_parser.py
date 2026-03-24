@@ -34,62 +34,85 @@ class LeveldbParser(AbstractParser):
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         if not node.is_dir:
             raise ValueError("LevelDB parser expects a directory")
-
         if not self.can_parse_dir(node):
             raise ValueError("Not a LevelDB directory")
 
+        import logging
+        _logger = logging.getLogger(__name__)
+
         tmp_dir = Path(tempfile.mkdtemp(prefix="crush-leveldb-"))
-        _export_dir(node, vfs, tmp_dir)
+        try:
+            _export_dir(node, vfs, tmp_dir)
 
-        max_records = 2000
-        rows: list[list[Any]] = []
-        total = 0
-        with RawLevelDb(tmp_dir) as db:
-            for record in db.iterate_records_raw():
-                total += 1
-                if len(rows) >= max_records:
-                    continue
-                rows.append(
-                    [
-                        record.seq,
-                        record.state.name,
-                        record.file_type.name,
-                        Path(record.origin_file).name,
-                        record.offset,
-                        record.was_compressed,
-                        record.user_key,
-                        record.key,
-                        record.value,
-                    ]
-                )
+            max_records = 2000
+            rows: list[list[Any]] = []
+            total = 0
+            parse_warning = ""
 
-        data = {
-            "LevelDB Records": {
-                "columns": [
-                    "Seq",
-                    "State",
-                    "File Type",
-                    "Origin File",
-                    "Offset",
-                    "Compressed",
-                    "User Key (BLOB)",
-                    "Key (BLOB)",
-                    "Value (BLOB)",
-                ],
-                "rows": rows,
+            try:
+                with RawLevelDb(tmp_dir) as db:
+                    for record in db.iterate_records_raw():
+                        total += 1
+                        if len(rows) >= max_records:
+                            continue
+                        try:
+                            rows.append([
+                                record.seq,
+                                record.state.name,
+                                record.file_type.name,
+                                Path(record.origin_file).name,
+                                record.offset,
+                                record.was_compressed,
+                                record.user_key,
+                                record.key,
+                                record.value,
+                            ])
+                        except Exception as exc:
+                            parse_warning = f"Record {total} failed: {exc}"
+                            _logger.debug("LevelDB record error: %s", exc)
+            except Exception as exc:
+                _logger.warning("LevelDB read error for %s: %s", node.path, exc)
+                if not rows:
+                    return ParseResult(
+                        viewer_type="tree",
+                        data={"error": str(exc), "hint": "LevelDB could not be opened"},
+                        metadata={
+                            "Format": "LevelDB (parse failed)",
+                            "Parse error": str(exc),
+                            "Files": f"{vfs.file_count(node):,}",
+                        },
+                    )
+                parse_warning = str(exc)
+
+            data = {
+                "LevelDB Records": {
+                    "columns": [
+                        "Seq", "State", "File Type", "Origin File",
+                        "Offset", "Compressed", "User Key (BLOB)", "Key (BLOB)", "Value (BLOB)",
+                    ],
+                    "rows": rows,
+                }
             }
-        }
 
-        meta: dict[str, Any] = {
-            "Format": "LevelDB",
-            "Records": f"{total:,}",
-            "Displayed": f"{len(rows):,}",
-            "Files": f"{vfs.file_count(node):,}",
-            "Total size": f"{vfs.total_size(node):,} B",
-        }
-        if total > len(rows):
-            meta["Note"] = f"Showing first {len(rows):,} records"
-        return ParseResult(viewer_type="table", data=data, metadata=meta)
+            meta: dict[str, Any] = {
+                "Format": "LevelDB",
+                "Records": f"{total:,}",
+                "Displayed": f"{len(rows):,}",
+                "Files": f"{vfs.file_count(node):,}",
+                "Total size": f"{vfs.total_size(node):,} B",
+            }
+            if total > len(rows):
+                meta["Note"] = f"Showing first {len(rows):,} records"
+            if parse_warning:
+                meta["Parse warning"] = parse_warning
+            return ParseResult(viewer_type="table", data=data, metadata=meta)
+
+        finally:
+            import shutil
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def _export_dir(node: VFSNode, vfs: VFS, target: Path) -> None:

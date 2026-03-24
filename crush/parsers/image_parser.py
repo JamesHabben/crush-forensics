@@ -25,10 +25,18 @@ class ImageParser(AbstractParser):
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         raw = vfs.read(node)
+        ext = Path(node.path).suffix.upper().lstrip(".")
         meta: dict[str, Any] = {
-            "Format": "Image",
+            "Format": ext or "Image",
             "File size": f"{node.size:,} B",
         }
+        try:
+            from crush.parsers.exif_reader import extract_exif, format_for_metadata
+            exif_raw = extract_exif(raw)
+            if exif_raw:
+                meta.update(format_for_metadata(exif_raw))
+        except Exception:
+            pass
         return ParseResult(viewer_type="image", data=raw, metadata=meta)
 
 

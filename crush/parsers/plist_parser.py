@@ -30,29 +30,46 @@ class PlistParser(AbstractParser):
         return False
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
-        raw = vfs.read(node)
-        if raw[:6] == _BPLIST_MAGIC:
-            fmt = "binary"
-            _set_object_converter = cast(Any, set_object_converter)
-            _bplist_load = cast(Any, bplist_load)
-            _deserialize = cast(Any, deserialise_NsKeyedArchiver)
-            _set_object_converter(NSKeyedArchiver_common_objects_convertor)
-            data = _bplist_load(BytesIO(raw))
-            if isinstance(data, dict) and data.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
-                try:
-                    data = _deserialize(data)
-                    fmt = "binary (NSKeyedArchiver)"
-                except Exception:
-                    pass
-        else:
-            fmt = "XML"
-            data = plistlib.loads(raw)
-        return ParseResult(
-            viewer_type="tree",
-            data=data,
-            metadata={"Format": fmt, "File size": f"{node.size:,} B"},
-            text_index=_flatten_text(data),
-        )
+        try:
+            raw = vfs.read(node)
+            if raw[:6] == _BPLIST_MAGIC:
+                fmt = "binary"
+                _set_object_converter = cast(Any, set_object_converter)
+                _bplist_load = cast(Any, bplist_load)
+                _deserialize = cast(Any, deserialise_NsKeyedArchiver)
+                _set_object_converter(NSKeyedArchiver_common_objects_convertor)
+                data = _bplist_load(BytesIO(raw))
+                if isinstance(data, dict) and data.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
+                    try:
+                        data = _deserialize(data)
+                        fmt = "binary (NSKeyedArchiver)"
+                    except Exception:
+                        pass
+            else:
+                fmt = "XML"
+                data = plistlib.loads(raw)
+            return ParseResult(
+                viewer_type="tree",
+                data=data,
+                metadata={"Format": fmt, "File size": f"{node.size:,} B"},
+                text_index=_flatten_text(data),
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Plist parse error for %s: %s", node.path, exc)
+            try:
+                raw_bytes = vfs.read(node)
+            except Exception:
+                raw_bytes = b""
+            return ParseResult(
+                viewer_type="hex",
+                data=raw_bytes,
+                metadata={
+                    "Parse error": str(exc),
+                    "Format": "plist (parse failed)",
+                    "File size": f"{node.size:,} B",
+                },
+            )
 
 
 def _flatten_text(obj: Any, max_chars: int = 4000) -> str:

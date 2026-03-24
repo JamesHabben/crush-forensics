@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+
 from crush.core.session import Session
 from crush.core.vfs import VFS, VFSNode
 from crush.core.magic import detect_fast_label
@@ -48,6 +49,7 @@ class FilesystemPanel(QWidget):
     open_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     open_external_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
+    format_info_requested = Signal(object, object)  # (VFSNode, VFS)
     load_finished = Signal()
     background_status = Signal(str)
 
@@ -246,6 +248,8 @@ class FilesystemPanel(QWidget):
             open_external_default = menu.addAction("Open External (Default)")
             open_external_choose = menu.addAction("Open External (Choose App…)")
         menu.addSeparator()
+        format_info_action = menu.addAction("Show Format Info")
+        menu.addSeparator()
         export_action = menu.addAction("Export…")
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
         if action == open_action:
@@ -258,6 +262,8 @@ class FilesystemPanel(QWidget):
             self.open_external_requested.emit(node, vfs, "default")
         elif action == open_external_choose:
             self.open_external_requested.emit(node, vfs, "choose")
+        elif action == format_info_action:
+            self.format_info_requested.emit(node, vfs)
         elif action == export_action:
             self.export_requested.emit(node, vfs)
 

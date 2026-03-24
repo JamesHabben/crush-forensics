@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crush"
-version = "0.1.1"
+version = "0.2.0"
 description = "Crush — Digital Forensic Analysis Workbench"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -26,6 +26,7 @@ dependencies = [
     "construct>=2.10",
     "python-magic>=0.4.27",
     "filetype>=1.2.0",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
