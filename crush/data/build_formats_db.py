@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 _OUT = Path(__file__).parent / "formats.db"
 
@@ -30,7 +31,7 @@ _OUT = Path(__file__).parent / "formats.db"
 #   links           List of (label, url) tuples — reference links
 # ---------------------------------------------------------------------------
 
-FORMATS: list[dict] = [
+FORMATS: list[dict[str, Any]] = [
     # -----------------------------------------------------------------------
     # Supported formats
     # -----------------------------------------------------------------------

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QUrl
 
-from crush.core.format_db import FormatDatabase, FormatMatch
+from crush.core.format_db import FormatDatabase
 
 _HEADERS = ["Name", "Category", "Platforms", "Parser", "Forensic Relevance"]
 _COL_NAME = 0

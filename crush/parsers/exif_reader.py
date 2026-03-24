@@ -145,7 +145,7 @@ def format_for_metadata(exif: dict[str, Any]) -> dict[str, str]:
     if isinstance(gps_ts, list) and len(gps_ts) >= 3:
         def _r(v: Any) -> float:
             if isinstance(v, tuple) and v[1]:
-                return v[0] / v[1]
+                return float(v[0]) / float(v[1])
             return float(v) if v is not None else 0.0
         h, m, s = _r(gps_ts[0]), _r(gps_ts[1]), _r(gps_ts[2])
         ts_str = f"{int(h):02d}:{int(m):02d}:{s:05.2f} UTC"
@@ -274,7 +274,7 @@ def _dms_to_decimal(dms: Any, ref: str) -> float | None:
     try:
         def _f(v: Any) -> float:
             if isinstance(v, tuple) and v[1]:
-                return v[0] / v[1]
+                return float(v[0]) / float(v[1])
             return float(v) if v is not None else 0.0
         deg = _f(dms[0]) + _f(dms[1]) / 60 + _f(dms[2]) / 3600
         return -deg if ref in ("S", "W") else deg

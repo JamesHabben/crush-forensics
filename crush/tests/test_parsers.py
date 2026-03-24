@@ -12,6 +12,7 @@ from crush.parsers.sqlite_parser import SQLiteParser
 from crush.parsers.plist_parser import PlistParser
 from crush.parsers.abx_parser import AbxParser
 from crush.parsers.hex_fallback import HexFallbackParser
+from crush.viewers.text_viewer import _detect_encoding
 
 
 def _make_sqlite(path: Path) -> None:
@@ -130,3 +131,91 @@ def test_abx_parser_parse(tmp_path: Path) -> None:
     tree = result.data["tree"]
     assert tree["@tag"] == "root"
     assert tree["@attribs"]["attr"] == "value"
+
+
+# ---------------------------------------------------------------------------
+# HexFallbackParser — format identification via FormatDatabase
+# ---------------------------------------------------------------------------
+
+def test_hex_fallback_identifies_sqlite_format(tmp_path: Path) -> None:
+    raw = b"SQLite format 3\x00" + b"\x00" * 512
+    (tmp_path / "mystery.bin").write_bytes(raw)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "mystery.bin")
+
+    parser = HexFallbackParser()
+    result = parser.parse(node, vfs)
+
+    assert result.viewer_type == "hex"
+    assert "Format (identified)" in result.metadata
+    assert "SQLite" in result.metadata["Format (identified)"]
+    assert "Parser support" in result.metadata
+    assert result.metadata["Parser support"] == "Supported"
+
+
+def test_hex_fallback_unknown_has_no_format_key(tmp_path: Path) -> None:
+    raw = b"\xDE\xAD\xBE\xEF" * 32
+    (tmp_path / "random.xyz999").write_bytes(raw)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "random.xyz999")
+
+    parser = HexFallbackParser()
+    result = parser.parse(node, vfs)
+
+    assert result.viewer_type == "hex"
+    assert "Format (identified)" not in result.metadata
+
+
+# ---------------------------------------------------------------------------
+# _detect_encoding — text viewer encoding detection
+# ---------------------------------------------------------------------------
+
+def test_detect_utf8_bom() -> None:
+    raw = b"\xef\xbb\xbf" + "hello".encode("utf-8")
+    text, label = _detect_encoding(raw)
+    assert text == "hello"
+    assert label == "UTF-8 BOM"
+
+
+def test_detect_utf16_le_bom() -> None:
+    raw = b"\xff\xfe" + "hi".encode("utf-16-le")
+    text, label = _detect_encoding(raw)
+    assert text == "hi"
+    assert label == "UTF-16 LE"
+
+
+def test_detect_utf16_be_bom() -> None:
+    raw = b"\xfe\xff" + "hi".encode("utf-16-be")
+    text, label = _detect_encoding(raw)
+    assert text == "hi"
+    assert label == "UTF-16 BE"
+
+
+def test_detect_plain_utf8() -> None:
+    raw = "plain ascii".encode("utf-8")
+    text, label = _detect_encoding(raw)
+    assert text == "plain ascii"
+    assert label == "UTF-8"
+
+
+def test_detect_utf16_le_no_bom() -> None:
+    # UTF-16 LE without BOM — non-ASCII chars put null bytes at odd positions
+    # and make the raw bytes invalid as strict UTF-8, triggering the heuristic
+    raw = "héllo wörld".encode("utf-16-le")
+    text, label = _detect_encoding(raw)
+    assert "h" in text
+    assert "UTF-16 LE" in label
+
+
+def test_detect_lossy_fallback() -> None:
+    # Latin-1 bytes that are not valid UTF-8
+    raw = b"\xff\xfe\xfd" * 10  # matches UTF-16 LE BOM — use something else
+    # Use bytes that are invalid UTF-8 and won't trigger UTF-16 LE heuristic
+    raw = bytes([0x80, 0x81, 0x82, 0x83] * 20)
+    text, label = _detect_encoding(raw)
+    assert isinstance(text, str)
+    assert "lossy" in label.lower() or "UTF-8" in label

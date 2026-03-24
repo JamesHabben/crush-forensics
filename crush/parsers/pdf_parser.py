@@ -23,7 +23,7 @@ class PDFParser(AbstractParser):
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         raw = vfs.read(node)
         try:
-            import pypdf  # type: ignore[import-untyped]
+            import pypdf
         except ImportError:
             return ParseResult(
                 viewer_type="hex",

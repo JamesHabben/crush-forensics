@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
-from pathlib import Path
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode, find_sibling
