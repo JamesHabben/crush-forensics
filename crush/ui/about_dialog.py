@@ -19,9 +19,9 @@ import crush
 
 _ABOUT_HTML = f"""\
 <h2>Crush {crush.__version__}</h2>
-<p><b>Digital Forensic Analysis Workbench</b></p>
-<p>Open-source tool for parsing and examining digital forensic artefacts
-from iOS, macOS, Android, and other platforms.</p>
+<p><b>Digital Forensic Analysis Workbench</b> &nbsp;·&nbsp; © {crush.__release_year__} Marco Neumann</p>
+<p>Open-source desktop workbench for digital forensic analysis. Inspect ZIP/TAR acquisitions
+and parse ABX, SQLite, SEGB, PLIST, hex, JSON, XML, and media files — all in one GUI.</p>
 <p>Licensed under the <b>Apache License 2.0</b></p>
 <p><a href="https://github.com/kalink0/crush-forensics">
 github.com/kalink0/crush-forensics</a></p>

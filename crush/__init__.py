@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 - now Marco Neumann (kalink0)
 """Crush — Digital Forensic Analysis Workbench."""
- 
+
 __version__ = "0.2.1"
+__release_year__ = "2026"
 __author__ = "Marco Neumann (kalink0)"
