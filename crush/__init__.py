@@ -2,5 +2,5 @@
 # Copyright 2026 - now Marco Neumann (kalink0)
 """Crush — Digital Forensic Analysis Workbench."""
  
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Marco Neumann (kalink0)"

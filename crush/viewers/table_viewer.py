@@ -226,6 +226,8 @@ class TableViewer(QWidget):
             count_item = QStandardItem(str(count))
             count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             count_item.setEditable(False)
+            if isinstance(count, int):
+                count_item.setData(count, Qt.ItemDataRole.UserRole)
             self._source_model.appendRow([name_item, count_item])
 
         self._table_view.resizeColumnsToContents()
@@ -466,6 +468,14 @@ class _NumericSortProxy(QSortFilterProxyModel):
         right_data = self.sourceModel().data(right, Qt.ItemDataRole.UserRole)
         if isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
             return left_data < right_data
+        # Also handle TEXT columns that store numeric-looking strings (SQLite TEXT
+        # affinity returns Python str, so no UserRole is set for those values).
+        left_str = self.sourceModel().data(left, Qt.ItemDataRole.DisplayRole) or ""
+        right_str = self.sourceModel().data(right, Qt.ItemDataRole.DisplayRole) or ""
+        try:
+            return float(left_str) < float(right_str)
+        except (ValueError, TypeError):
+            pass
         return super().lessThan(left, right)
 
 

@@ -2,6 +2,15 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [0.2.1] — 2026-03-25
+
+### Fixes
+
+- **Windows theme inversion** — menus and context menus were unreadable on Windows because the native Windows style partially ignores the application QPalette; the Fusion style is now applied on Windows so all palette colours are honoured correctly
+- **SQLite viewer: numeric column sorting treated as string sort** — columns with integer or real values (including TEXT columns storing numeric strings) now sort numerically when clicking the column header
+- **SQLite viewer: summary "Rows" column sorted as string** — row counts in the summary view now sort numerically
+- **Properties panel: name and path not selectable** — file name and path labels now have text selection enabled; all property values can be marked and copied via right-click
+
 ## [0.2.0] — 2026-03-24 (updated)
 
 ### Fixes (post-release)

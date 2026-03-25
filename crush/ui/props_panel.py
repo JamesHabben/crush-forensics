@@ -16,6 +16,11 @@ from PySide6.QtWidgets import (
 
 from crush.core.vfs import VFSNode
 
+_SELECTABLE = (
+    Qt.TextInteractionFlag.TextSelectableByMouse
+    | Qt.TextInteractionFlag.TextSelectableByKeyboard
+)
+
 
 class PropertiesPanel(QScrollArea):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -35,11 +40,13 @@ class PropertiesPanel(QScrollArea):
 
         # File name as header
         header = QLabel(f"<b>{node.name}</b>")
+        header.setTextInteractionFlags(_SELECTABLE)
         self._layout.addRow(header)
 
         # Path (may be long — allow wrapping)
         path_label = QLabel(node.path)
         path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(_SELECTABLE)
         self._layout.addRow("Path:", path_label)
 
         # Timestamps (MACB) — always show all four, mark unavailable ones clearly
@@ -61,10 +68,7 @@ class PropertiesPanel(QScrollArea):
         for key, val in metadata.items():
             lbl = QLabel(str(val))
             lbl.setWordWrap(True)
-            lbl.setTextInteractionFlags(
-                lbl.textInteractionFlags()
-                | Qt.TextInteractionFlag.TextSelectableByMouse
-            )
+            lbl.setTextInteractionFlags(_SELECTABLE)
             self._layout.addRow(f"{key}:", lbl)
 
     def _add_timestamp(self, label: str, ts_value: float) -> None:
@@ -74,10 +78,7 @@ class PropertiesPanel(QScrollArea):
         else:
             text = "—"
         lbl = QLabel(text)
-        lbl.setTextInteractionFlags(
-            lbl.textInteractionFlags()
-            | Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        lbl.setTextInteractionFlags(_SELECTABLE)
         if not ts_value:
             lbl.setStyleSheet("color: gray;")
         self._layout.addRow(f"{label}:", lbl)
