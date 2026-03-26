@@ -11,19 +11,25 @@ Crush — Digital Forensic Analysis Workbench
 
 ## Features
 
-Open and navigate in ZIP and TAR archives (eg. for mobile phone acquisitions).
-Open single files and folder.
+Open and navigate ZIP and TAR archives, folders, and individual files — without extracting anything to disk first.
 
-When navigating and open file you can use the currently supported viewers (more planned):
+**Built-in file format database** — Crush identifies forensically relevant formats by magic bytes and extension, and shows format name, platform, forensic relevance, and a link to the specification for every selected file, including formats without a dedicated viewer.
 
-- ABX Viewer
+Supported viewers (more planned):
+
+- SQLite / Database Viewer
 - Hex Viewer
-- SQLITE Viewer
-- SEGB v1/v2 Decoder and Viewer
-- Media file (Audio, Video Image) Viewer
-- JSON Viewer
-- XML-Viewer
-- PLIST and BPLIST Viewer
+- Text Viewer (with syntax highlighting and encoding detection)
+- Plist / BPlist Viewer
+- SEGB v1/v2 Viewer
+- ABX (Android Binary XML) Viewer
+- Image Viewer
+- Media Viewer (audio/video)
+- PDF text extraction (displays extracted text)
+
+## Documentation
+
+→ [User Handbook](crush/docs/handbook.md)
 
 ## Screenshots
 

@@ -4,6 +4,8 @@
 
 Crush is a Digital Forensic Analysis Workbench for examining iOS and Android acquisitions. It lets you open archives (ZIP, TAR), folders, and individual files, then navigate and inspect their contents using format-aware viewers — without extracting anything to disk first.
 
+Crush includes a built-in **file format database** covering forensically relevant formats across iOS and Android. For every file you select or open, Crush identifies the format by magic bytes and extension, then shows its name, platform, forensic relevance, and a link to the format specification — even for formats that have no dedicated viewer yet. - the database in work in progress - more info and more file formats to come.
+
 ---
 
 ## Opening Evidence
@@ -15,7 +17,7 @@ Use the **File** menu to load a source:
 | **Open file…** | Single file — image, database, plist, etc. Opens directly in a viewer tab |
 | **Open ZIP archive…** | iOS full-filesystem acquisitions, IPA files, any `.zip` |
 | **Open TAR archive…** | Android ADB acquisitions, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz` |
-| **Open folder…** | Physical extraction or already-extracted acquisition on disk |
+| **Open folder…** | Already-extracted acquisition or any folder of files on disk |
 
 Opening a file (**Open file…**) appends it to the existing tree as a new root node, so multiple files can be open side by side. Opening a ZIP, TAR, or folder replaces the current tree.
 
@@ -53,14 +55,31 @@ The left panel shows the loaded archive or folder as a tree.
   - **Show Format Info** — opens a popup showing the identified format name, category, platforms, parser support status, and forensic relevance. For known formats an **Open Reference…** button links to the format specification. Also updates the Properties panel. Works for unsupported formats — useful for quickly understanding what a file is before deciding how to examine it
   - **Export…** — extract the file or folder to disk
 
-**Filtering:** type in the filter box at the top of the panel to search across the entire loaded tree by filename.
+**Filtering:** type in the filter box at the top of the panel to search across the entire loaded tree. All searches are case-insensitive and match anywhere in the value.
 
-- The filter is case-insensitive and matches anywhere in the name
-- While the filter is active, the tree is replaced by a **flat search results list** showing every matching file and folder together with its full path — no need to navigate through parent folders
-- **Double-click a file** in the results to open it directly in a viewer tab
-- **Double-click a folder** in the results to clear the filter and navigate the tree to that folder — it will be expanded and selected automatically
-- Clear the filter field (or click the **×** button) to return to the normal tree view
-- The **Type** column in search results is populated by the same format detection used in the tree
+While the filter is active, the tree is replaced by a **flat search results list** showing every match with its full path — no need to navigate through parent folders. Clear the filter (or click the **×** button) to return to the normal tree.
+
+**Search syntax**
+
+| Input | Behaviour |
+|---|---|
+| `rubin` | Plain text — matches all files and folders whose name contains `rubin` |
+| `name:rubin` | Explicit name filter — identical to plain text |
+| `type:sqlite` | Matches all files whose detected format contains `sqlite` (e.g. `SQLite Database`) |
+| `name:rubin type:sqlite` | AND — only files whose name contains `rubin` **and** whose type contains `sqlite` |
+
+Multiple tokens are always AND-combined. The `type:` token matches against the format label shown in the Type column (e.g. `jpeg`, `plist`, `xml`, `sqlite`).
+
+**Interacting with results**
+
+- **Double-click a file** — opens it directly in a viewer tab
+- **Double-click a folder** — clears the filter and navigates the tree to that folder, expanding and selecting it automatically
+- **Single-click** — selects the item and updates the Properties panel
+- **Right-click** — same context menu as the tree (Open, Hex, Export, etc.)
+
+**Type indexing**
+
+When an archive or folder is opened, Crush starts a background type scan that reads the first bytes of every file to detect its format. While this is running, a spinner and `Indexing types` message appear in the status bar. Once complete, `type:` searches are instant. The scan typically takes a few seconds to a minute depending on archive size — for a 45 GB archive with 162,000 files, expect around 10 seconds.
 
 ---
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from collections import deque
 import logging
+import threading
+import time
 
 from PySide6.QtCore import QModelIndex, Qt, Signal, QSortFilterProxyModel, QTimer
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -54,6 +56,8 @@ class FilesystemPanel(QWidget):
     format_info_requested = Signal(object, object)  # (VFSNode, VFS)
     load_finished = Signal()
     background_status = Signal(str)
+    _search_results_ready = Signal(object)  # internal: list of result dicts
+    _prescan_activity = Signal(str, bool)   # internal: (activity_name, is_start)
 
     def __init__(self, session: Session, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,7 +70,12 @@ class FilesystemPanel(QWidget):
         self._search_model = QStandardItemModel()
         self._search_model.setHorizontalHeaderLabels(["Name", "Path", "Size", "Type"])
         self._navigate_after_filter: tuple[VFSNode, VFS] | None = None
+        self._search_gen: int = 0
+        self._prescan_gen: int = 0
+        self._search_results_ready.connect(self._on_search_results_ready)
+        self._prescan_activity.connect(self._on_prescan_activity)
         self._type_cache: dict[tuple[int, str], str] = {}
+        self._vfs_lock = threading.Lock()
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(150)
@@ -91,7 +100,7 @@ class FilesystemPanel(QWidget):
         layout.setSpacing(0)
 
         self._filter = QLineEdit()
-        self._filter.setPlaceholderText("Filter files…")
+        self._filter.setPlaceholderText("Filter… (name:x  type:x)")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter)
         layout.addWidget(self._filter)
@@ -146,6 +155,7 @@ class FilesystemPanel(QWidget):
         self._type_cache.clear()
         self._activities.clear()
         self.background_status.emit("")
+        self._prescan_gen += 1
 
         # Recreate model to avoid slow row-by-row clears on large trees.
         self._model = QStandardItemModel()
@@ -158,6 +168,7 @@ class FilesystemPanel(QWidget):
         self._tree.expand(self._proxy.mapFromSource(self._model.indexFromItem(row[0])))
         if root_node.children:
             self._add_placeholder(row[0])
+        self._start_prescan([vfs], self._prescan_gen)
         self.load_finished.emit()
         _logger.debug("FilesystemPanel.load_vfs: emitted load_finished")
 
@@ -173,6 +184,8 @@ class FilesystemPanel(QWidget):
         self._tree.expand(self._proxy.mapFromSource(self._model.indexFromItem(row[0])))
         if root_node.children:
             self._add_placeholder(row[0])
+        self._prescan_gen += 1
+        self._start_prescan([vfs], self._prescan_gen)
         self.load_finished.emit()
         _logger.debug("FilesystemPanel.append_vfs: emitted load_finished")
 
@@ -329,41 +342,106 @@ class FilesystemPanel(QWidget):
             self._populate_search_results(text)
             self._stack.setCurrentIndex(1)
 
+    def _parse_filter_text(self, text: str) -> dict[str, str]:
+        """Parse 'type:sqlite name:rubin' into {'type': 'sqlite', 'name': 'rubin'}.
+        Plain text without tokens is treated as a name filter."""
+        import re
+        tokens: dict[str, str] = {}
+        for key, value in re.findall(r'(\w+):(\S+)', text):
+            tokens[key.lower()] = value.lower()
+        remainder = re.sub(r'\w+:\S+', '', text).strip()
+        if remainder and 'name' not in tokens:
+            tokens['name'] = remainder.lower()
+        return tokens
+
     def _populate_search_results(self, text: str) -> None:
         self._type_queue.clear()
         self._search_model.setRowCount(0)
-        text_lower = text.lower()
-        for vfs in self._vfs_list:
-            self._collect_matches(vfs.root(), vfs, text_lower, "")
+        tokens = self._parse_filter_text(text)
+        if not tokens:
+            return
+        self._search_gen += 1
+        gen = self._search_gen
+        vfs_list = list(self._vfs_list)
+        threading.Thread(
+            target=self._search_worker,
+            args=(vfs_list, tokens, gen),
+            daemon=True,
+        ).start()
 
-    def _collect_matches(self, node: VFSNode, vfs: VFS, text: str, parent_path: str) -> None:
+    def _search_worker(self, vfs_list: list[VFS], tokens: dict[str, str], gen: int) -> None:
+        results: list[dict] = []
+        for vfs in vfs_list:
+            self._collect_matches(vfs.root(), vfs, tokens, "", results, gen)
+            if self._search_gen != gen:
+                return
+        if self._search_gen == gen:
+            self._search_results_ready.emit(results)
+
+    def _collect_matches(
+        self, node: VFSNode, vfs: VFS, tokens: dict[str, str],
+        parent_path: str, results: list[dict], gen: int,
+    ) -> None:
+        if self._search_gen != gen:
+            return
         path = f"{parent_path}/{node.name}" if parent_path else node.name
-        if text in node.name.lower():
+
+        name_filter = tokens.get('name')
+        type_filter = tokens.get('type')
+
+        name_match = name_filter is None or name_filter in node.name.lower()
+
+        if type_filter is not None:
+            if node.is_dir:
+                type_label: str | None = "Folder"
+                type_match = type_filter in "folder"
+            else:
+                type_label = self._detect_type_label(node, vfs)
+                type_match = type_filter in type_label.lower()
+        else:
+            type_label = None
+            type_match = True
+
+        if name_match and type_match:
+            results.append({
+                'node': node, 'vfs': vfs,
+                'path': path, 'type_label': type_label,
+            })
+
+        for child in node.children:
+            self._collect_matches(child, vfs, tokens, path, results, gen)
+
+    def _on_search_results_ready(self, results: list[dict]) -> None:
+        self._type_queue.clear()
+        self._search_model.setRowCount(0)
+        for r in results:
+            node: VFSNode = r['node']
+            vfs: VFS = r['vfs']
+            type_label: str | None = r['type_label']
+
             name_item = QStandardItem(node.name)
             name_item.setData(node, _ROLE_NODE)
             name_item.setData(vfs, _ROLE_VFS)
             name_item.setEditable(False)
 
-            path_item = QStandardItem(path)
+            path_item = QStandardItem(r['path'])
             path_item.setEditable(False)
 
             size_item = QStandardItem(_format_size(node.size) if not node.is_dir else "")
             size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             size_item.setEditable(False)
 
-            type_item = QStandardItem("Folder" if node.is_dir else "")
+            resolved = type_label if type_label is not None else ("Folder" if node.is_dir else "")
+            type_item = QStandardItem(resolved)
             type_item.setEditable(False)
 
             self._search_model.appendRow([name_item, path_item, size_item, type_item])
 
-            if not node.is_dir:
+            if not node.is_dir and not resolved:
                 self._type_queue.append((type_item, node, vfs))
                 if not self._type_timer.isActive():
                     self._activity_start("Type detection")
                     self._type_timer.start()
-
-        for child in node.children:
-            self._collect_matches(child, vfs, text, path)
 
     def _on_search_double_click(self, index: QModelIndex) -> None:
         item = self._search_model.itemFromIndex(index.siblingAtColumn(0))
@@ -498,7 +576,8 @@ class FilesystemPanel(QWidget):
             return self._type_cache[cache_key]
         label = ""
         try:
-            peek = vfs.peek(node, 2048)
+            with self._vfs_lock:
+                peek = vfs.peek(node, 2048)
             label = detect_fast_label(peek, node.path)
             if not label:
                 label = self._label_from_registry(node, vfs)
@@ -506,6 +585,45 @@ class FilesystemPanel(QWidget):
             label = ""
         self._type_cache[cache_key] = label
         return label
+
+    def _start_prescan(self, vfs_list: list[VFS], gen: int) -> None:
+        threading.Thread(
+            target=self._prescan_worker,
+            args=(vfs_list, gen),
+            daemon=True,
+        ).start()
+
+    def _on_prescan_activity(self, name: str, is_start: bool) -> None:
+        if is_start:
+            self._activity_start(name)
+        else:
+            self._activity_end(name)
+
+    def _prescan_worker(self, vfs_list: list[VFS], gen: int) -> None:
+        """Walk all VFS nodes in background to warm the type cache."""
+        _logger.info("Type pre-scan started")
+        self._prescan_activity.emit("Indexing types", True)
+        count = 0
+        t0 = time.monotonic()
+        try:
+            for vfs in vfs_list:
+                stack = deque([vfs.root()])
+                while stack:
+                    if self._prescan_gen != gen:
+                        _logger.info("Type pre-scan cancelled after %d files", count)
+                        return
+                    node = stack.popleft()
+                    if not node.is_dir:
+                        self._detect_type_label(node, vfs)
+                        count += 1
+                        if count % 500 == 0:
+                            time.sleep(0.002)  # brief yield; GIL is released during I/O anyway
+                    stack.extend(node.children)
+        finally:
+            if self._prescan_gen == gen:
+                elapsed = time.monotonic() - t0
+                _logger.info("Type pre-scan complete: %d files indexed in %.1f s", count, elapsed)
+                self._prescan_activity.emit("Indexing types", False)
 
     def _ensure_children_loaded(self, parent_item: QStandardItem, node: VFSNode, vfs: VFS) -> None:
         if parent_item.data(_ROLE_LOADED):

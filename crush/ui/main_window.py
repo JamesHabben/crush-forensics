@@ -252,9 +252,17 @@ class MainWindow(QMainWindow):
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status.showMessage(f"Crush {crush.__version__} — ready")
+        self._spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self._spinner_idx = 0
+        self._spinner_label = QLabel("")
+        self._spinner_label.setVisible(False)
+        self._status.addPermanentWidget(self._spinner_label)
         self._bg_status = QLabel("")
         self._bg_status.setVisible(False)
         self._status.addPermanentWidget(self._bg_status)
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.setInterval(100)
+        self._spinner_timer.timeout.connect(self._on_spinner_tick)
 
         self._build_menus()
 
@@ -767,8 +775,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 continue
 
+    def _on_spinner_tick(self) -> None:
+        self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_chars)
+        self._spinner_label.setText(self._spinner_chars[self._spinner_idx])
+
     def _on_background_status(self, text: str) -> None:
         if not text:
+            self._spinner_timer.stop()
+            self._spinner_label.setVisible(False)
             self._bg_status.setVisible(False)
             self._bg_status.setText("")
             self._bg_status.setToolTip("")
@@ -776,6 +790,9 @@ class MainWindow(QMainWindow):
         self._bg_status.setText(text)
         self._bg_status.setToolTip(text)
         self._bg_status.setVisible(True)
+        self._spinner_label.setVisible(True)
+        if not self._spinner_timer.isActive():
+            self._spinner_timer.start()
 
     def _sync_dock_titlebar(self, dock: QDockWidget, floating: bool) -> None:
         if floating:

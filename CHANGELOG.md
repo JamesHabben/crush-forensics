@@ -7,6 +7,14 @@ All notable changes to Crush will be documented in this file.
 ### Improvements
 
 - **Filesystem panel: flat search results view** — typing in the filter field now replaces the tree with a flat list of all matching files and folders, including their full path. Double-clicking a file opens it directly; double-clicking a folder clears the filter and navigates the tree to that folder (expanding all parents automatically). Clears the filter to return to the normal tree.
+- **Filesystem panel: typed search syntax** — filter supports `name:x` and `type:x` tokens (e.g. `type:sqlite`, `name:rubin type:sqlite`). Plain text without a token prefix is treated as a name filter. Multiple tokens are AND-combined.
+- **Filesystem panel: background type indexing** — on load, Crush pre-scans all files in the background to populate the format detection cache. Progress is shown in the status bar (`Indexing types`); once complete, `type:` searches are instant. A spinner in the status bar indicates any ongoing background activity.
+- **Status bar spinner** — an animated spinner appears alongside background activity messages so it is immediately clear that work is in progress.
+- **Nightly builds** — automated nightly builds for Linux and Windows are published as a pre-release on GitHub via a new GitHub Actions workflow. The previous nightly is replaced on each run.
+
+### Documentation
+
+- User handbook updated with full filter/search syntax reference, type indexing explanation, and corrected descriptions for Open folder… and PDF support.
 
 ## [0.2.1] — 2026-03-25
 
