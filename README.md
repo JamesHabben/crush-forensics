@@ -115,3 +115,13 @@ For Linux audio playback, `libpulse` is commonly required by Qt Multimedia.
 - Debian/Ubuntu: `sudo apt-get install libpulse0`
 - Fedora: `sudo dnf install pulseaudio-libs`
 - Arch: `sudo pacman -S libpulse`
+
+## Acknowledgements
+
+This project builds on the great work of the DFIR community. The following third-party modules by [CCL Solutions Group](https://github.com/cclgroupltd) are bundled:
+
+- [ccl_bplist](https://github.com/cclgroupltd/ccl-bplist) — Binary plist module (BSD 3-Clause)
+- [ccl_segb](https://github.com/cclgroupltd/ccl_segb) — SEGB (Significant Energy Bearer) module (MIT)
+- [ccl_leveldb](https://github.com/cclgroupltd/ccl-leveldb) — LevelDB / Chrome LevelDB module (MIT)
+
+Parts of this software were developed with assistance from [Claude AI / Claude Code](https://claude.ai) by Anthropic.
