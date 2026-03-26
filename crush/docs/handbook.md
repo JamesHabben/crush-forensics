@@ -53,7 +53,14 @@ The left panel shows the loaded archive or folder as a tree.
   - **Show Format Info** — opens a popup showing the identified format name, category, platforms, parser support status, and forensic relevance. For known formats an **Open Reference…** button links to the format specification. Also updates the Properties panel. Works for unsupported formats — useful for quickly understanding what a file is before deciding how to examine it
   - **Export…** — extract the file or folder to disk
 
-**Filtering:** type in the filter box at the top of the panel to filter the tree by filename. The filter is case-insensitive and matches anywhere in the name.
+**Filtering:** type in the filter box at the top of the panel to search across the entire loaded tree by filename.
+
+- The filter is case-insensitive and matches anywhere in the name
+- While the filter is active, the tree is replaced by a **flat search results list** showing every matching file and folder together with its full path — no need to navigate through parent folders
+- **Double-click a file** in the results to open it directly in a viewer tab
+- **Double-click a folder** in the results to clear the filter and navigate the tree to that folder — it will be expanded and selected automatically
+- Clear the filter field (or click the **×** button) to return to the normal tree view
+- The **Type** column in search results is populated by the same format detection used in the tree
 
 ---
 

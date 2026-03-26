@@ -2,6 +2,12 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Improvements
+
+- **Filesystem panel: flat search results view** — typing in the filter field now replaces the tree with a flat list of all matching files and folders, including their full path. Double-clicking a file opens it directly; double-clicking a folder clears the filter and navigates the tree to that folder (expanding all parents automatically). Clears the filter to return to the normal tree.
+
 ## [0.2.1] — 2026-03-25
 
 ### Fixes
