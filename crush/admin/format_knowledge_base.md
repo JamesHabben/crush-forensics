@@ -25,11 +25,13 @@ Open `crush/data/build_formats_db.py` and find the `FORMATS` list. Each entry is
     "short_name": "SQLite",              # Abbreviation
     "category": "database",             # See Categories below
     "forensic_relevance": "...",         # What an investigator finds here
-    "platforms": "iOS,macOS,Android",   # Comma-separated, no spaces
+    "platforms": ["iOS", "macOS", "Android"],  # List of platform strings
     "parser_class": "SQLiteParser",     # Class name in crush/parsers/, or None
-    "magic": [(0, b"SQLite format 3\x00")],  # List of (offset, bytes) tuples
+    "magic": [
+        {"offset": 0, "value": b"SQLite format 3\x00", "description": "SQLite header"},
+    ],
     "extensions": [".db", ".sqlite"],   # Lowercase with dot
-    "docs_url": "https://...",          # Reference link (opens from Format Reference dialog)
+    "links": [("Format spec", "https://...")],  # List of (label, url) tuples
 },
 ```
 
@@ -51,11 +53,11 @@ Commit **both** `build_formats_db.py` and `formats.db`.
 | `short_name` | No | Abbreviation for compact display |
 | `category` | No | See Categories below |
 | `forensic_relevance` | No | Shown in Properties panel — explain what an analyst finds here |
-| `platforms` | No | `iOS`, `macOS`, `Android`, `Windows`, `Cross-platform` — comma-separated |
+| `platforms` | No | List of strings: `"iOS"`, `"macOS"`, `"Android"`, `"Windows"`, `"Cross-platform"` |
 | `parser_class` | No | Class name of the Crush parser, e.g. `"SQLiteParser"`. `None` = unsupported |
-| `magic` | No | List of `(offset, bytes)` tuples — **all** must match for a hit |
+| `magic` | No | List of `{"offset": int, "value": bytes, "description": str}` — **all** must match for a hit |
 | `extensions` | No | Fallback when no magic matches. Lowercase, include the dot |
-| `docs_url` | No | Opened by "Open Reference…" button in Format Reference dialog |
+| `links` | No | List of `(label, url)` tuples — opened from Format Info and Format Reference dialogs |
 
 ### Categories
 
@@ -80,15 +82,17 @@ If you want Crush to identify a file and show forensic context without parsing i
 
 ```python
 {
-    "name": "iOS Unified Log (tracev3)",
+    "name": "Apple Unified Log (tracev3)",
     "short_name": "tracev3",
     "category": "log",
     "forensic_relevance": "System and app logs since iOS 10 ...",
-    "platforms": "iOS,macOS",
+    "platforms": ["iOS", "macOS"],
     "parser_class": None,
-    "magic": [(0, b"\x30\x74\x72\x33")],
+    "magic": [
+        {"offset": 0, "value": b"\x30\x74\x72\x33", "description": "tracev3 magic"},
+    ],
     "extensions": [".tracev3"],
-    "docs_url": "https://github.com/mandiant/macos-UnifiedLogs",
+    "links": [("Source code", "https://github.com/mandiant/macos-UnifiedLogs")],
 },
 ```
 
@@ -123,7 +127,7 @@ Then rebuild the DB. No other files need to change.
 
 ## How Identification Works at Runtime
 
-1. **Magic bytes** — checked first. All `(offset, pattern)` pairs in an entry must match.
+1. **Magic bytes** — checked first. All `{"offset", "value"}` entries in an entry must match.
 2. **Extension** — fallback when no magic entry matches.
 3. **Parser class lookup** — when a file is successfully parsed, `FormatDatabase.by_parser_class()` looks up the format by the parser's class name, bypassing magic/extension detection entirely.
 

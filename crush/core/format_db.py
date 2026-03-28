@@ -30,6 +30,7 @@ class FormatMatch:
     platforms: str
     parser_class: str | None   # e.g. "SQLiteParser", or None if unsupported
     links: list[tuple[str, str]]  # [(label, url), ...]
+    magic: list[tuple[int, bytes, str]]  # [(offset, pattern, description), ...]
 
 
 class FormatDatabase:
@@ -127,6 +128,16 @@ class FormatDatabase:
                     (fid,),
                 )
             ]
+        magic: list[tuple[int, bytes, str]] = []
+        if self._conn:
+            magic = [
+                (r["offset"], r["pattern"], r["description"] or "")
+                for r in self._conn.execute(
+                    "SELECT offset, pattern, description FROM magic_bytes "
+                    "WHERE format_id = ? ORDER BY id",
+                    (fid,),
+                )
+            ]
         return FormatMatch(
             name=row["name"],
             short_name=row["short_name"] or "",
@@ -135,4 +146,5 @@ class FormatDatabase:
             platforms=row["platforms"] or "",
             parser_class=row["parser_class"],
             links=links,
+            magic=magic,
         )

@@ -580,7 +580,13 @@ class FilesystemPanel(QWidget):
                 peek = vfs.peek(node, 2048)
             label = detect_fast_label(peek, node.path)
             if not label:
-                label = self._label_from_registry(node, vfs)
+                try:
+                    from crush.core.format_db import FormatDatabase
+                    fmt = FormatDatabase.get().identify(peek, node.name)
+                    if fmt:
+                        label = fmt.short_name or fmt.name
+                except Exception:
+                    pass
         except Exception:
             label = ""
         self._type_cache[cache_key] = label

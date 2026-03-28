@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt
-from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import QUrl
 
 from crush.core.format_db import FormatDatabase
+from crush.ui.format_info_dialog import FormatInfoDialog
 
 _HEADERS = ["Name", "Category", "Platforms", "Parser", "Forensic Relevance"]
 _COL_NAME = 0
@@ -35,7 +35,6 @@ class FormatReferenceDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Format Reference")
         self.resize(1000, 600)
-        self._selected_url = ""
         self._build_ui()
         self._populate()
 
@@ -77,19 +76,20 @@ class FormatReferenceDialog(QDialog):
         self._table.setColumnWidth(_COL_PLAT, 140)
         self._table.setColumnWidth(_COL_PARSER, 120)
         self._table.selectionModel().selectionChanged.connect(self._on_selection)
+        self._table.doubleClicked.connect(self._open_details)
         layout.addWidget(self._table)
 
-        # Status + docs button
+        # Status + details button
         bottom = QWidget()
         bl = QHBoxLayout(bottom)
         bl.setContentsMargins(0, 0, 0, 0)
         self._count_label = QLabel("")
         bl.addWidget(self._count_label)
         bl.addStretch()
-        self._docs_btn = QPushButton("Open Reference…")
-        self._docs_btn.setEnabled(False)
-        self._docs_btn.clicked.connect(self._open_docs)
-        bl.addWidget(self._docs_btn)
+        self._details_btn = QPushButton("View Details…")
+        self._details_btn.setEnabled(False)
+        self._details_btn.clicked.connect(self._open_details)
+        bl.addWidget(self._details_btn)
         layout.addWidget(bottom)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -113,9 +113,7 @@ class FormatReferenceDialog(QDialog):
             if not fmt.parser_class:
                 for item in items:
                     item.setForeground(Qt.GlobalColor.gray)
-            # Store first link URL in first item for the "Open Reference…" button
-            first_url = fmt.links[0][1] if fmt.links else ""
-            items[0].setData(first_url, Qt.ItemDataRole.UserRole)
+            items[0].setData(fmt, Qt.ItemDataRole.UserRole)
             self._model.appendRow(items)
 
         self._update_count()
@@ -134,16 +132,15 @@ class FormatReferenceDialog(QDialog):
 
     def _on_selection(self) -> None:
         indexes = self._table.selectionModel().selectedRows()
+        self._details_btn.setEnabled(bool(indexes))
+
+    def _open_details(self) -> None:
+        indexes = self._table.selectionModel().selectedRows()
         if not indexes:
-            self._docs_btn.setEnabled(False)
-            self._selected_url = ""
             return
         source = self._proxy.mapToSource(indexes[0])
         item = self._model.item(source.row(), _COL_NAME)
-        url = item.data(Qt.ItemDataRole.UserRole) if item else ""
-        self._selected_url = url or ""
-        self._docs_btn.setEnabled(bool(self._selected_url))
-
-    def _open_docs(self) -> None:
-        if self._selected_url:
-            QDesktopServices.openUrl(QUrl(self._selected_url))
+        fmt = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if fmt:
+            dlg = FormatInfoDialog(None, fmt, self)
+            dlg.exec()

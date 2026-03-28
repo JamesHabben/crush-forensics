@@ -3,14 +3,12 @@
 """Format Info dialog — popup showing format knowledge for a single file."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QLabel,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -22,7 +20,7 @@ from crush.core.vfs import VFSNode
 class FormatInfoDialog(QDialog):
     def __init__(
         self,
-        node: VFSNode,
+        node: VFSNode | None,
         fmt: FormatMatch | None,
         parent: QWidget | None = None,
     ) -> None:
@@ -31,12 +29,13 @@ class FormatInfoDialog(QDialog):
         self.setMinimumWidth(420)
         self._build_ui(node, fmt)
 
-    def _build_ui(self, node: VFSNode, fmt: FormatMatch | None) -> None:
+    def _build_ui(self, node: VFSNode | None, fmt: FormatMatch | None) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # File name header
-        header = QLabel(f"<b>{node.name}</b>")
+        # Header — file name when opened from file tree, format name when from reference
+        title = node.name if node is not None else (fmt.name if fmt else "Format Info")
+        header = QLabel(f"<b>{title}</b>")
         header.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(header)
 
@@ -52,12 +51,30 @@ class FormatInfoDialog(QDialog):
                 self._add_row(form, "Category", fmt.category.capitalize())
             if fmt.platforms:
                 self._add_row(form, "Platforms", fmt.platforms.replace(",", ", "))
+
             support = "Supported" if fmt.parser_class else "Not yet supported"
             support_lbl = QLabel(support)
             support_lbl.setStyleSheet(
                 "color: green;" if fmt.parser_class else "color: gray;"
             )
-            form.addRow("Parser:", support_lbl)
+            form.addRow("Analysis:", support_lbl)
+
+            if fmt.magic:
+                lines = []
+                for offset, pattern, description in fmt.magic:
+                    hex_str = " ".join(f"{b:02X}" for b in pattern)
+                    if description:
+                        lines.append(f"{hex_str}  —  {description} (offset {offset})")
+                    else:
+                        lines.append(f"{hex_str}  (offset {offset})")
+                magic_lbl = QLabel("\n".join(lines))
+                magic_lbl.setWordWrap(True)
+                magic_lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                magic_lbl.setStyleSheet("font-family: monospace;")
+                form.addRow("Magic bytes:", magic_lbl)
+
             if fmt.forensic_relevance:
                 relevance = QLabel(fmt.forensic_relevance)
                 relevance.setWordWrap(True)
@@ -65,6 +82,15 @@ class FormatInfoDialog(QDialog):
                     Qt.TextInteractionFlag.TextSelectableByMouse
                 )
                 form.addRow("Forensic relevance:", relevance)
+
+            if fmt.links:
+                for label, url in fmt.links:
+                    link_lbl = QLabel(f'<a href="{url}">{label}</a>')
+                    link_lbl.setOpenExternalLinks(True)
+                    link_lbl.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextBrowserInteraction
+                    )
+                    form.addRow("Link:", link_lbl)
         else:
             self._add_row(form, "Format", "Unknown")
             note = QLabel("No match found in the format knowledge base.\n"
@@ -75,14 +101,7 @@ class FormatInfoDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Buttons
-        btn_box = QDialogButtonBox()
-        if fmt:
-            for label, url in fmt.links:
-                btn = QPushButton(label)
-                btn.clicked.connect(lambda _checked, u=url: QDesktopServices.openUrl(QUrl(u)))
-                btn_box.addButton(btn, QDialogButtonBox.ButtonRole.ActionRole)
-        btn_box.addButton(QDialogButtonBox.StandardButton.Close)
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
 
