@@ -98,7 +98,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".plist"],
         "links": [("Developer docs", "https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFPropertyLists/")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "CBOR (Concise Binary Object Representation)",
@@ -933,7 +933,7 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "plist",
         "category": "configuration",
         "forensic_relevance": (
-            "Human-readable version of binary plists. Used for app preferences, "
+            "Human-readable XML plist. Used for app preferences, "
             "configuration files, and Info.plist manifests."
         ),
         "platforms": ["iOS", "macOS"],
@@ -941,7 +941,7 @@ FORMATS: list[dict[str, Any]] = [
         "magic": [],
         "extensions": [".plist"],
         "links": [("Developer docs", "https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFPropertyLists/")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Protocol Buffers (protobuf)",
@@ -1040,7 +1040,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".db", ".sqlite", ".sqlite3", ".db3"],
         "links": [("Format spec", "https://www.sqlite.org/fileformat.html")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "SQLite WAL (Write-Ahead Log)",
