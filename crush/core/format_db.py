@@ -118,7 +118,7 @@ class FormatDatabase:
                     (fid,),
                 )
             ]
-        magic: list[tuple[int, bytes, str]] = []
+        magic: list[tuple[int | None, bytes, str]] = []
         if self._conn:
             magic = [
                 (r["offset"], r["pattern"], r["description"] or "")
