@@ -38,6 +38,16 @@ jobs:
             libxkbcommon-x11-0 \
             libpulse0
 
+      - name: Set build identifier
+        run: |
+          python - <<'EOF'
+          import pathlib, datetime
+          p = pathlib.Path("crush/__init__.py")
+          date = datetime.datetime.utcnow().strftime("%Y%m%d")
+          p.write_text(p.read_text().replace('__build__ = ""', f'__build__ = "{date}-nightly"'))
+          EOF
+        shell: bash
+
       - name: Install Python deps (Linux)
         if: runner.os == 'Linux'
         run: |

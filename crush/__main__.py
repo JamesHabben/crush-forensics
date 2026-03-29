@@ -2,6 +2,7 @@
 import sys
 
 def main() -> None:
+    import crush
     from PySide6.QtWidgets import QApplication
     from crush.ui.main_window import MainWindow
     app = QApplication(sys.argv)
@@ -11,7 +12,7 @@ def main() -> None:
     if sys.platform.startswith("win"):
         app.setStyle("Fusion")
     app.setApplicationName("Crush")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion(crush.display_version())
     app.setOrganizationName("Crush DFIR")
     window = MainWindow()
     window.show()

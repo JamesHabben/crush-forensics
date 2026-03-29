@@ -2,7 +2,7 @@
 
 All notable changes to Crush will be documented in this file.
 
-## [Unreleased]
+## [Unreleased - Only in Nightly Build]
 
 ### Improvements
 
@@ -11,7 +11,9 @@ All notable changes to Crush will be documented in this file.
 - **Filesystem panel: background type indexing** — on load, Crush pre-scans all files in the background to populate the format detection cache. Progress is shown in the status bar (`Indexing types`); once complete, `type:` searches are instant. A spinner in the status bar indicates any ongoing background activity.
 - **Status bar spinner** — an animated spinner appears alongside background activity messages so it is immediately clear that work is in progress.
 - **Nightly builds** — automated nightly builds for Linux and Windows are published as a pre-release on GitHub via a new GitHub Actions workflow. The previous nightly is replaced on each run.
-
+- **Nightly build version display** — nightly builds now show a build identifier in the window title, status bar, and About dialog (e.g. `Crush 0.2.1 (20260329-nightly)`), making it immediately clear which build is running. Release builds continue to show only the semantic version.
+- **Filesystem panel: Contains now always the recognized file type** — formerly the column `Type` contained  the parser or the fallback hexviewer - now always the recognized file type
+- **Format Reference: QA and Links** - Ony reviewed formats are published in the GUI. All referenced Links are clickable, Magic Bytes are given in hex with offset.
 ### Documentation
 
 - User handbook updated with full filter/search syntax reference, type indexing explanation, and corrected descriptions for Open folder… and PDF support.

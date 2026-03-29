@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         self._pending_open: tuple[VFSNode, VFS] | None = None
         self._load_queue: list[tuple[str, bool, bool]] = []
         self._settings = QSettings("Crush DFIR", "Crush")
-        self.setWindowTitle(f"Crush {crush.__version__}")
+        self.setWindowTitle(f"Crush {crush.display_version()}")
         self.resize(1280, 800)
         self._build_ui()
         self._setup_logging()
@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
         # Status bar
         self._status = QStatusBar()
         self.setStatusBar(self._status)
-        self._status.showMessage(f"Crush {crush.__version__} — ready")
+        self._status.showMessage(f"Crush {crush.display_version()} — ready")
         self._spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self._spinner_idx = 0
         self._spinner_label = QLabel("")

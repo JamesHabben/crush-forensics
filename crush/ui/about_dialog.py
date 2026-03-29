@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 import crush
 
 _ABOUT_HTML = f"""\
-<h2>Crush {crush.__version__}</h2>
+<h2>Crush {crush.display_version()}</h2>
 <p><b>Digital Forensic Analysis Workbench</b> &nbsp;·&nbsp; © {crush.__release_year__} Marco Neumann</p>
 <p>Open-source desktop workbench for digital forensic analysis. Inspect ZIP/TAR acquisitions
 and parse ABX, SQLite, SEGB, PLIST, hex, JSON, XML, and media files — all in one GUI.</p>
