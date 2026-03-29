@@ -30,7 +30,7 @@ class FormatMatch:
     platforms: str
     parser_class: str | None   # e.g. "SQLiteParser", or None if unsupported
     links: list[tuple[str, str]]  # [(label, url), ...]
-    magic: list[tuple[int, bytes, str]]  # [(offset, pattern, description), ...]
+    magic: list[tuple[int | None, bytes, str]]  # [(offset, pattern, description), ...]
 
 
 class FormatDatabase:
@@ -61,7 +61,7 @@ class FormatDatabase:
     # ------------------------------------------------------------------
 
     def identify(self, peek_bytes: bytes, filename: str) -> FormatMatch | None:
-        """Return the best format match by magic bytes then extension, or None."""
+        """Return the best format match by magic bytes, or None."""
         if self._conn is None:
             return None
 
@@ -72,22 +72,12 @@ class FormatDatabase:
             "FROM formats f JOIN magic_bytes m ON m.format_id = f.id"
         )
         for row in cur:
-            offset: int = row["offset"]
+            offset = row["offset"]
+            if offset is None:
+                continue
             pattern: bytes = row["pattern"]
             end = offset + len(pattern)
             if len(peek_bytes) >= end and peek_bytes[offset:end] == pattern:
-                return self._row_to_match(row)
-
-        # 2. Extension fallback
-        ext = Path(filename).suffix.lower()
-        if ext:
-            row = self._conn.execute(
-                "SELECT f.* FROM formats f "
-                "JOIN extensions e ON e.format_id = f.id "
-                "WHERE LOWER(e.extension) = ? LIMIT 1",
-                (ext,),
-            ).fetchone()
-            if row:
                 return self._row_to_match(row)
 
         return None

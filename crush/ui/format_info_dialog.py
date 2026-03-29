@@ -63,10 +63,14 @@ class FormatInfoDialog(QDialog):
                 lines = []
                 for offset, pattern, description in fmt.magic:
                     hex_str = " ".join(f"{b:02X}" for b in pattern)
-                    if description:
-                        lines.append(f"{hex_str}  —  {description} (offset {offset})")
+                    if offset is None:
+                        offset_label = "offset unknown"
                     else:
-                        lines.append(f"{hex_str}  (offset {offset})")
+                        offset_label = f"offset {offset} (0x{offset:X})"
+                    if description:
+                        lines.append(f"{hex_str}  —  {description} [{offset_label}]")
+                    else:
+                        lines.append(f"{hex_str}  [{offset_label}]")
                 magic_lbl = QLabel("\n".join(lines))
                 magic_lbl.setWordWrap(True)
                 magic_lbl.setTextInteractionFlags(

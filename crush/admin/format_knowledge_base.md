@@ -30,8 +30,9 @@ Open `crush/data/build_formats_db.py` and find the `FORMATS` list. Each entry is
     "magic": [
         {"offset": 0, "value": b"SQLite format 3\x00", "description": "SQLite header"},
     ],
-    "extensions": [".db", ".sqlite"],   # Lowercase with dot
+    "extensions": [".db", ".sqlite"],   # Lowercase with dot (currently not used for identification)
     "links": [("Format spec", "https://...")],  # List of (label, url) tuples
+    "status": "reviewed",              # "draft" (excluded) or "reviewed" (included)
 },
 ```
 
@@ -53,26 +54,29 @@ Commit **both** `build_formats_db.py` and `formats.db`.
 | `short_name` | No | Abbreviation for compact display |
 | `category` | No | See Categories below |
 | `forensic_relevance` | No | Shown in Properties panel — explain what an analyst finds here |
-| `platforms` | No | List of strings: `"iOS"`, `"macOS"`, `"Android"`, `"Windows"`, `"Cross-platform"` |
+| `platforms` | No | List of strings: `"iOS"`, `"macOS"`, `"Android"`, `"Windows"`, `"Linux"` |
 | `parser_class` | No | Class name of the Crush parser, e.g. `"SQLiteParser"`. `None` = unsupported |
-| `magic` | No | List of `{"offset": int, "value": bytes, "description": str}` — **all** must match for a hit |
-| `extensions` | No | Fallback when no magic matches. Lowercase, include the dot |
+| `magic` | No | List of `{"offset": int | None, "value": bytes, "description": str}` — **all** must match for a hit. Use `offset: None` for trailer/unknown offsets (informational only). |
+| `extensions` | No | Extension metadata (not used for identification). Lowercase, include the dot |
 | `links` | No | List of `(label, url)` tuples — opened from Format Info and Format Reference dialogs |
+| `status` | Yes | `"draft"` (excluded from DB) or `"reviewed"` (included in DB) |
 
 ### Categories
 
 | Value | Used for |
 |---|---|
 | `database` | SQLite, LevelDB, Core Data |
-| `plist` | Binary and XML plists, NSKeyedArchiver |
-| `image` | JPEG, PNG, HEIC, etc. |
-| `media` | MP4, MP3, etc. |
-| `archive` | ZIP, TAR, DMG, sparse images |
+| `configuration` | Plists, settings, structured configs |
 | `log` | Unified Log, SEGB/Biome, EVTX, crash reports |
+| `execution` | DEX, OAT, Mach-O, ELF, binaries |
+| `document` | PDF, Office, text documents |
+| `filesystem` | Filesystem metadata, catalog formats |
+| `disk_image` | DMG, sparse images, raw images |
+| `archive` | ZIP, TAR, backup containers |
 | `serialization` | Protobuf, MessagePack, CBOR |
-| `executable` | DEX, OAT, Mach-O, ELF |
-| `crypto` | Keychain, encrypted containers |
-| `other` | XML, JSON, PDF, anything else |
+| `memory` | Memory dumps, hibernation |
+| `network` | PCAP and network traces |
+| `uncategorized` | Anything else / TBD |
 
 ---
 
@@ -128,10 +132,9 @@ Then rebuild the DB. No other files need to change.
 ## How Identification Works at Runtime
 
 1. **Magic bytes** — checked first. All `{"offset", "value"}` entries in an entry must match.
-2. **Extension** — fallback when no magic entry matches.
-3. **Parser class lookup** — when a file is successfully parsed, `FormatDatabase.by_parser_class()` looks up the format by the parser's class name, bypassing magic/extension detection entirely.
+2. **Parser class lookup** — when a file is successfully parsed, `FormatDatabase.by_parser_class()` looks up the format by the parser's class name, bypassing magic detection entirely.
 
-For **unsupported files** (handled by `HexFallbackParser`), magic + extension identification runs and the result is shown in the Properties panel alongside the raw hex view.
+For **unsupported files** (handled by `HexFallbackParser`), magic identification runs and the result is shown in the Properties panel alongside the raw hex view.
 
 ---
 

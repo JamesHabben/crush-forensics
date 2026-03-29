@@ -12,7 +12,11 @@ All notable changes to Crush will be documented in this file.
 - **Status bar spinner** — an animated spinner appears alongside background activity messages so it is immediately clear that work is in progress.
 - **Nightly builds** — automated nightly builds for Linux and Windows are published as a pre-release on GitHub via a new GitHub Actions workflow. The previous nightly is replaced on each run.
 - **Nightly build version display** — nightly builds now show a build identifier in the window title, status bar, and About dialog (e.g. `Crush 0.2.1 (20260329-nightly)`), making it immediately clear which build is running. Release builds continue to show only the semantic version.
-- **Filesystem panel: Contains now always the recognized file type** — formerly the column `Type` contained  the parser or the fallback hexviewer - now always the recognized file type
+- **Filesystem panel: Type column labels** — the Type column now shows the detected file type; folders display `DIR` and unknown types display `-`.
+- **Filesystem panel: search results context menu** — added **Open Containing Folder** to jump from a search hit back to its folder in the tree.
+- **Filesystem panel: search size sorting** — the Size column in search results now sorts numerically by raw bytes (ignoring the displayed `KB/MB/GB` suffixes).
+- **Format identification: no extension fallback** — format detection now relies solely on magic bytes and parser matches; filename extensions are no longer used for identification.
+- **Format knowledge base: unknown magic offsets** — magic-byte entries may now use `offset: None` for trailer/unknown offsets (informational only), e.g. DMG `koly` trailer.
 - **Format Reference: QA and Links** - Ony reviewed formats are published in the GUI. All referenced Links are clickable, Magic Bytes are given in hex with offset.
 ### Documentation
 

@@ -27,9 +27,10 @@ _OUT = Path(__file__).parent / "formats.db"
 #   forensic_relevance  What an investigator would find here
 #   platforms       List of strings: "iOS", "macOS", "Android", "Windows", "Linux"
 #   parser_class    Class name in crush/parsers/ that handles this, or None
-#   magic           List of dicts: {"offset": int, "value": bytes,
+#   magic           List of dicts: {"offset": int | None, "value": bytes,
 #                                   "description": str}
-#                   All entries must match for a hit.
+#                   All entries must match for a hit. Use offset=None for
+#                   trailer/unknown offsets (informational only).
 #   extensions      List of lowercase extensions including the dot
 #   links           List of (label, url) tuples — reference links
 #   status          "draft" (excluded from DB) | "reviewed" (included in DB)
@@ -53,9 +54,13 @@ FORMATS: list[dict[str, Any]] = [
             }
         ],
         "extensions": [".xml", ".abx"],
-        "links": [  ("AOSP source", "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/com/android/internal/util/BinaryXmlSerializer.java"),
-                    ("Research", "https://www.cclsolutionsgroup.com/post/android-abx-binary-xml")
-                ],
+        "links": [
+            (
+                "AOSP source (Code Search)",
+                "https://cs.android.com/android/platform/superproject/main/+/main:frameworks/libs/modules-utils/java/com/android/modules/utils/BinaryXmlSerializer.java",
+            ),
+            ("Research", "https://www.cclsolutionsgroup.com/post/android-abx-binary-xml"),
+        ],
         "status": "reviewed",
     },
     {
@@ -76,8 +81,21 @@ FORMATS: list[dict[str, Any]] = [
             }
         ],
         "extensions": [".ab"],
-        "links": [("Research", "https://nelenkov.blogspot.com/2012/06/unpacking-android-backups.html")],
-        "status": "draft",
+        "links": [
+            (
+                "AOSP source",
+                "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/jb-dev/services/java/com/android/server/BackupManagerService.java",
+            ),
+            (
+                "Android Backup Extractor (ABE)",
+                "https://github.com/nelenkov/android-backup-extractor",
+            ),
+            (
+                "Research",
+                "https://nelenkov.blogspot.com/2012/06/unpacking-android-backups.html",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "Binary Property List",
@@ -97,7 +115,16 @@ FORMATS: list[dict[str, Any]] = [
             }
         ],
         "extensions": [".plist"],
-        "links": [("Developer docs", "https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFPropertyLists/")],
+        "links": [
+            (
+                "Developer docs (binary format)",
+                "https://developer.apple.com/documentation/foundation/propertylistserialization/propertylistformat/binary",
+            ),
+            (
+                "Developer docs (Property Lists)",
+                "https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFPropertyLists/",
+            ),
+        ],
         "status": "reviewed",
     },
     {
@@ -112,29 +139,11 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": None,
         "magic": [],
         "extensions": [".cbor"],
-        "links": [("Format spec", "https://cbor.io/")],
-        "status": "draft",
-    },
-    {
-        "name": "Apple Core Data Store",
-        "short_name": "Core Data",
-        "category": "database",
-        "forensic_relevance": (
-            "Persistent object store for iOS/macOS apps using Core Data ORM. "
-            "Often contains the main application data model."
-        ),
-        "platforms": ["iOS", "macOS"],
-        "parser_class": None,
-        "magic": [
-            {
-                "offset": 0,
-                "value": b"\x53\x51\x4c\x69\x74\x65\x20\x66\x6f\x72\x6d\x61\x74\x20\x33\x00",
-                "description": "SQLite database header",
-            }
+        "links": [
+            ("Format spec (RFC 8949)", "https://www.rfc-editor.org/rfc/rfc8949.html"),
+            ("Overview", "https://cbor.io/"),
         ],
-        "extensions": [".sqlite", ".sqlite3", ".db"],
-        "links": [("Developer docs", "https://developer.apple.com/documentation/coredata")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Android DEX Bytecode",
@@ -155,7 +164,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".dex"],
         "links": [("AOSP source", "https://source.android.com/docs/core/runtime/dex-format")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Apple Disk Image (DMG)",
@@ -169,14 +178,14 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": None,
         "magic": [
             {
-                "offset": 0,
+                "offset": None,
                 "value": b"\x6b\x6f\x6c\x79",
-                "description": "DMG trailer magic (koly block)",
+                "description": "DMG trailer magic (koly block) at EOF-512",
             }
         ],
         "extensions": [".dmg"],
         "links": [("Research", "https://newosxbook.com/DMG.html")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "ELF Executable",
@@ -184,7 +193,6 @@ FORMATS: list[dict[str, Any]] = [
         "category": "execution",
         "forensic_relevance": (
             "Android and Linux native executable format. "
-            "Shared libraries (.so) and binaries can be reverse-engineered."
         ),
         "platforms": ["Android", "Linux"],
         "parser_class": None,
@@ -197,7 +205,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".so", ".elf"],
         "links": [("Format spec", "https://man7.org/linux/man-pages/man5/elf.5.html")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Windows Event Log (EVTX)",
@@ -205,7 +213,7 @@ FORMATS: list[dict[str, Any]] = [
         "category": "log",
         "forensic_relevance": (
             "Windows structured event logs. Contains security events, logons, "
-            "process creation, PowerShell activity, and system errors."
+            "process creation, PowerShell activity, system errors and more."
         ),
         "platforms": ["Windows"],
         "parser_class": None,
@@ -218,7 +226,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".evtx"],
         "links": [("Format spec", "https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "JPEG Image",
@@ -229,7 +237,7 @@ FORMATS: list[dict[str, Any]] = [
             "Can contain EXIF metadata including GPS coordinates, timestamps, "
             "device model, and camera settings."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
         "parser_class": "ImageParser",
         "magic": [
             {
@@ -240,8 +248,8 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".jpg", ".jpeg"],
         "links": [
-            ("Format spec", "https://exif.org/Exif2-2.PDF"),
-            ("Format spec", "https://www.w3.org/Graphics/JPEG/itu-t81.pdf"),
+            ("Format spec (JPEG / ITU-T T.81)", "https://www.itu.int/rec/T-REC-T.81/en"),
+            ("Exif spec (CIPA DC-008)", "https://www.cipa.jp/e/std/std-sec.html"),
         ],
         "status": "reviewed",
     },
@@ -1168,7 +1176,7 @@ def build(out_path: Path = _OUT) -> None:
         CREATE TABLE magic_bytes (
             id          INTEGER PRIMARY KEY,
             format_id   INTEGER NOT NULL REFERENCES formats(id),
-            offset      INTEGER NOT NULL DEFAULT 0,
+            offset      INTEGER,
             pattern     BLOB NOT NULL,
             description TEXT
         );
@@ -1215,7 +1223,7 @@ def build(out_path: Path = _OUT) -> None:
         for m in fmt.get("magic", []):
             conn.execute(
                 "INSERT INTO magic_bytes (format_id, offset, pattern, description) VALUES (?,?,?,?)",
-                (fid, m["offset"], m["value"], m.get("description", "")),
+                (fid, m.get("offset"), m["value"], m.get("description", "")),
             )
         for ext in fmt.get("extensions", []):
             conn.execute(

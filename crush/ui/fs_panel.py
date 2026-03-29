@@ -29,6 +29,7 @@ _ROLE_VFS  = Qt.ItemDataRole.UserRole + 2
 _ROLE_LOADED = Qt.ItemDataRole.UserRole + 3
 _ROLE_PLACEHOLDER = Qt.ItemDataRole.UserRole + 4
 _ROLE_PATH = Qt.ItemDataRole.UserRole + 5
+_ROLE_SORT = Qt.ItemDataRole.UserRole + 6
 
 _SIZE_UNITS: list[str] = ["B", "KB", "MB", "GB", "TB", "PB"]
 _logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class FilesystemPanel(QWidget):
         self._proxy.setSourceModel(self._model)
         self._search_model = QStandardItemModel()
         self._search_model.setHorizontalHeaderLabels(["Name", "Path", "Size", "Type"])
+        self._search_model.setSortRole(_ROLE_SORT)
         self._navigate_after_filter: tuple[VFSNode, VFS] | None = None
         self._search_gen: int = 0
         self._prescan_gen: int = 0
@@ -216,7 +218,7 @@ class FilesystemPanel(QWidget):
         total_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         total_item.setEditable(False)
 
-        type_item = QStandardItem("")
+        type_item = QStandardItem("DIR" if node.is_dir else "")
         type_item.setEditable(False)
 
         if node.is_dir and node.children:
@@ -292,9 +294,17 @@ class FilesystemPanel(QWidget):
         vfs: VFS | None = item.data(_ROLE_VFS)
         if not node or not vfs:
             return
-        self._show_context_menu(node, vfs, self._search_view.viewport().mapToGlobal(pos))
+        self._show_context_menu(
+            node, vfs, self._search_view.viewport().mapToGlobal(pos), from_search=True
+        )
 
-    def _show_context_menu(self, node: VFSNode, vfs: VFS, global_pos: object) -> None:
+    def _show_context_menu(
+        self,
+        node: VFSNode,
+        vfs: VFS,
+        global_pos: object,
+        from_search: bool = False,
+    ) -> None:
         menu = QMenu(self)
         open_action = menu.addAction("Open")
         open_hex_action = menu.addAction("Open in Hex")
@@ -305,6 +315,10 @@ class FilesystemPanel(QWidget):
             menu.addSeparator()
             open_external_default = menu.addAction("Open External (Default)")
             open_external_choose = menu.addAction("Open External (Choose App…)")
+        reveal_action = None
+        if from_search:
+            menu.addSeparator()
+            reveal_action = menu.addAction("Open Containing Folder")
         menu.addSeparator()
         format_info_action = menu.addAction("Show Format Info")
         menu.addSeparator()
@@ -320,10 +334,24 @@ class FilesystemPanel(QWidget):
             self.open_external_requested.emit(node, vfs, "default")
         elif action == open_external_choose:
             self.open_external_requested.emit(node, vfs, "choose")
+        elif action == reveal_action:
+            self._open_containing_folder(node, vfs)
         elif action == format_info_action:
             self.format_info_requested.emit(node, vfs)
         elif action == export_action:
             self.export_requested.emit(node, vfs)
+
+    def _open_containing_folder(self, node: VFSNode, vfs: VFS) -> None:
+        if node.is_dir:
+            target = node
+        else:
+            path_nodes = self._build_node_path(node, vfs)
+            if len(path_nodes) >= 2:
+                target = path_nodes[-2]
+            else:
+                target = path_nodes[0] if path_nodes else node
+        self._navigate_after_filter = (target, vfs)
+        self._filter.clear()
 
     def _apply_filter(self, text: str) -> None:
         self._pending_filter = text
@@ -393,8 +421,12 @@ class FilesystemPanel(QWidget):
 
         if type_filter is not None:
             if node.is_dir:
-                type_label: str | None = "Folder"
-                type_match = type_filter in "folder"
+                type_label: str | None = "DIR"
+                type_match = (
+                    type_filter in "dir"
+                    or type_filter in "folder"
+                    or type_filter in "directory"
+                )
             else:
                 type_label = self._detect_type_label(node, vfs)
                 type_match = type_filter in type_label.lower()
@@ -422,22 +454,26 @@ class FilesystemPanel(QWidget):
             name_item = QStandardItem(node.name)
             name_item.setData(node, _ROLE_NODE)
             name_item.setData(vfs, _ROLE_VFS)
+            name_item.setData(node.name.lower(), _ROLE_SORT)
             name_item.setEditable(False)
 
             path_item = QStandardItem(r['path'])
+            path_item.setData(r['path'].lower(), _ROLE_SORT)
             path_item.setEditable(False)
 
             size_item = QStandardItem(_format_size(node.size) if not node.is_dir else "")
             size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            size_item.setData(node.size if not node.is_dir else 0, _ROLE_SORT)
             size_item.setEditable(False)
 
-            resolved = type_label if type_label is not None else ("Folder" if node.is_dir else "")
+            resolved = type_label if type_label is not None else ("DIR" if node.is_dir else "-")
             type_item = QStandardItem(resolved)
+            type_item.setData(resolved.lower(), _ROLE_SORT)
             type_item.setEditable(False)
 
             self._search_model.appendRow([name_item, path_item, size_item, type_item])
 
-            if not node.is_dir and not resolved:
+            if not node.is_dir and type_label is None:
                 self._type_queue.append((type_item, node, vfs))
                 if not self._type_timer.isActive():
                     self._activity_start("Type detection")
@@ -589,6 +625,8 @@ class FilesystemPanel(QWidget):
                     pass
         except Exception:
             label = ""
+        if not label:
+            label = "-"
         self._type_cache[cache_key] = label
         return label
 

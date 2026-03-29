@@ -56,16 +56,14 @@ def test_identify_sqlite_links_is_list() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FormatDatabase.identify() — extension fallback
+# FormatDatabase.identify() — no extension fallback
 # ---------------------------------------------------------------------------
 
-def test_identify_plist_by_extension() -> None:
+def test_identify_extension_only_returns_none() -> None:
     # Random bytes that won't match any magic pattern
     junk = b"\x00\x00\x00\x00" * 128
     fmt = FormatDatabase.get().identify(junk, "com.apple.test.plist")
-    assert fmt is not None
-    # Should fall back to plist format via .plist extension
-    assert "plist" in fmt.name.lower() or "Property List" in fmt.name
+    assert fmt is None
 
 
 def test_identify_no_match_returns_none() -> None:
