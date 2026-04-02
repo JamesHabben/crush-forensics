@@ -21,6 +21,9 @@ def _register_builtin_viewers() -> None:
     ViewerRegistry.register("image", lambda r, n, v, p: ImageViewer(r.data, p))
     ViewerRegistry.register("abx", lambda r, n, v, p: AbxViewer(r.data, p))
 
+    from crush.viewers.log_viewer import LogViewer
+    ViewerRegistry.register("log", lambda r, n, v, p: LogViewer(r.data, p))
+
     try:
         from crush.viewers.media_viewer import MediaViewer
         ViewerRegistry.register("media", lambda r, n, v, p: MediaViewer(r.data, p))

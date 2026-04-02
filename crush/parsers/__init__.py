@@ -17,6 +17,7 @@ from crush.parsers.media_parser import MediaParser
 from crush.parsers.json_parser import JsonParser
 from crush.parsers.pdf_parser import PDFParser
 from crush.parsers.hex_fallback import HexFallbackParser
+from crush.parsers.log_parser import LogParser  # noqa: F401 — explicit-only, not auto-registered
 
 ParserRegistry.register(SQLiteParser())
 ParserRegistry.register(XmlParser())

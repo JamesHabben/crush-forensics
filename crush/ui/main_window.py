@@ -535,6 +535,21 @@ class MainWindow(QMainWindow):
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata)
             return
+        if mode == "log":
+            from crush.parsers.log_parser import LogParser
+            parser = LogParser()
+            try:
+                result = parser.parse(node, vfs)
+                result = self._enrich_with_format_info(parser, node, vfs, result)
+                self._show_result(node, result, vfs)
+                self._props_panel.update_properties(node, result.metadata)
+                self._status.showMessage(
+                    f"{node.path}  [{parser.DISPLAY_NAME} — {result.metadata.get('Log format', '')}]"
+                )
+            except Exception as exc:
+                self._status.showMessage(f"Log parse error: {exc}")
+                QMessageBox.warning(self, "Log parse error", str(exc))
+            return
         self._open_node(node, vfs)
 
     def _open_external_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
