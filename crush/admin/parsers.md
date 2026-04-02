@@ -18,10 +18,10 @@
 
 - SQLite BLOB format detectors (preview if recognized)
 - EXIF viewer
+- UNified Logs
 - filter by type
 - filter by extension
 - Protobuf viewer
 - LEveldb viewer (in progress)
 - Video thumbnail
 - PDFS
-- Optional; open external (system default, app default)
