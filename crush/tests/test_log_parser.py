@@ -17,7 +17,6 @@ from crush.parsers.log_parser import (
     _try_syslog,
     _try_generic,
     _group_events,
-    _is_generic_start,
 )
 
 
