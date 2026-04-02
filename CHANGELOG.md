@@ -6,30 +6,23 @@ All notable changes to Crush will be documented in this file.
 
 ### New Features
 
-- **Log Viewer** — any file can be opened as a structured log viewer via right-click → *Open as Log Viewer*. The parser auto-detects the log format (JSON Lines, Android logcat, Syslog RFC 3164, generic timestamp-prefixed, plain text fallback) and normalises entries into timestamp, severity level, process/tag, and message fields. Multiline log events (e.g. embedded dictionaries or stack traces) are grouped into a single entry; the table shows the first line with a continuation count badge (`[N more lines]`), and the full raw event is shown in the detail panel below.
-- **Log Viewer: level filter** — toggle buttons for ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN instantly filter the visible entries.
-- **Log Viewer: time range filter** — when timestamps are present, an optional from/to date-time picker restricts entries to a chosen time window. Entries without a parsed timestamp always remain visible.
-- **Log Viewer: timezone selector** — timestamps are displayed in UTC by default; a *Display TZ* selector switches the table and time-range picker to the local system timezone. The internal comparison always uses UTC.
-- **Log Viewer: text search** — free-text filter across the message and process/tag fields.
-- **Log Viewer: detail panel** — selecting a row shows the complete raw log event (including continuation lines) in a resizable panel below the table; the panel height can be dragged freely with the splitter.
+- **Log Viewer** — open any file as structured logs with auto-detection (JSON Lines, logcat, syslog, timestamped, plain text), level/time/text filtering, timezone control, and a detail panel for full events (including multiline).
 
 ### Improvements
 
-- **Filesystem panel: flat search results view** — typing in the filter field now replaces the tree with a flat list of all matching files and folders, including their full path. Double-clicking a file opens it directly; double-clicking a folder clears the filter and navigates the tree to that folder (expanding all parents automatically). Clears the filter to return to the normal tree.
-- **Filesystem panel: typed search syntax** — filter supports `name:x` and `type:x` tokens (e.g. `type:sqlite`, `name:rubin type:sqlite`). Plain text without a token prefix is treated as a name filter. Multiple tokens are AND-combined.
-- **Filesystem panel: background type indexing** — on load, Crush pre-scans all files in the background to populate the format detection cache. Progress is shown in the status bar (`Indexing types`); once complete, `type:` searches are instant. A spinner in the status bar indicates any ongoing background activity.
-- **Status bar spinner** — an animated spinner appears alongside background activity messages so it is immediately clear that work is in progress.
-- **Nightly builds** — automated nightly builds for Linux and Windows are published as a pre-release on GitHub via a new GitHub Actions workflow. The previous nightly is replaced on each run.
-- **Nightly build version display** — nightly builds now show a build identifier in the window title, status bar, and About dialog (e.g. `Crush 0.2.1 (20260329-nightly)`), making it immediately clear which build is running. Release builds continue to show only the semantic version.
-- **Filesystem panel: Type column labels** — the Type column now shows the detected file type; folders display `DIR` and unknown types display `-`.
-- **Filesystem panel: search results context menu** — added **Open Containing Folder** to jump from a search hit back to its folder in the tree.
-- **Filesystem panel: search size sorting** — the Size column in search results now sorts numerically by raw bytes (ignoring the displayed `KB/MB/GB` suffixes).
-- **Format identification: no extension fallback** — format detection now relies solely on magic bytes and parser matches; filename extensions are no longer used for identification.
-- **Format knowledge base: unknown magic offsets** — magic-byte entries may now use `offset: None` for trailer/unknown offsets (informational only), e.g. DMG `koly` trailer.
-- **Format Reference: QA and Links** - Ony reviewed formats are published in the GUI. All referenced Links are clickable, Magic Bytes are given in hex with offset.
+- **Filesystem panel search overhaul** — flat results view, typed filters, context menu shortcuts, size sorting, type labels, and background type indexing with status spinner.
+- **Forensic mode enhancements** — status badge toggle (with context menu), source hashing on ZIP/TAR/file open, and export hash manifests.
+- **Tree viewer: expand/collapse all** — added toolbar buttons to expand or collapse the entire hierarchy at once.
+- **Nightly builds** — automated prereleases plus build identifier display across the UI.
+- **Format identification & reference** — magic-byte detection improvements and a curated, link-rich format reference.
+
+### Fixes
+
+- **Export: crash when re-exporting after a prior export** — export now safely handles a finished/cleared worker thread.
+
 ### Documentation
 
-- User handbook updated with full filter/search syntax reference, type indexing explanation, and corrected descriptions for Open folder… and PDF support.
+- User handbook updated with filter/search syntax, type indexing explanation, and forensic mode notes.
 
 ## [0.2.1] — 2026-03-25
 

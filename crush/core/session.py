@@ -23,6 +23,7 @@ class OpenArtifact:
 class Session:
     def __init__(self, name: str = "Untitled case") -> None:
         self.name = name
+        self.forensic_mode: bool = False
         self.sources: list[VFS] = []
         self.open_artifacts: list[OpenArtifact] = []
         self._db = sqlite3.connect(":memory:")
@@ -44,6 +45,14 @@ class Session:
         vfs = open_vfs(path)
         self.sources.append(vfs)
         return vfs
+
+    def remove_source(self, vfs: VFS) -> None:
+        if vfs in self.sources:
+            self.sources = [item for item in self.sources if item is not vfs]
+        try:
+            vfs.close()
+        except Exception:
+            pass
 
     def record_artifact(self, artifact: OpenArtifact, text_content: str = "") -> None:
         self.open_artifacts.append(artifact)

@@ -191,6 +191,18 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 
 ---
 
+## Forensic Mode
+
+Forensic mode adds hashing and traceability to file access:
+
+- When enabled, files opened or exported are hashed (SHA-256) and written to the log.
+- Opening a ZIP/TAR/file source hashes the entire source file and logs the result.
+- Opening a folder does not hash the full directory.
+- Exports also create a `crush-export-hashes.txt` file next to the exported data.
+- The bottom-right status badge shows the current mode. Click the badge to toggle it, or right-click it for a quick menu and a short explanation.
+
+---
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

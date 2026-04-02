@@ -55,6 +55,7 @@ class FilesystemPanel(QWidget):
     open_external_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
     format_info_requested = Signal(object, object)  # (VFSNode, VFS)
+    close_source_requested = Signal(object)  # (VFS)
     load_finished = Signal()
     background_status = Signal(str)
     _search_results_ready = Signal(object)  # internal: list of result dicts
@@ -191,6 +192,42 @@ class FilesystemPanel(QWidget):
         self.load_finished.emit()
         _logger.debug("FilesystemPanel.append_vfs: emitted load_finished")
 
+    def close_vfs(self, vfs: VFS) -> None:
+        """Remove a VFS source from the tree."""
+        if vfs not in self._vfs_list:
+            return
+        _logger.debug("FilesystemPanel.close_vfs: start")
+        self._vfs_list = [item for item in self._vfs_list if item is not vfs]
+        self._vfs = self._vfs_list[-1] if self._vfs_list else None
+        self._build_timer.stop()
+        self._build_queue.clear()
+        self._type_timer.stop()
+        self._type_queue.clear()
+        self._type_cache.clear()
+        self._activities.clear()
+        self.background_status.emit("")
+        self._prescan_gen += 1
+
+        self._model = QStandardItemModel()
+        self._model.setHorizontalHeaderLabels(["Name", "Size", "Files", "Total Size", "Type"])
+        self._proxy.setSourceModel(self._model)
+
+        for source in self._vfs_list:
+            root_node = source.root()
+            row = self._node_to_row_shallow(root_node, source)
+            self._model.appendRow(row)
+            self._tree.expand(self._proxy.mapFromSource(self._model.indexFromItem(row[0])))
+            if root_node.children:
+                self._add_placeholder(row[0])
+
+        self._search_gen += 1
+        self._search_model.setRowCount(0)
+        self._filter.clear()
+
+        if self._vfs_list:
+            self._start_prescan(list(self._vfs_list), self._prescan_gen)
+        _logger.debug("FilesystemPanel.close_vfs: done")
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -324,6 +361,10 @@ class FilesystemPanel(QWidget):
         format_info_action = menu.addAction("Show Format Info")
         menu.addSeparator()
         export_action = menu.addAction("Export…")
+        close_source_action = None
+        if node is vfs.root():
+            menu.addSeparator()
+            close_source_action = menu.addAction("Close Source")
         action = menu.exec(global_pos)
         if action == open_action:
             self.open_requested.emit(node, vfs, "default")
@@ -343,6 +384,8 @@ class FilesystemPanel(QWidget):
             self.format_info_requested.emit(node, vfs)
         elif action == export_action:
             self.export_requested.emit(node, vfs)
+        elif action == close_source_action:
+            self.close_source_requested.emit(vfs)
 
     def _open_containing_folder(self, node: VFSNode, vfs: VFS) -> None:
         if node.is_dir:

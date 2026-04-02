@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QPushButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -38,6 +39,12 @@ class TreeViewer(QWidget):
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(8, 4, 8, 4)
         tb_layout.setSpacing(8)
+        self._expand_all_btn = QPushButton("Expand All")
+        self._expand_all_btn.clicked.connect(self._expand_all)
+        tb_layout.addWidget(self._expand_all_btn)
+        self._collapse_all_btn = QPushButton("Collapse All")
+        self._collapse_all_btn.clicked.connect(self._collapse_all)
+        tb_layout.addWidget(self._collapse_all_btn)
         tb_layout.addStretch()
         tb_layout.addWidget(QLabel("Search:"))
 
@@ -64,6 +71,12 @@ class TreeViewer(QWidget):
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
         layout.addWidget(self._tree)
+
+    def _expand_all(self) -> None:
+        self._tree.expandAll()
+
+    def _collapse_all(self) -> None:
+        self._tree.collapseAll()
 
     def _load(self, data: Any) -> None:
         self._model.removeRows(0, self._model.rowCount())

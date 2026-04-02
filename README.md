@@ -16,6 +16,8 @@ Open and navigate ZIP and TAR archives, folders, and individual files — withou
 
 **Built-in file format database** — Crush identifies forensically relevant formats by magic bytes and extension, and shows format name, platform, forensic relevance, and a link to the specification for every selected file, including formats without a dedicated viewer.
 
+**Forensic mode** — optional hashing for auditability: file/ZIP/TAR sources are hashed on open and exports generate a hash manifest (`crush-export-hashes.txt`). Toggle via the bottom-right status badge.
+
 Supported viewers (more planned):
 
 - SQLite / Database Viewer
@@ -52,6 +54,9 @@ iOS SQLite Summary (Windows)
 
 Format Reference (Linux)
 ![Format Reference (Linux)](crush/docs/pictures/example_lin_file_formats.png)
+
+Forensic Mode (Linux, dark)
+![Forensic Mode (Linux, dark)](crush/docs/pictures/example_dark_forensic_mode_linux.png)
 
 ## Install and Run
 

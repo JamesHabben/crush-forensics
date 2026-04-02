@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QStatusBar,
@@ -46,18 +47,41 @@ class _LoadSourceWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, session: Session, path: str) -> None:
+    def __init__(self, session: Session, path: str, forensic: bool) -> None:
         super().__init__()
         self._session = session
         self._path = path
+        self._forensic = forensic
 
     def run(self) -> None:
         try:
             vfs = self._session.add_source(self._path)
+            if self._forensic:
+                self._log_source_hash()
         except Exception as exc:
             self.failed.emit(str(exc))
             return
         self.finished.emit(vfs)
+
+    def _log_source_hash(self) -> None:
+        path = Path(self._path)
+        if not path.is_file():
+            return
+        import hashlib
+
+        hasher = hashlib.sha256()
+        total = 0
+        with path.open("rb") as src:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                total += len(chunk)
+        digest = hasher.hexdigest()
+        logging.getLogger("crush").info(
+            "FORENSIC source sha256=%s  size=%d  path=%s", digest, total, path
+        )
 
 
 class _ClosableTabBar(QTabBar):
@@ -110,24 +134,40 @@ class _DockTitleBar(QWidget):
             mw._dock_to_default(self._dock)  # type: ignore[attr-defined]
 
 
+class _ClickableStatusLabel(QLabel):
+    clicked = Signal()
+
+    def mousePressEvent(self, event: object) -> None:  # type: ignore[override]
+        if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)  # type: ignore[arg-type]
+
+
 class _ExportWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, vfs: VFS, node: VFSNode, dest_dir: str) -> None:
+    def __init__(self, vfs: VFS, node: VFSNode, dest_dir: str, forensic: bool) -> None:
         super().__init__()
         self._vfs = vfs
         self._node = node
         self._dest_dir = Path(dest_dir)
+        self._forensic = forensic
+        self._hash_lines: list[str] = []
+        self._hash_base: Path | None = None
+        self._logger = logging.getLogger(__name__)
 
     def run(self) -> None:
         try:
             target_root = self._dest_dir / _safe_name(self._node.name or "export")
+            self._hash_base = target_root if self._node.is_dir else target_root.parent
             if self._node.is_dir:
                 self._export_dir(self._node, target_root)
             else:
                 target_root.parent.mkdir(parents=True, exist_ok=True)
                 self._export_file(self._node, target_root)
+            self._write_hashes_file(target_root)
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -143,10 +183,40 @@ class _ExportWorker(QObject):
                 child_target.parent.mkdir(parents=True, exist_ok=True)
                 self._export_file(child, child_target)
 
-
     def _export_file(self, node: VFSNode, target: Path) -> None:
+        if not self._forensic:
+            with self._vfs.open(node) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            return
+
+        import hashlib
+
+        hasher = hashlib.sha256()
+        total = 0
         with self._vfs.open(node) as src, open(target, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                hasher.update(chunk)
+                total += len(chunk)
+        digest = hasher.hexdigest()
+        rel_path = target.name
+        if self._hash_base is not None:
+            try:
+                rel_path = str(target.relative_to(self._hash_base))
+            except Exception:
+                rel_path = target.name
+        self._hash_lines.append(f"{digest}  {total}  {rel_path}")
+        self._logger.info("FORENSIC export sha256=%s  size=%d  path=%s", digest, total, target)
+
+    def _write_hashes_file(self, target_root: Path) -> None:
+        if not self._forensic or not self._hash_lines:
+            return
+        base = self._hash_base if self._hash_base is not None else target_root.parent
+        hash_path = base / "crush-export-hashes.txt"
+        hash_path.write_text("\n".join(self._hash_lines) + "\n", encoding="utf-8")
 
 
 def _safe_name(name: str) -> str:
@@ -169,6 +239,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._setup_logging()
         self._apply_saved_theme()
+        self._apply_saved_forensic_mode()
 
     # ------------------------------------------------------------------
     # Layout
@@ -196,6 +267,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.open_requested.connect(self._open_node_mode)
         self._fs_panel.open_external_requested.connect(self._open_external_mode)
         self._fs_panel.export_requested.connect(self._export_node)
+        self._fs_panel.close_source_requested.connect(self._close_source)
         self._fs_panel.background_status.connect(self._on_background_status)
         self._fs_panel.format_info_requested.connect(self._show_format_info)
         self._fs_dock = QDockWidget("Filesystem", self)
@@ -264,6 +336,31 @@ class MainWindow(QMainWindow):
         self._spinner_timer.setInterval(100)
         self._spinner_timer.timeout.connect(self._on_spinner_tick)
 
+        self._forensic_label = _ClickableStatusLabel(" \u2696 FORENSIC ")
+        self._forensic_label.setStyleSheet(
+            "color: white; background-color: #c87000; font-weight: bold;"
+            " padding: 1px 4px; border-radius: 3px;"
+        )
+        self._forensic_label.setToolTip("Forensic mode active \u2014 files are hashed on open")
+        self._forensic_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._forensic_label.clicked.connect(self._toggle_forensic_mode)
+        self._forensic_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._forensic_label.customContextMenuRequested.connect(self._show_forensic_menu)
+        self._forensic_label.setVisible(False)
+        self._status.addPermanentWidget(self._forensic_label)
+        self._nonforensic_label = _ClickableStatusLabel(" NON-FORENSIC ")
+        self._nonforensic_label.setStyleSheet(
+            "color: white; background-color: #6b6b6b; font-weight: bold;"
+            " padding: 1px 4px; border-radius: 3px;"
+        )
+        self._nonforensic_label.setToolTip("Forensic mode is off")
+        self._nonforensic_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nonforensic_label.clicked.connect(self._toggle_forensic_mode)
+        self._nonforensic_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._nonforensic_label.customContextMenuRequested.connect(self._show_forensic_menu)
+        self._nonforensic_label.setVisible(True)
+        self._status.addPermanentWidget(self._nonforensic_label)
+
         self._build_menus()
 
     def _build_menus(self) -> None:
@@ -298,6 +395,11 @@ class MainWindow(QMainWindow):
         theme_menu.addAction("System default", self._set_theme_system)
         theme_menu.addAction("Light", self._set_theme_light)
         theme_menu.addAction("Dark", self._set_theme_dark)
+        tools_menu.addSeparator()
+        self._forensic_mode_action = QAction("Forensic Mode", self, checkable=True)
+        self._forensic_mode_action.setToolTip("Hash every file on open and write hash to log")
+        self._forensic_mode_action.toggled.connect(self._set_forensic_mode)
+        tools_menu.addAction(self._forensic_mode_action)
 
         help_menu = menu.addMenu("Help")
         help_menu.addAction("Format Reference…", self._show_format_reference)
@@ -353,7 +455,7 @@ class MainWindow(QMainWindow):
         self._progress.show()
 
         self._load_thread = QThread(self)
-        self._load_worker = _LoadSourceWorker(self.session, path)
+        self._load_worker = _LoadSourceWorker(self.session, path, self.session.forensic_mode)
         self._load_worker.moveToThread(self._load_thread)
         self._load_thread.started.connect(self._load_worker.run)
         self._load_worker.finished.connect(self._on_load_finished)
@@ -440,7 +542,7 @@ class MainWindow(QMainWindow):
         if not dest_dir:
             return
 
-        if hasattr(self, "_export_thread") and self._export_thread.isRunning():
+        if self._thread_is_running(getattr(self, "_export_thread", None)):
             QMessageBox.information(self, "Export", "An export is already running.")
             return
 
@@ -454,7 +556,7 @@ class MainWindow(QMainWindow):
         self._export_progress.show()
 
         self._export_thread = QThread(self)
-        self._export_worker = _ExportWorker(vfs, node, dest_dir)
+        self._export_worker = _ExportWorker(vfs, node, dest_dir, self.session.forensic_mode)
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
         self._export_worker.finished.connect(self._on_export_finished)
@@ -491,6 +593,7 @@ class MainWindow(QMainWindow):
 
     def _open_node(self, node: VFSNode, vfs: VFS) -> None:
         """Called when the user double-clicks a file in the FS panel."""
+        self._hash_node_if_forensic(node, vfs)
         import crush.parsers  # noqa: F401 — triggers parser registration
         from crush.core.registry import ParserRegistry
 
@@ -513,6 +616,7 @@ class MainWindow(QMainWindow):
 
     def _open_node_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
         if mode == "hex":
+            self._hash_node_if_forensic(node, vfs)
             from crush.parsers.base import ParseResult
             hex_bytes = self._read_hex_bytes(vfs, node)
             if hex_bytes is None:
@@ -524,6 +628,7 @@ class MainWindow(QMainWindow):
             self._props_panel.update_properties(node, result.metadata)
             return
         if mode == "text":
+            self._hash_node_if_forensic(node, vfs)
             from crush.parsers.base import ParseResult
             raw = vfs.read(node)
             try:
@@ -536,6 +641,7 @@ class MainWindow(QMainWindow):
             self._props_panel.update_properties(node, result.metadata)
             return
         if mode == "log":
+            self._hash_node_if_forensic(node, vfs)
             from crush.parsers.log_parser import LogParser
             parser = LogParser()
             try:
@@ -672,6 +778,7 @@ class MainWindow(QMainWindow):
             label = f"{node.path} [Hex]"
         widget.setProperty("crush_path", node.path)
         widget.setProperty("crush_viewer", result.viewer_type)
+        widget.setProperty("crush_vfs", vfs)
         idx = self._viewer_tabs.addTab(widget, label)
         self._viewer_tabs.setTabToolTip(idx, node.path)
         self._viewer_tabs.setCurrentIndex(idx)
@@ -681,6 +788,24 @@ class MainWindow(QMainWindow):
 
     def _close_all_tabs(self) -> None:
         self._viewer_tabs.clear()
+
+    def _close_tabs_for_vfs(self, vfs: VFS) -> int:
+        closed = 0
+        for i in range(self._viewer_tabs.count() - 1, -1, -1):
+            w = self._viewer_tabs.widget(i)
+            if w is None:
+                continue
+            if w.property("crush_vfs") is vfs:
+                self._viewer_tabs.removeTab(i)
+                closed += 1
+        return closed
+
+    def _close_source(self, vfs: VFS) -> None:
+        closed_tabs = self._close_tabs_for_vfs(vfs)
+        self._fs_panel.close_vfs(vfs)
+        self.session.remove_source(vfs)
+        name = vfs.root().name
+        self._status.showMessage(f"Closed source: {name} ({closed_tabs} tabs closed)")
 
     def _enrich_with_format_info(self, parser: object, node: VFSNode, vfs: VFS, result: object) -> object:
         """Prepend format knowledge-base metadata to a ParseResult without overriding parser data."""
@@ -915,6 +1040,54 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_logger"):
             self._logger.info("Always show hex tab: %s", enabled)
 
+    def _forensic_mode_description(self) -> str:
+        return (
+            "Forensic mode does the following:\n"
+            "- Records SHA-256 hashes when files are opened or exported.\n"
+            "- Hashes ZIP/TAR/file sources on open (folders are not hashed).\n"
+            "- Writes those hashes to the log.\n"
+            "- Creates a crush-export-hashes.txt file next to exported data.\n"
+            "- You can turn it off for faster opening of large ZIP/TAR sources and faster browsing."
+        )
+
+    def _show_forensic_menu(self, pos: object) -> None:
+        sender = self.sender()
+        if sender is None or not hasattr(sender, "mapToGlobal"):
+            return
+        menu = QMenu(self)
+        toggle_action = menu.addAction("Toggle Forensic Mode")
+        info_action = menu.addAction("What is Forensic Mode?")
+        action = menu.exec(sender.mapToGlobal(pos))  # type: ignore[arg-type]
+        if action == toggle_action:
+            self._toggle_forensic_mode()
+        elif action == info_action:
+            QMessageBox.information(self, "Forensic Mode", self._forensic_mode_description())
+
+    def _toggle_forensic_mode(self) -> None:
+        self._forensic_mode_action.setChecked(not self._forensic_mode_action.isChecked())
+
+    def _set_forensic_mode(self, enabled: bool) -> None:
+        self.session.forensic_mode = enabled
+        self._forensic_label.setVisible(enabled)
+        self._nonforensic_label.setVisible(not enabled)
+        self._settings.setValue("forensic_mode", enabled)
+        state = "enabled" if enabled else "disabled"
+        if hasattr(self, "_logger"):
+            self._logger.info("Forensic mode %s", state)
+
+    def _hash_node_if_forensic(self, node: VFSNode, vfs: VFS) -> None:
+        if not self.session.forensic_mode or node.is_dir:
+            return
+        import hashlib
+        try:
+            data = vfs.read(node)
+            digest = hashlib.sha256(data).hexdigest()
+            self._logger.info(
+                "FORENSIC sha256=%s  size=%d  path=%s", digest, len(data), node.path
+            )
+        except Exception as exc:
+            self._logger.warning("FORENSIC hash failed for %s: %s", node.path, exc)
+
     def _read_hex_bytes(self, vfs: VFS, node: VFSNode) -> bytes | None:
         max_bytes = 1024 * 256
         try:
@@ -973,6 +1146,11 @@ class MainWindow(QMainWindow):
             self._set_theme_system()
         else:
             self._set_theme_light()
+
+    def _apply_saved_forensic_mode(self) -> None:
+        enabled = self._settings.value("forensic_mode", False, type=bool)
+        # setChecked triggers the toggled signal which calls _set_forensic_mode
+        self._forensic_mode_action.setChecked(enabled)
 
     def _dark_palette(self) -> QPalette:
         pal = QPalette()
