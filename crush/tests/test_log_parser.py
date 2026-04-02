@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from crush.core.vfs import DirectoryVFS
 from crush.parsers.log_parser import (
@@ -257,7 +258,7 @@ class TestGroupEvents:
 # ---------------------------------------------------------------------------
 
 class TestLogParser:
-    def _write_and_parse(self, tmp_path: Path, content: str) -> list[dict]:
+    def _write_and_parse(self, tmp_path: Path, content: str) -> list[dict[str, Any]]:
         log_path = tmp_path / "test.log"
         log_path.write_text(content, encoding="utf-8")
         vfs = DirectoryVFS(tmp_path)
@@ -266,7 +267,8 @@ class TestLogParser:
         parser = LogParser()
         result = parser.parse(node, vfs)
         assert result.viewer_type == "log"
-        return result.data  # type: ignore[return-value]
+        assert isinstance(result.data, list)
+        return result.data
 
     def test_can_parse_always_false(self) -> None:
         assert LogParser().can_parse("anything.log", b"") is False
