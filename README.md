@@ -26,6 +26,7 @@ Supported viewers (more planned):
 - ABX (Android Binary XML) Viewer
 - Image Viewer
 - Media Viewer (audio/video)
+- Log Viewer (e.g. syslog - more planned)
 - PDF text extraction (displays extracted text)
 
 ## Documentation
