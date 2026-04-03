@@ -963,8 +963,8 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": "ProtobufParser",
         "magic": [],
         "extensions": [".pb", ".proto"],
-        "links": [("Format spec", "https://protobuf.dev/programming-guides/encoding/")],
-        "status": "draft",
+        "links": [("Format Documentation", "https://protobuf.dev/programming-guides/encoding/")],
+        "status": "reviewed",
     },
     {
         "name": "Windows Registry Hive",
