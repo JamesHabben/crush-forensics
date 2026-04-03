@@ -27,6 +27,8 @@ dependencies = [
     "python-magic>=0.4.27",
     "filetype>=1.2.0",
     "pypdf>=4.0",
+    "protobuf>=4.25",
+    "grpcio-tools>=1.62",
 ]
 
 [project.optional-dependencies]

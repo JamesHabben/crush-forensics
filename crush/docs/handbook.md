@@ -50,6 +50,7 @@ The left panel shows the loaded archive or folder as a tree.
   - **Open** — best viewer for the format
   - **Open in Hex** — force raw hex view
   - **Open as Plain Text** — force text view
+  - **Open as Protobuf Viewer** — schema-less Protobuf decode (optionally load a `.proto` schema)
   - **Open External (Default)** — hand off to the OS default application
   - **Open External (Choose App…)** — pick an application
   - **Show Format Info** — opens a popup showing the identified format name, category, platforms, parser support status, and forensic relevance. For known formats an **Open Reference…** button links to the format specification. Also updates the Properties panel. Works for unsupported formats — useful for quickly understanding what a file is before deciding how to examine it

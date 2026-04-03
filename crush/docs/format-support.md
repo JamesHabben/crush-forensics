@@ -43,6 +43,14 @@ Limitations
 - Assumes UTF-8 input; non-UTF encodings may show replacement characters.
 - Parse errors show an error node in the Tree Viewer.
 
+### Protobuf (Explicit Only)
+- Open via context menu: **Open as Protobuf Viewer**.
+- Performs a schema-less wire-format decode and displays it in the Protobuf Viewer.
+
+Limitations
+- Schema-less decode shows field numbers and wire types only.
+- Schema-based decoding requires a `.proto` file or descriptor set.
+
 ### Android Binary XML (ABX)
 - Decodes ABX v1/v2 into a structured tree and reconstructed XML (ABX Viewer).
 
@@ -156,10 +164,16 @@ Limitations
 Limitations
 - Time filtering only applies to entries with parsed timestamps.
 
+### Protobuf Viewer
+- Schema-less decode in a tree view (field numbers, wire types, values).
+- Optional schema-based decode after loading a `.proto` file or descriptor set.
+
+Limitations
+- Schema-based decoding depends on the protobuf Python library and valid schemas.
+
 ## Known Gaps (Planned)
 
 - Unified Logs
-- Protobuf viewer
 - Extended EXIF/metadata viewer
 - PDF page rendering (not just text extraction)
 - Type/extension filters in the filesystem panel

@@ -13,6 +13,7 @@ def _register_builtin_viewers() -> None:
     from crush.viewers.text_viewer import TextView
     from crush.viewers.image_viewer import ImageViewer
     from crush.viewers.abx_viewer import AbxViewer
+    from crush.viewers.protobuf_viewer import ProtobufViewer
 
     ViewerRegistry.register("table", lambda r, n, v, p: TableViewer(r.data, p))
     ViewerRegistry.register("tree", lambda r, n, v, p: TreeViewer(r.data, p))
@@ -20,6 +21,7 @@ def _register_builtin_viewers() -> None:
     ViewerRegistry.register("text", lambda r, n, v, p: TextView(r.data, p))
     ViewerRegistry.register("image", lambda r, n, v, p: ImageViewer(r.data, p))
     ViewerRegistry.register("abx", lambda r, n, v, p: AbxViewer(r.data, p))
+    ViewerRegistry.register("protobuf", lambda r, n, v, p: ProtobufViewer(r.data, p))
 
     from crush.viewers.log_viewer import LogViewer
     ViewerRegistry.register("log", lambda r, n, v, p: LogViewer(r.data, p))

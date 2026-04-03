@@ -29,6 +29,7 @@ Supported viewers (more planned):
 - Image Viewer
 - Media Viewer (audio/video)
 - Log Viewer (e.g. syslog - more planned)
+- Protobuf Viewer (schema-less; optional schema decoding)
 - PDF text extraction (displays extracted text)
 
 ## Documentation

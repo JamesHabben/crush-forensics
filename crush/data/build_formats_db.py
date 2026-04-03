@@ -960,7 +960,7 @@ FORMATS: list[dict[str, Any]] = [
             "Signal, and many others. Requires .proto schema to decode field names."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "ProtobufParser",
         "magic": [],
         "extensions": [".pb", ".proto"],
         "links": [("Format spec", "https://protobuf.dev/programming-guides/encoding/")],
