@@ -161,6 +161,12 @@ Decodes Apple SEGB v1 and v2 files from the Biome framework. Shows timestamped r
 
 ---
 
+## Parsers & Viewers
+
+Crush includes a growing set of parsers and viewers, with documented limitations for transparency. For the full, detailed list of what is supported and where the current gaps are, see `crush/docs/format-support.md`.
+
+---
+
 ## Properties Panel
 
 The right panel updates whenever you select or open a file. It shows:
