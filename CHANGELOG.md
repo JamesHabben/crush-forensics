@@ -4,9 +4,12 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+## [0.3] — 2026-04-03
+
 ### New Features
 
 - **Log Viewer** — open any file as structured logs with auto-detection (JSON Lines, logcat, syslog, timestamped, plain text), level/time/text filtering, timezone control, and a detail panel for full events (including multiline).
+- **Protobuf Viewer** — explicit “Open as Protobuf Viewer” with schema-less wire decoding and optional schema-based decoding via `.proto` or descriptor sets.
 
 ### Improvements
 
