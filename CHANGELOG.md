@@ -4,7 +4,7 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
-## [0.3] — 2026-04-03
+## [0.3.0] — 2026-04-03
 
 ### New Features
 
