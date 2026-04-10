@@ -12,6 +12,7 @@ from crush.parsers.plist_parser import PlistParser
 from crush.parsers.abx_parser import AbxParser
 from crush.parsers.segb_parser import SegbParser
 from crush.parsers.leveldb_parser import LeveldbParser
+from crush.parsers.realm_parser import RealmParser
 from crush.parsers.image_parser import ImageParser
 from crush.parsers.media_parser import MediaParser
 from crush.parsers.json_parser import JsonParser
@@ -25,6 +26,7 @@ ParserRegistry.register(PlistParser())
 ParserRegistry.register(AbxParser())
 ParserRegistry.register(SegbParser())
 ParserRegistry.register(LeveldbParser())
+ParserRegistry.register(RealmParser())
 ParserRegistry.register(ImageParser())
 ParserRegistry.register(MediaParser())
 ParserRegistry.register(JsonParser())

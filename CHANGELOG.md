@@ -4,6 +4,27 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+### New Features
+
+- **Realm Database Viewer** — multi-tab viewer for `.realm` files:
+  - **Header tab** — decodes the 24-byte file header: both top references, mnemonic, file format version, active root flag.
+  - **Schema tab** — extracts the full class/table list (e.g. `class_Driver`, `class_Event`, `class_Photo`) by following the B+ tree from the active root into the schema group array; class names reveal which app features were active and what data categories are present.
+  - **Top Refs tab** — decodes both root reference arrays (`top_ref[0]` / `top_ref[1]`) side by side using the correct Realm array header structure (checksum, flag bit-groups, element count, payload size); a diff summary highlights changed fields — the inactive branch may contain superseded data not yet checkpointed.
+  - **Tables tab** — walks the full B+ tree to extract column data for every table; decoded column types: string (3-entry canonical leaf, 2-entry legacy leaf without null bitmap, per-row scheme=2 array, per-row direct pointer), binary/blob (N+1 offsets leaf, displayed as hex preview), scalar (bit-packed integers and booleans via `width_scheme=0`, byte-aligned integers via `width_scheme=1`). Row count is derived from the data columns themselves rather than from the unreliable child[7] backlink array.
+  - **Hex Preview tab** — raw hex dump of the file.
+- **Realm array header decoding** — complete implementation of the 8-byte Realm array header spec: all five flag bit-groups (`is_inner_bptree_node`, `has_refs`, `context_flag`, `width_scheme`, `width_ndx`), the three `width_scheme` payload-size formulas, the `width_ndx`→width translation table, and 8-byte payload alignment.
+- **Full-file Realm parsing** — the parser now reads the entire file (not just the first 256 KB) so that column data stored near the end of large databases is not silently missed.
+
+### Improvements
+
+- **Realm format identification** — magic-byte detection via the `T-DB` mnemonic at offset 16 and `.realm` extension fallback.
+- **Magic-byte sniffing** — increased VFS peek size to cover offset-based signatures beyond the first 16 bytes.
+
+### Documentation
+
+- **Format Knowledge Base** — Realm forensic relevance updated: documents schema extraction capability, WAL-like journaling pair, and forensic significance of class names.
+- **TODO.md** — full Realm array header specification derived from the Cobley/Geneste handbook chapter, cross-checked against `f1de.realm`.
+
 ## [0.3.0] — 2026-04-03
 
 ### New Features

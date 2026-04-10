@@ -146,6 +146,58 @@ FORMATS: list[dict[str, Any]] = [
         "status": "reviewed",
     },
     {
+        "name": "Realm Database",
+        "short_name": "Realm",
+        "category": "database",
+        "forensic_relevance": (
+            "Mobile app local object store used as a SQLite replacement. "
+            "A single '.realm' file stores all object data in a B+ tree of fixed-size "
+            "arrays. Crush extracts the full schema (class/table names such as "
+            "'class_Driver', 'class_Event', 'class_Photo') and decodes both root "
+            "references (top_ref[0] / top_ref[1]) that act as a WAL-like journaling "
+            "pair — the inactive branch may contain superseded data not yet checkpointed. "
+            "Class names reveal which app features were in use and what data categories "
+            "are present (users, locations, media, events, etc.)."
+        ),
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
+        "parser_class": "RealmParser",
+        "magic": [
+            {
+                "offset": 16,
+                "value": b"\x54\x2d\x44\x42",
+                "description": "Realm header mnemonic (T-DB)",
+            }
+        ],
+        "extensions": [".realm"],
+        "links": [
+            (
+                "Realm files (database internals)",
+                "https://mongodben.github.io/flutter-sdk-docs/sdk/flutter/realm-database",
+            ),
+            (
+                "Open a Realm file (Realm Studio)",
+                "https://www.mongodb.com/docs/atlas/device-sdks/studio/open-realm-file/",
+            ),
+            (
+                "Default Realm file URL (Swift Configuration)",
+                "https://www.mongodb.com/docs/realm-sdks/swift/10.9.0/Structs/Realm/Configuration.html",
+            ),
+            (
+                "The Realm Files - Vol 3 - The Realm Header (Damien Attoe)",
+                "https://digital4n6withdamien.blogspot.com/2026/01/the-realm-files-vol-3-realm-header.html",
+            ),
+            (
+                "The Realm Files - Vol 2 - Physical Structure Overview (Damien Attoe)",
+                "https://digital4n6withdamien.blogspot.com/2025/11/the-realm-files-vol-2-physical.html",
+            ),
+            (
+                "Mobile App Forensics: A Practical Guide (Realm file format)",
+                "https://link.springer.com/content/pdf/10.1007/978-3-030-98467-0_8",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
         "name": "Android DEX Bytecode",
         "short_name": "DEX",
         "category": "execution",

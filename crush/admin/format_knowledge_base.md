@@ -138,6 +138,15 @@ For **unsupported files** (handled by `HexFallbackParser`), magic identification
 
 ---
 
+## Realm Notes
+
+Realm files expose a 24-byte header in unencrypted files. The mnemonic signature
+`T-DB` lives at offset 16 (bytes `54 2D 44 42`). Encrypted Realm files may not
+expose this mnemonic, so extension-based detection (`.realm`) is still used as
+a fallback.
+
+---
+
 ## Format Reference Dialog
 
 **Help → Format Reference…** opens a searchable table of all formats in `formats.db`.

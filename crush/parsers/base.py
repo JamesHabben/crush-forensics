@@ -7,7 +7,18 @@ from typing import Any, Literal
 
 from crush.core.vfs import VFS, VFSNode
 
-ViewerType = Literal["table", "tree", "hex", "text", "media", "image", "abx", "log", "protobuf"]
+ViewerType = Literal[
+    "table",
+    "tree",
+    "hex",
+    "text",
+    "media",
+    "image",
+    "abx",
+    "log",
+    "protobuf",
+    "realm",
+]
 
 
 @dataclass

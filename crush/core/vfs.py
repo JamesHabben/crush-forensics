@@ -58,7 +58,7 @@ class VFS(ABC):
         """Return total size of files under node (including the node if it's a file)."""
         ...
 
-    def peek(self, node: VFSNode, n: int = 16) -> bytes:
+    def peek(self, node: VFSNode, n: int = 32) -> bytes:
         """Return first n bytes for magic-byte sniffing."""
         with self.open(node) as src:
             return src.read(n)

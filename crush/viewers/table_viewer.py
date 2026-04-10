@@ -182,7 +182,10 @@ class TableViewer(QWidget):
                 else:
                     cell = QStandardItem(str(val))
                 if isinstance(val, (int, float)):
-                    cell.setData(val, Qt.ItemDataRole.UserRole)
+                    try:
+                        cell.setData(val, Qt.ItemDataRole.UserRole)
+                    except (OverflowError, Exception):
+                        pass
                 cell.setEditable(False)
                 items.append(cell)
             self._source_model.appendRow(items)
@@ -309,7 +312,10 @@ class TableViewer(QWidget):
                 else:
                     cell = QStandardItem(str(val))
                 if isinstance(val, (int, float)):
-                    cell.setData(val, Qt.ItemDataRole.UserRole)
+                    try:
+                        cell.setData(val, Qt.ItemDataRole.UserRole)
+                    except (OverflowError, Exception):
+                        pass
                 cell.setEditable(False)
                 items.append(cell)
             self._source_model.appendRow(items)

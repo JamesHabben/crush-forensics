@@ -31,6 +31,7 @@ Supported viewers (more planned):
 - Log Viewer (e.g. syslog - more planned)
 - Protobuf Viewer (schema-less; optional schema decoding)
 - PDF text extraction (displays extracted text)
+- Realm Database Viewer (header, schema/class extraction, top-ref comparison, table/column data decoding)
 
 ## Documentation
 
