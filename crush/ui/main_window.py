@@ -640,21 +640,25 @@ class MainWindow(QMainWindow):
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata)
             return
-        if mode == "log":
+        if mode == "multi_log":
             self._hash_node_if_forensic(node, vfs)
-            from crush.parsers.log_parser import LogParser
-            parser = LogParser()
-            try:
-                result = parser.parse(node, vfs)
-                result = self._enrich_with_format_info(parser, node, vfs, result)
+            from crush.parsers.base import ParseResult
+            result = ParseResult(viewer_type="multi_log", data=None)
+            self._show_result(node, result, vfs)
+            self._status.showMessage(f"{node.path}  [Multi-Log Studio — loading…]")
+            return
+        if mode == "multi_log_add":
+            self._hash_node_if_forensic(node, vfs)
+            viewer = self._find_multi_log_viewer()
+            if viewer is not None:
+                viewer.add_source(node, vfs)
+                self._status.showMessage(f"Added to Multi-Log Studio: {node.path}")
+            else:
+                # No open studio — open a new one
+                from crush.parsers.base import ParseResult
+                result = ParseResult(viewer_type="multi_log", data=None)
                 self._show_result(node, result, vfs)
-                self._props_panel.update_properties(node, result.metadata)
-                self._status.showMessage(
-                    f"{node.path}  [{parser.DISPLAY_NAME} — {result.metadata.get('Log format', '')}]"
-                )
-            except Exception as exc:
-                self._status.showMessage(f"Log parse error: {exc}")
-                QMessageBox.warning(self, "Log parse error", str(exc))
+                self._status.showMessage(f"{node.path}  [Multi-Log Studio — loading…]")
             return
         if mode == "protobuf":
             self._hash_node_if_forensic(node, vfs)
@@ -673,6 +677,43 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Protobuf parse error", str(exc))
             return
         self._open_node(node, vfs)
+
+    def _find_multi_log_viewer(self) -> QWidget | None:
+        """Return an open MultiLogViewer, preferring the currently active tab.
+
+        Handles the always-hex wrapper (outer QTabWidget containing the viewer
+        as its first child) by checking the ``crush_viewer`` property on the
+        tab-level widget and then unwrapping if needed.
+        """
+        from crush.viewers.multi_log_viewer import MultiLogViewer
+        from PySide6.QtWidgets import QTabWidget as _QTabWidget
+
+        def _unwrap(w: QWidget) -> MultiLogViewer | None:
+            if isinstance(w, MultiLogViewer):
+                return w
+            if isinstance(w, _QTabWidget):
+                first = w.widget(0)
+                if isinstance(first, MultiLogViewer):
+                    return first
+            return None
+
+        # Check the active tab first
+        current = self._viewer_tabs.currentWidget()
+        if current is not None and current.property("crush_viewer") == "multi_log":
+            result = _unwrap(current)
+            if result is not None:
+                return result
+
+        # Fall back to the most recently added multi_log tab
+        for i in range(self._viewer_tabs.count() - 1, -1, -1):
+            w = self._viewer_tabs.widget(i)
+            if w is not None and w.property("crush_viewer") == "multi_log":
+                result = _unwrap(w)
+                if result is not None:
+                    # Bring that tab to front so the user sees where the source lands
+                    self._viewer_tabs.setCurrentIndex(i)
+                    return result
+        return None
 
     def _open_external_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
         if node.is_dir:
@@ -792,6 +833,8 @@ class MainWindow(QMainWindow):
             return
         if result.viewer_type == "hex":
             label = f"{node.path} [Hex]"
+        elif result.viewer_type == "multi_log":
+            label = f"{node.path} [Multi-Log]"
         widget.setProperty("crush_path", node.path)
         widget.setProperty("crush_viewer", result.viewer_type)
         widget.setProperty("crush_vfs", vfs)

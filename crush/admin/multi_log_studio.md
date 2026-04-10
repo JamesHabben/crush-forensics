@@ -1,8 +1,8 @@
 # Multi-Log Studio — Planning Document
 
-**Status:** Planning  
+**Status:** Phase 4 complete — Phase 5 planned  
 **Created:** 2026-04-10  
-**Components:** `crush/viewers/multi_log_viewer.py` (new), `crush/parsers/multi_log_parser.py` (new)
+**Components:** `crush/viewers/multi_log_viewer.py`, `crush/parsers/multi_log_parser.py`
 
 ---
 
@@ -36,17 +36,32 @@ The existing `LogViewer` remains unchanged for the single-file use case.
 
 Every normalised log entry is a Python `dict` with these fields:
 
-| Field       | Type             | Description                                    |
-|-------------|------------------|------------------------------------------------|
-| `timestamp` | `datetime\|None` | UTC-normalised                                 |
-| `level`     | `str`            | `ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN`|
-| `process`   | `str`            | Tag, process name, logger name, etc.           |
-| `message`   | `str`            | Primary message (may be multiline)             |
-| `raw`       | `str`            | Original line(s) for copy/export               |
-| `source`    | `str`            | Filename of the source                         |
-| `source_id` | `int`            | Internal source index (used for colour/filter) |
+| Field       | Type                  | Description                                          |
+|-------------|-----------------------|------------------------------------------------------|
+| `timestamp` | `datetime\|None`      | UTC-normalised                                       |
+| `level`     | `str`                 | `ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN`      |
+| `process`   | `str`                 | Process name, logger name, tag, etc.                 |
+| `pid`       | `str`                 | Process ID — empty string if unavailable             |
+| `message`   | `str`                 | Primary message (may be multiline)                   |
+| `raw`       | `str`                 | Original line(s) for copy/export                     |
+| `source`    | `str`                 | Filename of the source                               |
+| `source_id` | `int`                 | Internal source index (used for colour/filter)       |
+| `extra`     | `dict[str, str]`      | Parser-specific fields not covered by the above      |
 
-All parser results (JSON Lines, logcat, Syslog, Generic, Custom) are mapped to this model.
+`extra` is the extension point for formats with richer metadata — all fields that
+don't map to a standard column go here.  The detail panel shows them; the search
+bar matches against their values.
+
+Typical `extra` keys per format:
+
+| Format            | Keys in `extra`                                              |
+|-------------------|--------------------------------------------------------------|
+| Apple Unified Log | `subsystem`, `category`, `thread_id`, `activity_id`, `sender` |
+| Syslog            | `facility`                                                   |
+| Android logcat    | `thread_id`                                                  |
+| Custom (Phase 4)  | any named group not mapped to a standard field               |
+
+All parser results (JSON Lines, logcat, Syslog, Generic, Custom, Apple UL) are mapped to this model.
 
 ### Virtual Qt Model
 
@@ -142,31 +157,66 @@ Example profile:
 
 ## Implementation Plan (Phases)
 
-### Phase 1 — Virtual Model + Fast Filtering
-- Implement `MultiLogModel(QAbstractTableModel)`
-- Filtering via `list[int]` (index list instead of proxy row iteration)
-- Use existing parser output as data source
-- **Result:** Single file, but ~10× faster than the current viewer
+### Phase 1 — Virtual Model + Fast Filtering ✓ (2026-04-10)
+- `MultiLogModel(QAbstractTableModel)` in `crush/viewers/multi_log_viewer.py`
+- Filtering via `_visible: list[int]` (subsequence of `_sort_order`)
+- Sorting implemented directly on the model via `sort()` — no proxy needed
+- Entry point: right-click → "Open in Multi-Log Studio" → `"multi_log"` viewer type
+- **Result:** Single file, virtual model, ~10× less memory than QStandardItemModel
 
-### Phase 2 — Background Loading
-- `LogLoaderWorker(QThread)` with chunk signals
-- Progress indicator in the viewer
-- Progressive insertion into the model
-- **Result:** UI stays responsive when opening large files
+### Phase 2 — Background Loading ✓ (2026-04-10)
+- `LogLoaderWorker(QThread)` — runs `LogParser.parse()` off the main thread, emits `chunk_ready(list)` in batches of 5,000 entries, then `load_finished(str, dict)`
+- `MultiLogModel.append_chunk()` — uses `beginInsertRows`/`endInsertRows` (no full reset per chunk)
+- `MultiLogModel.finalize_sort()` — applies full sort once after all chunks arrive
+- 4 px indeterminate `QProgressBar` in the viewer; hidden on `load_finished`
+- Time bar initialised and shown only after `load_finished` confirms timestamps exist
+- Sorting disabled on the table during loading; re-enabled after `finalize_sort()`
+- `MultiLogViewer` constructor changed to `(node, vfs, parent)` — viewer owns the worker
+- **Result:** UI stays responsive; tab opens immediately, entries appear as chunks arrive
 
-### Phase 3 — Multi-Source
-- Manage multiple sources in the model (per source: list + metadata)
-- Source chip bar in the toolbar
-- Merged, sorted timeline
-- "Add Source" action (from toolbar + VFS tree context menu)
-- **Result:** Correlation of multiple log files possible
+### Phase 3 — Multi-Source ✓ (2026-04-10)
+- `LogLoaderWorker` extended: carries `source_id` in all signals
+- `MultiLogModel`: source registry (`register_source`, `set_source_visible`, `source_color`);
+  `append_chunk(source_id, entries)` stamps each entry; source filter in `_apply_filter()`
+- New columns: **Source** (coloured by source accent), **PID**
+- Text search extended to `extra` fields (subsystem, category, etc.)
+- `MultiLogViewer.add_source(node, vfs)` — public API to add a source programmatically
+- Source chip bar: scrollable row of colour-coded toggle buttons, one per source
+- "Add Source" button: opens `QFileDialog`, loads via `FileVFS`
+- VFS tree: "Add to Multi-Log Studio" → routes to active/most-recent open studio tab;
+  falls back to opening a new tab if none is open
+- `_find_multi_log_viewer()` in `main_window`: checks active tab first, then scans
+  tab list in reverse; handles always-hex wrapper transparently
+- **Result:** Correlation of multiple log files in a shared timeline
 
-### Phase 4 — Custom Format Dialog
-- "Define Format" dialog with regex editor and live preview
-- `CustomFormatParser` using named-group regex + strptime
-- Profile management (save / load / delete)
-- Profile selection when opening an unrecognised format
-- **Result:** Arbitrary log formats analysable
+### Phase 5 — Folder Log Discovery
+- Right-click a folder in the VFS tree → "Open Logs in Multi-Log Studio"
+- Recursively walk the VFS subtree; probe each file with a fast heuristic:
+  - Known log extensions (`.log`, `.txt`, `.json`, `.jsonl`) **or**
+  - `LogParser` peek on first 40 lines — accept if any format scores ≥ 2 hits
+- Confirmation dialog before loading: "Found 23 log files — open all?" with a
+  checklist so the user can deselect individual files
+- Feed accepted files into the existing multi-source pipeline (Phase 3) one by one,
+  each in its own background worker (Phase 2)
+- **Dependencies:** Phase 2 (background loading) + Phase 3 (multi-source) must be complete
+- **Result:** Entire log folder analysable in one action
+
+### Phase 4 — Custom Format Dialog ✓ (2026-04-10)
+- `CustomFormatProfile` dataclass + `ProfileManager` (save/load/delete JSON profiles
+  in `~/.config/crush/log_profiles/`) in `crush/parsers/multi_log_parser.py`
+- `CustomFormatParser` — named-group regex + strptime, multiline grouping,
+  level_map translation; `extra` dict for non-standard groups
+- `DefineFormatDialog` in `multi_log_viewer.py` — profile list, editor fields,
+  live regex preview with colour-coded group highlighting (300 ms debounce)
+- `LogLoaderWorker` extended: `profile` parameter routes to `CustomFormatParser`
+  instead of `LogParser`; `cancel()` / `_cancel_flag` for clean reload
+- `MultiLogModel.replace_source_entries()` — clears one source and resets indices
+  so a reload worker can refill it cleanly via `append_chunk`
+- `MultiLogModel.preview_lines_for_source()` — raw lines from loaded entries
+  (no file re-read needed for preview)
+- "Format…" button in toolbar opens the dialog; *Apply* triggers
+  `reload_source_with_profile()` which cancels the old worker and starts a new one
+- **Result:** Arbitrary log formats analysable; profiles persist across sessions
 
 ---
 

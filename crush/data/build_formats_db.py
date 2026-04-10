@@ -488,7 +488,8 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "LevelDB",
         "category": "database",
         "forensic_relevance": (
-            "Key-value store used by Chrome, browsers, and many Android/iOS apps "
+            "Key-value store used by Chrome, browsers, Electron Apps " 
+            "and many Android/iOS apps "
             "for caches, IndexedDB, and app state."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
@@ -498,7 +499,7 @@ FORMATS: list[dict[str, Any]] = [
         "links": [( "Format spec", "https://github.com/google/leveldb/blob/main/doc/impl.md"),
                   ( "Blog Post", "https://www.cclsolutionsgroup.com/post/hang-on-thats-not-sqlite-chrome-electron-and-leveldb"),
         ],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Unified Log Archive (logarchive)",
@@ -817,7 +818,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".flac"],
         "links": [("Format spec", "https://xiph.org/flac/format.html")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "OGG Audio",
@@ -838,7 +839,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".ogg"],
         "links": [("Format spec", "https://xiph.org/ogg/")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "Opus Audio",
@@ -859,7 +860,7 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".opus"],
         "links": [("Format spec", "https://opus-codec.org/docs/")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "WMA Audio (Windows Media Audio)",
@@ -1045,7 +1046,7 @@ FORMATS: list[dict[str, Any]] = [
         "category": "log",
         "forensic_relevance": (
             "Apple Biome framework data stores. Contains app usage, screen time, "
-            "location, health, and Siri interaction history."
+            "location, health, and Siri interaction history. SEGB was first seen with iOS 13"
         ),
         "platforms": ["iOS", "macOS"],
         "parser_class": "SegbParser",
@@ -1057,8 +1058,8 @@ FORMATS: list[dict[str, Any]] = [
             }
         ],
         "extensions": [".segb", ".segb1", ".segb2", ".biome"],
-        "links": [("Source code", "https://github.com/cclgroupltd/ccl-segb")],
-        "status": "draft",
+        "links": [("3rd Party Parser Source code", "https://github.com/cclgroupltd/ccl-segb")],
+        "status": "reviewed",
     },
     {
         "name": "Android Sparse Image",
@@ -1122,15 +1123,14 @@ FORMATS: list[dict[str, Any]] = [
         ],
         "extensions": [".db-wal", ".sqlite-wal", ".sqlite3-wal", ".db3-wal"],
         "links": [("Format spec", "https://www.sqlite.org/walformat.html")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "TAR Archive",
         "short_name": "TAR",
         "category": "archive",
         "forensic_relevance": (
-            "Common archive for Android ADB backups and Linux filesystem images. "
-            "Often compressed as .tar.gz or .tar.bz2."
+            "TODO"
         ),
         "platforms": ["Android", "Linux"],
         "parser_class": None,
@@ -1163,7 +1163,7 @@ FORMATS: list[dict[str, Any]] = [
             }
         ],
         "extensions": [".tracev3"],
-        "links": [("Source code", "https://github.com/mandiant/macos-UnifiedLogs")],
+        "links": [],
         "status": "draft",
     },
     {
@@ -1179,7 +1179,7 @@ FORMATS: list[dict[str, Any]] = [
         "magic": [],
         "extensions": [".xml", ".xhtml", ".svg", ".kml"],
         "links": [("Format spec", "https://www.w3.org/TR/xml/")],
-        "status": "draft",
+        "status": "reviewed",
     },
     {
         "name": "ZIP Archive",

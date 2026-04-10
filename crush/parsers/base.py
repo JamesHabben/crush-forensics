@@ -16,6 +16,7 @@ ViewerType = Literal[
     "image",
     "abx",
     "log",
+    "multi_log",
     "protobuf",
     "realm",
 ]

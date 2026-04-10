@@ -25,8 +25,8 @@ def _register_builtin_viewers() -> None:
     ViewerRegistry.register("protobuf", lambda r, n, v, p: ProtobufViewer(r.data, p))
     ViewerRegistry.register("realm", lambda r, n, v, p: RealmViewer(r.data, p))
 
-    from crush.viewers.log_viewer import LogViewer
-    ViewerRegistry.register("log", lambda r, n, v, p: LogViewer(r.data, p))
+    from crush.viewers.multi_log_viewer import MultiLogViewer
+    ViewerRegistry.register("multi_log", lambda r, n, v, p: MultiLogViewer(n, v, p))
 
     try:
         from crush.viewers.media_viewer import MediaViewer

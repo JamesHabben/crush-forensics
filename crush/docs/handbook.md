@@ -50,6 +50,8 @@ The left panel shows the loaded archive or folder as a tree.
   - **Open** — best viewer for the format
   - **Open in Hex** — force raw hex view
   - **Open as Plain Text** — force text view
+  - **Open in Multi-Log Studio** — structured log viewer with level/time/text filtering and multi-source support
+  - **Add to Multi-Log Studio** — adds the file as an additional source to the currently open studio tab
   - **Open as Protobuf Viewer** — schema-less Protobuf decode (optionally load a `.proto` schema)
   - **Open External (Default)** — hand off to the OS default application
   - **Open External (Choose App…)** — pick an application
@@ -159,6 +161,45 @@ Decodes Android Binary XML (ABX) format used in Android system and app settings 
 ### SEGB / Biome Viewer
 
 Decodes Apple SEGB v1 and v2 files from the Biome framework. Shows timestamped records from app usage, screen time, Siri interaction, and location-adjacent signals.
+
+### Multi-Log Studio
+
+A high-performance log viewer for large files and multi-source correlation. Open it via right-click → **Open in Multi-Log Studio**; add further files at any time with **Add to Multi-Log Studio** or the **+ Add Source** button inside the viewer.
+
+**Toolbar filters** (apply across all sources simultaneously):
+
+| Control | Action |
+|---|---|
+| Level buttons | Toggle ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN on or off |
+| **Search** field | Filter by message, process, PID, or any extra field (e.g. `subsystem`) |
+| **Format…** | Define or load a custom log format profile |
+
+**Source bar** — one colour-coded chip per loaded file. Click a chip to hide or show that source. Chips scroll horizontally if many sources are loaded.
+
+**Time-range filter** — appears after the first file with timestamps finishes loading. Check **Time range:** to enable the from/to pickers; **Reset** restores the full range. The **Display TZ** dropdown toggles between UTC and local time.
+
+**Detail panel** — selecting a row shows the raw original line(s). If the parser extracted extra fields (e.g. `subsystem`, `category`, `thread_id` from Apple Unified Log text exports), they appear below a separator.
+
+**Context menu** (right-click any row):
+
+| Option | Action |
+|---|---|
+| Copy message | Copies the parsed message text |
+| Copy raw line | Copies the original unparsed line(s) |
+| Copy selection (TSV) | Copies all selected rows as tab-separated values |
+
+**Custom format profiles**
+
+For log files not auto-detected, click **Format…** to open the format dialog:
+
+1. Enter a **Profile Name** and a **Parse Pattern** — a Python regex with named groups. The groups `timestamp`, `level`, `process`, `pid`, and `message` map to the corresponding columns; any other named group is stored as an extra field and shown in the detail panel.
+2. Set **Timestamp Format** to a `strptime` string (e.g. `%d/%b/%Y:%H:%M:%S`). Leave empty to auto-detect ISO 8601 / epoch timestamps.
+3. Optionally set **Line-Start Regex** to identify the first line of a multiline event (e.g. `^\d{4}-\d{2}-\d{2}`).
+4. Optionally set **Level Map** as a JSON object to translate raw values to standard levels (e.g. `{"GET": "INFO", "500": "ERROR"}`).
+5. The **Live Preview** panel highlights each named group in a distinct colour on the actual file content.
+6. Click **Save Profile** to persist the profile for future use, then **Apply** to re-parse the selected source with this format.
+
+Saved profiles are stored in `~/.config/crush/log_profiles/` and are available in the **Saved profiles** dropdown on the next start.
 
 ---
 

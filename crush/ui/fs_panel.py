@@ -346,7 +346,8 @@ class FilesystemPanel(QWidget):
         open_action = menu.addAction("Open")
         open_hex_action = menu.addAction("Open in Hex")
         open_text_action = menu.addAction("Open as Plain Text")
-        open_log_action = menu.addAction("Open as Log Viewer")
+        open_multi_log_action = menu.addAction("Open in Multi-Log Studio")
+        add_multi_log_action = menu.addAction("Add to Multi-Log Studio")
         open_proto_action = menu.addAction("Open as Protobuf Viewer")
         open_external_default = None
         open_external_choose = None
@@ -373,8 +374,10 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "hex")
         elif action == open_text_action:
             self.open_requested.emit(node, vfs, "text")
-        elif action == open_log_action:
-            self.open_requested.emit(node, vfs, "log")
+        elif action == open_multi_log_action:
+            self.open_requested.emit(node, vfs, "multi_log")
+        elif action == add_multi_log_action:
+            self.open_requested.emit(node, vfs, "multi_log_add")
         elif action == open_proto_action:
             self.open_requested.emit(node, vfs, "protobuf")
         elif action == open_external_default:

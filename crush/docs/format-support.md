@@ -94,12 +94,15 @@ Limitations
 - Some PDFs have no extractable text (scanned or protected files).
 
 ### Log Files (Explicit Only)
-- Open via context menu: **Open as Log Viewer**.
-- Auto-detects JSON Lines, Android logcat, Syslog (RFC 3164), and generic timestamped logs.
+- Open via context menu: **Open in Multi-Log Studio**.
+- Auto-detects JSON Lines, Android logcat, Syslog (RFC 3164), and generic timestamped/plain-text logs.
+- Multiple files can be loaded simultaneously into a shared, merged timeline.
+- Custom formats can be defined via a named-group regex and a `strptime` timestamp format; profiles are saved to `~/.config/crush/log_profiles/`.
 
 Limitations
-- Not auto-detected by default.
-- Timestamp parsing is heuristic; logcat logs do not include the year.
+- Not auto-detected by default; must be opened explicitly.
+- Timestamp parsing is heuristic for unrecognised formats; logcat logs do not include the year.
+- Year is assumed to be the current year for Syslog (RFC 3164).
 
 ### Hex Fallback
 - Any file without a matching parser opens in the Hex Viewer.
@@ -158,11 +161,19 @@ Limitations
 Limitations
 - XML reconstruction is best-effort.
 
-### Log Viewer
-- Level filters, text search, time range filter, timezone display.
+### Multi-Log Studio
+- Level toggles (ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN), free-text search (message, process, PID, and all extra fields), time-range filter with calendar pickers, and per-source visibility toggle.
+- Sources are colour-coded; each appears as a chip in the source bar that toggles the source on/off.
+- Background async loading: the tab opens immediately and rows stream in as they are parsed; files of any size are supported without blocking the UI.
+- Virtual model: no Qt item objects per cell — handles 200 k+ entries with low memory overhead.
+- Custom format profiles: define a named-group regex (groups `timestamp`, `level`, `process`, `pid`, `message`; extras go to a side panel), a `strptime` string, an optional line-start regex for multiline events, and a level translation map. Live preview highlights each group in a distinct colour. Profiles are saved as JSON and reloaded on next start.
+- Detail panel shows the raw original line(s) and any extra fields (e.g. `subsystem`, `category`, `thread_id` for Apple Unified Log entries).
+- Context menu: copy message, copy raw line, copy selection as TSV.
 
 Limitations
-- Time filtering only applies to entries with parsed timestamps.
+- Time filtering only applies to entries with a parsed timestamp.
+- Multiline event grouping for custom formats requires an explicit line-start regex.
+- Apple Unified Log (`.logarchive` / `tracev3`) binary format is not yet parsed; plain-text exports from `log show` are supported.
 
 ### Protobuf Viewer
 - Schema-less decode in a tree view (field numbers, wire types, values).

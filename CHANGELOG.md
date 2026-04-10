@@ -6,6 +6,26 @@ All notable changes to Crush will be documented in this file.
 
 ### New Features
 
+- **Multi-Log Studio** — dedicated viewer for large and multi-source log analysis, replacing the old single-file Log Viewer:
+  - **Virtual model** — `QAbstractTableModel` backed directly by a Python list; no Qt item objects per cell, ~10× less memory than the previous `QStandardItemModel`-based viewer; handles 200k+ entries without affecting startup time.
+  - **Async background loading** — log files are parsed in a worker thread and streamed to the UI in chunks of 5 000 entries; the tab opens immediately and rows appear as they arrive; a 4 px indeterminate progress bar indicates loading state.
+  - **Multi-source merged timeline** — multiple log files open simultaneously in a shared, timestamp-sorted table; each source gets a colour-coded chip in the source bar; chips toggle individual sources on/off without reloading.
+  - **"Add to Multi-Log Studio"** — right-clicking any file in the VFS tree adds it to the currently active studio tab (or opens a new one); the "Add Source" button inside the viewer opens a file dialog for the same purpose.
+  - **Unified filters** — level toggles (ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN), free-text search across message, process, PID and all extra fields, and an optional time-range filter with calendar pickers; all filters apply across all loaded sources simultaneously.
+  - **Custom format profiles** — "Format…" button opens a dialog to define arbitrary log formats via a named-group regex (`timestamp`, `level`, `process`, `pid`, `message`; any other group → extra fields), a `strptime` timestamp format, an optional line-start regex for multiline events, and a level translation map; live preview highlights each named group in a distinct colour on the raw input lines (300 ms debounce); profiles are saved as JSON in `~/.config/crush/log_profiles/` and reloaded automatically.
+  - **Re-parse with custom format** — *Apply* in the format dialog re-parses the selected source in-place using the custom parser without affecting other sources.
+  - **Detail panel** — selected row shows the raw original line(s) and, below a separator, any extra fields (e.g. `subsystem`, `category`, `thread_id` from Apple Unified Log).
+  - **Context menu** — copy message, copy raw line, or copy the full selection as TSV.
+  - **Columns** — Source (colour-coded), Timestamp, Level, Process / Tag, PID, Message.
+
+### Improvements
+
+- **Log Viewer retired** — the old synchronous single-file Log Viewer (`QStandardItemModel`, blocking parse on open) has been removed; "Open in Multi-Log Studio" is the new entry point for all log analysis.
+
+### Fixes
+
+- **Source bar expanding window** — adding a second log source to Multi-Log Studio no longer causes the application window to grow wider than the screen; the source chip bar now uses a non-resizable `QScrollArea` with a horizontal scrollbar instead of propagating the chip container's preferred width to the window geometry.
+
 - **Realm Database Viewer** — multi-tab viewer for `.realm` files:
   - **Header tab** — decodes the 24-byte file header: both top references, mnemonic, file format version, active root flag.
   - **Schema tab** — extracts the full class/table list (e.g. `class_Driver`, `class_Event`, `class_Photo`) by following the B+ tree from the active root into the schema group array; class names reveal which app features were active and what data categories are present.
