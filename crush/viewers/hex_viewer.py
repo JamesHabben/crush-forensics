@@ -14,11 +14,44 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QContextMenuEvent, QFont
 
 
 _BYTES_PER_ROW = 16
 _PAGE_BYTES = 1024 * 256  # 256 KB per page
+
+# Hex dump line layout (see _load_page):
+# cols  0-7   offset (8 hex digits)
+# cols  8-9   two spaces
+# cols 10-57  hex section (hex_left<23> + "  " + hex_right<23> = 48 chars)
+# cols 58-59  two spaces
+# cols 60+    ASCII (up to 16 printable chars)
+_HEX_START = 10
+_HEX_END = 58
+_ASCII_START = 60
+
+
+class _HexPlainTextEdit(QPlainTextEdit):
+    """QPlainTextEdit with a custom context menu for hex/ASCII copy actions."""
+
+    def __init__(self, viewer: "HexViewer") -> None:
+        super().__init__()
+        self._viewer = viewer
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = self.createStandardContextMenu()
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            menu.addSeparator()
+            menu.addAction("Copy Selected Hex").triggered.connect(
+                self._viewer._copy_selected_hex
+            )
+            menu.addAction("Copy Selected ASCII").triggered.connect(
+                self._viewer._copy_selected_ascii
+            )
+        menu.addSeparator()
+        menu.addAction("Copy All").triggered.connect(self._viewer._copy_all)
+        menu.exec(event.globalPos())
 
 
 class HexViewer(QWidget):
@@ -84,7 +117,7 @@ class HexViewer(QWidget):
 
         layout.addLayout(toolbar)
 
-        self._text = QPlainTextEdit()
+        self._text = _HexPlainTextEdit(self)
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
@@ -188,6 +221,35 @@ class HexViewer(QWidget):
 
     def _copy_all(self) -> None:
         QApplication.clipboard().setText(self._text.toPlainText())
+
+    def _copy_selected_hex(self) -> None:
+        text = _selected_text(self._text)
+        if not text:
+            return
+        tokens: list[str] = []
+        for line in text.split("\u2029"):
+            # Extract the hex section from the fixed-column layout
+            hex_section = line[_HEX_START:_HEX_END]
+            for part in hex_section.split():
+                if len(part) == 2 and all(c in "0123456789ABCDEFabcdef" for c in part):
+                    tokens.append(part.upper())
+        QApplication.clipboard().setText(" ".join(tokens))
+
+    def _copy_selected_ascii(self) -> None:
+        text = _selected_text(self._text)
+        if not text:
+            return
+        parts: list[str] = []
+        for line in text.split("\u2029"):
+            if len(line) > _ASCII_START:
+                parts.append(line[_ASCII_START:])
+        QApplication.clipboard().setText("".join(parts))
+
+
+def _selected_text(widget: QPlainTextEdit) -> str:
+    """Return the selected text, using Qt's paragraph separator \\u2029."""
+    cursor = widget.textCursor()
+    return cursor.selectedText() if cursor.hasSelection() else ""
 
 
 def _parse_hex_query(query: str) -> bytes | None:

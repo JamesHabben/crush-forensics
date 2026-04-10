@@ -281,6 +281,10 @@ def _read_scalar_leaf(
             return result
         if width in (2, 4, 8, 16, 32, 64):
             mask = (1 << width) - 1
+            # For byte-aligned widths, Realm stores signed int64_t values.
+            # Reinterpret as two's-complement signed so values stay within
+            # qlonglong range and do not cause OverflowError in Qt.
+            sign_bit = (1 << (width - 1)) if width >= 8 else 0
             result = []
             for i in range(count):
                 bit_pos = i * width
@@ -293,7 +297,10 @@ def _read_scalar_leaf(
                 raw = 0
                 for b in range(needed):
                     raw |= payload[byte_pos + b] << (b * 8)
-                result.append((raw >> bit_off) & mask)
+                val = (raw >> bit_off) & mask
+                if sign_bit and val >= sign_bit:
+                    val -= (1 << width)
+                result.append(val)
             return result
 
     elif scheme == 1:
@@ -306,7 +313,8 @@ def _read_scalar_leaf(
             if off + eb > len(data):
                 result.append(None)
             else:
-                result.append(int.from_bytes(data[off : off + eb], "little"))
+                # signed=True: Realm uses int64_t for all integer columns
+                result.append(int.from_bytes(data[off : off + eb], "little", signed=True))
         return result
 
     return None

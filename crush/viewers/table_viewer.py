@@ -350,7 +350,10 @@ class TableViewer(QWidget):
         index = self._table_view.indexAt(pos)
         if not index.isValid():
             return
-        blob = self._table_view.model().data(index, Qt.ItemDataRole.UserRole)
+        try:
+            blob = self._table_view.model().data(index, Qt.ItemDataRole.UserRole)
+        except OverflowError:
+            blob = None
         menu = QMenu(self)
         copy_cell = menu.addAction("Copy cell")
         copy_row = menu.addAction("Copy row (TSV)")
@@ -470,8 +473,12 @@ class TableViewer(QWidget):
 
 class _NumericSortProxy(QSortFilterProxyModel):
     def lessThan(self, left, right) -> bool:  # type: ignore[override]
-        left_data = self.sourceModel().data(left, Qt.ItemDataRole.UserRole)
-        right_data = self.sourceModel().data(right, Qt.ItemDataRole.UserRole)
+        try:
+            left_data = self.sourceModel().data(left, Qt.ItemDataRole.UserRole)
+            right_data = self.sourceModel().data(right, Qt.ItemDataRole.UserRole)
+        except OverflowError:
+            left_data = None
+            right_data = None
         if isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
             return left_data < right_data
         # Also handle TEXT columns that store numeric-looking strings (SQLite TEXT

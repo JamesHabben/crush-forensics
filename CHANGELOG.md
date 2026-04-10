@@ -17,6 +17,7 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **Hex viewer context menu** — right-clicking a selection now offers *Copy Selected Hex* (space-separated hex bytes) and *Copy Selected ASCII* (printable characters only) in addition to the existing toolbar buttons and the standard *Copy All* entry.
 - **Realm format identification** — magic-byte detection via the `T-DB` mnemonic at offset 16 and `.realm` extension fallback.
 - **Magic-byte sniffing** — increased VFS peek size to cover offset-based signatures beyond the first 16 bytes.
 
