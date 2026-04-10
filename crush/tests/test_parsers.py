@@ -173,8 +173,6 @@ def test_realm_array_header_decoding(tmp_path: Path) -> None:
 
 def test_realm_schema_extraction(tmp_path: Path) -> None:
     """Schema extraction follows the B+ tree path and returns class names."""
-    from crush.parsers.realm_parser import _parse_array_header, _extract_schema
-
     # Build a minimal realm file: file header + schema array + root ref array
     # Offsets (all computed to avoid overlap):
     #   0x00 (0):  24-byte file header  (top_ref1 → ROOT_OFFSET, flags=0x01)

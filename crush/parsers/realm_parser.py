@@ -667,12 +667,12 @@ def _extract_table_data(
             data, col_data_ref, num_cols, cd_eb, file_size
         )
 
-        columns: dict[int, list] = {}
+        columns: dict[int, list[Any]] = {}
         for c_idx in range(num_cols):
             col_ref = _read_ref(data, col_data_ref + 8, c_idx, cd_eb)
             if col_ref <= 0 or col_ref >= file_size:
                 continue
-            values: list | None = _read_string_leaf(data, col_ref, file_size, row_count)
+            values: list[Any] | None = _read_string_leaf(data, col_ref, file_size, row_count)
             if values is None:
                 values = _read_blob_leaf(data, col_ref, file_size, row_count)
             if values is None:
