@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QKeySequence, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QContextMenuEvent, QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -492,6 +492,41 @@ class _NumericSortProxy(QSortFilterProxyModel):
         return super().lessThan(left, right)
 
 
+# Column layout produced by bytes_to_hexview (e.g. "0000000a: 48 65 6c 6c 6f  Hello"):
+# cols  0-7   offset (8 hex digits)
+# col   8     ':'
+# col   9     space
+# cols 10-56  hex section (16 bytes × 3 − 1 = 47 chars, space-padded)
+# cols 57-58  two spaces
+# cols 59+    ASCII (up to 16 printable chars)
+_BLOB_HEX_START = 10
+_BLOB_HEX_END = 57
+_BLOB_ASCII_START = 59
+
+
+class _BlobViewerEdit(QPlainTextEdit):
+    """QPlainTextEdit with a hex-aware context menu for the BLOB inspector."""
+
+    def __init__(self, inspector: "_BlobInspector") -> None:
+        super().__init__()
+        self._inspector = inspector
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = self.createStandardContextMenu()
+        cursor = self.textCursor()
+        if cursor.hasSelection() and self._inspector._is_hex_mode():
+            menu.addSeparator()
+            menu.addAction("Copy Selected Hex").triggered.connect(
+                self._inspector._copy_selected_hex
+            )
+            menu.addAction("Copy Selected ASCII").triggered.connect(
+                self._inspector._copy_selected_ascii
+            )
+        menu.addSeparator()
+        menu.addAction("Copy All").triggered.connect(self._inspector._copy_all)
+        menu.exec(event.globalPos())
+
+
 class _BlobInspector(QDialog):
     def __init__(self, blob: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -530,7 +565,7 @@ class _BlobInspector(QDialog):
         top_layout.addStretch()
         layout.addWidget(top)
 
-        self._viewer = QPlainTextEdit()
+        self._viewer = _BlobViewerEdit(self)
         self._viewer.setReadOnly(True)
         self._viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         layout.addWidget(self._viewer, stretch=1)
@@ -564,8 +599,39 @@ class _BlobInspector(QDialog):
             content = self._try_xml() or "[parse error]"
         self._viewer.setPlainText(content[:500_000])
 
+    def _is_hex_mode(self) -> bool:
+        fmt = self._format.currentText()
+        return fmt in ("Hex", "Auto")
+
     def _copy_current(self) -> None:
         QApplication.clipboard().setText(self._viewer.toPlainText())
+
+    def _copy_all(self) -> None:
+        QApplication.clipboard().setText(self._viewer.toPlainText())
+
+    def _copy_selected_hex(self) -> None:
+        cursor = self._viewer.textCursor()
+        if not cursor.hasSelection():
+            return
+        text = cursor.selectedText()
+        tokens: list[str] = []
+        for line in text.split("\u2029"):
+            hex_section = line[_BLOB_HEX_START:_BLOB_HEX_END]
+            for part in hex_section.split():
+                if len(part) == 2 and all(c in "0123456789ABCDEFabcdef" for c in part):
+                    tokens.append(part.upper())
+        QApplication.clipboard().setText(" ".join(tokens))
+
+    def _copy_selected_ascii(self) -> None:
+        cursor = self._viewer.textCursor()
+        if not cursor.hasSelection():
+            return
+        text = cursor.selectedText()
+        parts: list[str] = []
+        for line in text.split("\u2029"):
+            if len(line) > _BLOB_ASCII_START:
+                parts.append(line[_BLOB_ASCII_START:])
+        QApplication.clipboard().setText("".join(parts))
 
     def _hex(self) -> str:
         return _bytes_to_hexview(self._blob, max_bytes=200_000)

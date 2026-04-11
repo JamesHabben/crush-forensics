@@ -58,6 +58,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QPlainTextEdit,
     QProgressBar,
@@ -1043,7 +1045,7 @@ class MultiLogViewer(QWidget):
             btn = QPushButton(lvl)
             btn.setCheckable(True)
             btn.setChecked(True)
-            btn.setFixedWidth(62)
+            btn.setMaximumWidth(62)          # preferred cap; can shrink when window is narrow
             color = _LEVEL_COLORS.get(lvl, QColor("#bdc3c7"))
             btn.setStyleSheet(
                 f"QPushButton:checked {{ background-color: {color.name()}; color: white; }}"
@@ -1058,7 +1060,8 @@ class MultiLogViewer(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter message / process / extra…")
         self._search.setClearButtonEnabled(True)
-        self._search.setFixedWidth(200)
+        self._search.setMinimumWidth(80)     # can grow/shrink with window width
+        self._search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._search.textChanged.connect(self._on_search_changed)
         layout.addWidget(self._search)
 
@@ -1134,6 +1137,11 @@ class MultiLogViewer(QWidget):
             lambda checked, sid=source_id: self._model.set_source_visible(sid, checked)
         )
         self._chip_layout.addWidget(chip)
+        # Force the chip container to resize immediately.  Without this call the
+        # scroll area (setWidgetResizable=False) keeps the container at its
+        # original 0-size until the event loop runs a full paint cycle, so chips
+        # added in a tight loop (e.g. folder-discovery mode) would be invisible.
+        self._chip_layout.parentWidget().adjustSize()
         self._source_chips[source_id] = chip
 
     def _build_time_bar(self) -> QWidget:
@@ -1195,9 +1203,15 @@ class MultiLogViewer(QWidget):
         self._model.finalize_sort()
         self._update_count()
 
-        # Resize fixed columns (idempotent; cheap after finalize_sort)
+        # Resize fixed columns (idempotent; cheap after finalize_sort).
+        # Cap source and process at 200 px — long subsystem/tag names or deep
+        # file paths would otherwise push the table far beyond the window width.
+        _COL_CAPS = {_COL_SRC: 200, _COL_PROC: 200}
         for col in (_COL_SRC, _COL_TS, _COL_LVL, _COL_PROC, _COL_PID):
             self._table.resizeColumnToContents(col)
+            cap = _COL_CAPS.get(col)
+            if cap and self._table.columnWidth(col) > cap:
+                self._table.setColumnWidth(col, cap)
 
         # Append source info to the format label
         src_name = self._model.source_name(source_id)
@@ -1413,3 +1427,201 @@ class MultiLogViewer(QWidget):
             self._count_label.setText(f"{total:,} {word}")
         else:
             self._count_label.setText(f"{visible:,} of {total:,} entries")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Folder log discovery
+# ---------------------------------------------------------------------------
+
+_LOG_EXTENSIONS: frozenset[str] = frozenset({
+    ".log", ".txt", ".json", ".jsonl", ".syslog",
+})
+
+_BINARY_EXTENSIONS: frozenset[str] = frozenset({
+    ".db", ".sqlite", ".sqlite3", ".png", ".jpg", ".jpeg", ".gif", ".bmp",
+    ".mp4", ".mov", ".avi", ".mkv", ".zip", ".tar", ".gz", ".bz2", ".xz",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".plist", ".dylib", ".so",
+    ".exe", ".bin", ".dmg", ".ipa", ".realm", ".db-wal", ".db-shm",
+    ".a", ".o", ".class", ".jar", ".apk", ".dex", ".wasm",
+})
+
+# Patterns counted during the slow-path probe (each regex is worth one hit).
+# Two or more distinct hits → file accepted as a log.
+_PROBE_RE: list[re.Pattern] = [  # type: ignore[type-arg]
+    re.compile(r"\d{4}-\d{2}-\d{2}"),                                    # ISO date
+    re.compile(r"\b\d{1,2}/\w{3}/\d{4}"),                                # Apache/syslog date
+    re.compile(
+        r"\b(ERROR|WARN(?:ING)?|INFO|DEBUG|TRACE|CRITICAL|FATAL|NOTICE)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"<\d+>"),                                                  # syslog PRI
+    re.compile(r"\d{2}:\d{2}:\d{2}"),                                     # HH:MM:SS
+    re.compile(r"^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}", re.MULTILINE),  # BSD syslog header
+]
+
+_PROBE_PEEK_BYTES: int = 4_096
+_PROBE_LINES:      int = 40
+_PROBE_THRESHOLD:  int = 2
+
+
+def _file_ext(name: str) -> str:
+    """Return the lowercase extension including the dot, or '' if none."""
+    dot = name.rfind(".")
+    return name[dot:].lower() if dot > 0 else ""
+
+
+def _probe_is_log(node: VFSNode, vfs: VFS) -> bool:
+    """Return True if *node* looks like a log file.
+
+    Fast path — accept immediately for known log extensions; reject
+    immediately for known binary types.  Slow path — read up to
+    ``_PROBE_PEEK_BYTES`` bytes and count how many probe patterns fire;
+    accept if the score reaches ``_PROBE_THRESHOLD``.
+    """
+    ext = _file_ext(node.name)
+    if ext in _LOG_EXTENSIONS:
+        return True
+    if ext in _BINARY_EXTENSIONS:
+        return False
+    try:
+        raw = vfs.read(node)[:_PROBE_PEEK_BYTES]
+        if b"\x00" in raw[:512]:        # binary sentinel
+            return False
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()[:_PROBE_LINES]
+        hits = sum(1 for rx in _PROBE_RE if any(rx.search(ln) for ln in lines))
+        return hits >= _PROBE_THRESHOLD
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _discover_log_nodes(root: VFSNode, vfs: VFS) -> list[VFSNode]:
+    """Walk the VFS subtree rooted at *root* and return file nodes that look like logs.
+
+    The walk is depth-first; results are sorted by path for a predictable
+    display order in the discovery dialog.
+    """
+    results: list[VFSNode] = []
+    stack: list[VFSNode] = list(root.children)
+    while stack:
+        node = stack.pop()
+        if node.is_dir:
+            stack.extend(node.children)
+        elif _probe_is_log(node, vfs):
+            results.append(node)
+    results.sort(key=lambda n: n.path)
+    return results
+
+
+class FolderDiscoveryDialog(QDialog):
+    """Confirmation dialog shown before loading logs from a folder.
+
+    Displays a checklist of discovered log files (all checked by default).
+    The user can deselect individual files; the "Load N files" button label
+    updates live to reflect the current selection count.
+
+    After ``exec()`` returns ``Accepted``, call ``selected_nodes()`` to
+    retrieve the user-approved list.
+    """
+
+    def __init__(
+        self,
+        folder_name: str,
+        nodes: list[VFSNode],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Open Logs in Multi-Log Studio")
+        self.setMinimumSize(540, 420)
+        self._nodes = nodes
+        self._build_ui(folder_name)
+
+    # ------------------------------------------------------------------
+    # Result
+    # ------------------------------------------------------------------
+
+    def selected_nodes(self) -> list[VFSNode]:
+        """Return the nodes whose checkboxes are still checked."""
+        result: list[VFSNode] = []
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                result.append(item.data(Qt.ItemDataRole.UserRole))
+        return result
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
+    def _build_ui(self, folder_name: str) -> None:
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(12, 12, 12, 12)
+
+        n = len(self._nodes)
+        header = QLabel(
+            f"Found <b>{n}</b> log file{'s' if n != 1 else ''} in "
+            f"<b>{folder_name}</b>. Select the files to load:"
+        )
+        header.setWordWrap(True)
+        root.addWidget(header)
+
+        # Select All / Deselect All
+        sel_row = QHBoxLayout()
+        all_btn  = QPushButton("Select All")
+        none_btn = QPushButton("Deselect All")
+        all_btn.setFixedWidth(100)
+        none_btn.setFixedWidth(100)
+        sel_row.addWidget(all_btn)
+        sel_row.addWidget(none_btn)
+        sel_row.addStretch()
+        root.addLayout(sel_row)
+
+        # Checklist
+        self._list = QListWidget()
+        self._list.setAlternatingRowColors(True)
+        self._list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        for node in self._nodes:
+            item = QListWidgetItem(node.path)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, node)
+            self._list.addItem(item)
+        self._list.itemChanged.connect(self._update_load_btn)
+        root.addWidget(self._list)
+
+        # Bottom buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self._load_btn = QPushButton()
+        self._load_btn.setDefault(True)
+        self._load_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._load_btn)
+        btn_row.addWidget(cancel_btn)
+        root.addLayout(btn_row)
+
+        all_btn.clicked.connect(self._select_all)
+        none_btn.clicked.connect(self._deselect_all)
+
+        self._update_load_btn()
+
+    def _select_all(self) -> None:
+        for i in range(self._list.count()):
+            self._list.item(i).setCheckState(Qt.CheckState.Checked)
+
+    def _deselect_all(self) -> None:
+        for i in range(self._list.count()):
+            self._list.item(i).setCheckState(Qt.CheckState.Unchecked)
+
+    def _update_load_btn(self) -> None:
+        n = sum(
+            1 for i in range(self._list.count())
+            if self._list.item(i).checkState() == Qt.CheckState.Checked
+        )
+        self._load_btn.setText(f"Load {n} file{'s' if n != 1 else ''}")
+        self._load_btn.setEnabled(n > 0)

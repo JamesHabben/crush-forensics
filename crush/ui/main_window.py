@@ -18,6 +18,7 @@ from PySide6.QtGui import QCloseEvent, QDesktopServices, QPalette, QColor, QActi
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QLabel,
@@ -234,6 +235,7 @@ class MainWindow(QMainWindow):
         self._pending_open: tuple[VFSNode, VFS] | None = None
         self._load_queue: list[tuple[str, bool, bool]] = []
         self._settings = QSettings("Crush DFIR", "Crush")
+        self._multi_log_windows: list[QWidget] = []
         self.setWindowTitle(f"Crush {crush.display_version()}")
         self.resize(1280, 800)
         self._build_ui()
@@ -642,9 +644,7 @@ class MainWindow(QMainWindow):
             return
         if mode == "multi_log":
             self._hash_node_if_forensic(node, vfs)
-            from crush.parsers.base import ParseResult
-            result = ParseResult(viewer_type="multi_log", data=None)
-            self._show_result(node, result, vfs)
+            self._open_multi_log_window(node, vfs)
             self._status.showMessage(f"{node.path}  [Multi-Log Studio — loading…]")
             return
         if mode == "multi_log_add":
@@ -654,11 +654,39 @@ class MainWindow(QMainWindow):
                 viewer.add_source(node, vfs)
                 self._status.showMessage(f"Added to Multi-Log Studio: {node.path}")
             else:
-                # No open studio — open a new one
-                from crush.parsers.base import ParseResult
-                result = ParseResult(viewer_type="multi_log", data=None)
-                self._show_result(node, result, vfs)
+                self._open_multi_log_window(node, vfs)
                 self._status.showMessage(f"{node.path}  [Multi-Log Studio — loading…]")
+            return
+        if mode == "multi_log_folder":
+            from crush.viewers.multi_log_viewer import (
+                _discover_log_nodes,
+                FolderDiscoveryDialog,
+            )
+            found = _discover_log_nodes(node, vfs)
+            if not found:
+                QMessageBox.information(
+                    self,
+                    "Multi-Log Studio",
+                    f"No log files found in '{node.name}'.",
+                )
+                return
+            dlg = FolderDiscoveryDialog(node.name, found, self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected = dlg.selected_nodes()
+            if not selected:
+                return
+            viewer = self._find_multi_log_viewer()
+            if viewer is None:
+                viewer = self._open_multi_log_window(selected[0], vfs)
+                remaining = selected[1:]
+            else:
+                remaining = selected
+            for n in remaining:
+                viewer.add_source(n, vfs)
+            self._status.showMessage(
+                f"{node.path}  [Multi-Log Studio — loading {len(selected)} file(s)…]"
+            )
             return
         if mode == "protobuf":
             self._hash_node_if_forensic(node, vfs)
@@ -678,41 +706,42 @@ class MainWindow(QMainWindow):
             return
         self._open_node(node, vfs)
 
-    def _find_multi_log_viewer(self) -> QWidget | None:
-        """Return an open MultiLogViewer, preferring the currently active tab.
+    def _open_multi_log_window(self, node: VFSNode, vfs: VFS) -> QWidget:
+        """Open *node* in a new, standalone Multi-Log Studio window.
 
-        Handles the always-hex wrapper (outer QTabWidget containing the viewer
-        as its first child) by checking the ``crush_viewer`` property on the
-        tab-level widget and then unwrapping if needed.
+        The window is parented to the main window so Qt destroys it when the
+        application exits, but the ``Qt.Window`` flag makes it appear as an
+        independent top-level window in the OS task bar.
         """
         from crush.viewers.multi_log_viewer import MultiLogViewer
-        from PySide6.QtWidgets import QTabWidget as _QTabWidget
+        viewer = MultiLogViewer(node, vfs, parent=self)
+        viewer.setWindowFlags(viewer.windowFlags() | Qt.WindowType.Window)
+        viewer.setWindowTitle(f"Multi-Log Studio — {node.name}")
+        viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        # Size to 80 % of the available screen area, capped at 1400 × 850.
+        avail = self.screen().availableGeometry()
+        w = min(1400, int(avail.width()  * 0.80))
+        h = min(850,  int(avail.height() * 0.80))
+        viewer.resize(w, h)
+        viewer.show()
+        self._multi_log_windows.append(viewer)
+        return viewer
 
-        def _unwrap(w: QWidget) -> MultiLogViewer | None:
+    def _find_multi_log_viewer(self) -> QWidget | None:
+        """Return the most recently opened Multi-Log Studio window, if any.
+
+        Removes stale entries (closed / destroyed windows) from the tracking
+        list before searching.
+        """
+        from crush.viewers.multi_log_viewer import MultiLogViewer
+        self._multi_log_windows = [
+            w for w in self._multi_log_windows if isValid(w)
+        ]
+        for w in reversed(self._multi_log_windows):
             if isinstance(w, MultiLogViewer):
+                w.raise_()
+                w.activateWindow()
                 return w
-            if isinstance(w, _QTabWidget):
-                first = w.widget(0)
-                if isinstance(first, MultiLogViewer):
-                    return first
-            return None
-
-        # Check the active tab first
-        current = self._viewer_tabs.currentWidget()
-        if current is not None and current.property("crush_viewer") == "multi_log":
-            result = _unwrap(current)
-            if result is not None:
-                return result
-
-        # Fall back to the most recently added multi_log tab
-        for i in range(self._viewer_tabs.count() - 1, -1, -1):
-            w = self._viewer_tabs.widget(i)
-            if w is not None and w.property("crush_viewer") == "multi_log":
-                result = _unwrap(w)
-                if result is not None:
-                    # Bring that tab to front so the user sees where the source lands
-                    self._viewer_tabs.setCurrentIndex(i)
-                    return result
         return None
 
     def _open_external_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:

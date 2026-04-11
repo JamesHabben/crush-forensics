@@ -1054,8 +1054,14 @@ FORMATS: list[dict[str, Any]] = [
             {
                 "offset": 0,
                 "value": b"\x53\x45\x47\x42",
-                "description": "SEGB Biome store header",
-            }
+                "description": "SEGB v2 Biome store header (magic at start)",
+            },
+            {
+                # SEGB v1: 56-byte header, magic in last 4 bytes at offset 52 (0x34)
+                "offset": 52,
+                "value": b"\x53\x45\x47\x42",
+                "description": "SEGB v1 Biome store header (magic at offset 0x34)",
+            },
         ],
         "extensions": [".segb", ".segb1", ".segb2", ".biome"],
         "links": [("3rd Party Parser Source code", "https://github.com/cclgroupltd/ccl-segb")],

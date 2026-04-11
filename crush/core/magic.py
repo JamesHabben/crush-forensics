@@ -15,6 +15,8 @@ BPLIST_MAGIC: Final = b"bplist"
 XML_PLIST_SIG: Final = b"<?xml"
 ABX_MAGIC: Final = b"ABX\x00"
 SEGB_MAGIC: Final = b"SEGB"
+# SEGB v1 header is 56 bytes; magic sits at the last 4 bytes (offset 52 = 0x34)
+_SEGB_V1_MAGIC_OFFSET: Final = 52
 
 
 def detect_fast_label(peek_bytes: bytes, path: str) -> str:
@@ -42,6 +44,9 @@ def detect_fast_label(peek_bytes: bytes, path: str) -> str:
     if peek_bytes.startswith(ABX_MAGIC):
         return "ABX"
     if peek_bytes.startswith(SEGB_MAGIC):
+        return "SEGB"
+    end = _SEGB_V1_MAGIC_OFFSET + len(SEGB_MAGIC)
+    if len(peek_bytes) >= end and peek_bytes[_SEGB_V1_MAGIC_OFFSET:end] == SEGB_MAGIC:
         return "SEGB"
     if _looks_like_plist_xml(peek_bytes, path):
         return "plist"

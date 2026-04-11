@@ -17,6 +17,8 @@ All notable changes to Crush will be documented in this file.
   - **Detail panel** — selected row shows the raw original line(s) and, below a separator, any extra fields (e.g. `subsystem`, `category`, `thread_id` from Apple Unified Log).
   - **Context menu** — copy message, copy raw line, or copy the full selection as TSV.
   - **Columns** — Source (colour-coded), Timestamp, Level, Process / Tag, PID, Message.
+  - **Folder log discovery** — right-clicking a folder in the VFS tree offers "Open Logs in Multi-Log Studio"; Crush recursively walks the subtree, probes each file (extension match or pattern scoring on the first 40 lines), and presents a checklist dialog so individual files can be deselected before loading; accepted files are fed into the multi-source pipeline one per background worker.
+  - **Standalone window** — Multi-Log Studio opens as an independent OS window (not embedded in the main tab area) sized to 80 % of the available screen geometry, capped at 1 400 × 850 px; the window is freely resizable because the toolbar uses flexible widths instead of fixed ones.
 
 ### Improvements
 
@@ -38,6 +40,11 @@ All notable changes to Crush will be documented in this file.
 ### Improvements
 
 - **Hex viewer context menu** — right-clicking a selection now offers *Copy Selected Hex* (space-separated hex bytes) and *Copy Selected ASCII* (printable characters only) in addition to the existing toolbar buttons and the standard *Copy All* entry.
+- **BLOB Inspector context menu** — the inline hex viewer inside the table viewer's BLOB Inspector now offers the same *Copy Selected Hex* and *Copy Selected ASCII* context menu actions as the full Hex Viewer; actions appear only when a selection exists and the view is in Hex or Auto mode.
+
+### Fixes
+
+- **SEGB v1 detection** — SEGB v1 files without a recognised extension (`.segb`, `.segb1`, `.biome`) were not auto-detected. SEGB v1 places its magic bytes (`SEGB`) at offset 0x34 (52) — the last four bytes of its 56-byte file header — rather than at offset 0 like SEGB v2. The file-type sniffer, parser auto-detection, and format database now all check both offset 0 (v2) and offset 0x34 (v1). The parser registry peek size was also increased from 32 to 64 bytes so that the magic at offset 52 is always within reach.
 - **Realm format identification** — magic-byte detection via the `T-DB` mnemonic at offset 16 and `.realm` extension fallback.
 - **Magic-byte sniffing** — increased VFS peek size to cover offset-based signatures beyond the first 16 bytes.
 

@@ -23,7 +23,7 @@ class ParserRegistry:
                 if callable(can_dir) and can_dir(node):
                     parsers.append(p)
             return parsers
-        peek = vfs.peek(node)
+        peek = vfs.peek(node, 64)
         return [p for p in cls._parsers if p.can_parse(node.path, peek)]
 
     @classmethod

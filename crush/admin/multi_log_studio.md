@@ -1,6 +1,6 @@
 # Multi-Log Studio — Planning Document
 
-**Status:** Phase 4 complete — Phase 5 planned  
+**Status:** Phase 5 complete  
 **Created:** 2026-04-10  
 **Components:** `crush/viewers/multi_log_viewer.py`, `crush/parsers/multi_log_parser.py`
 
@@ -189,7 +189,7 @@ Example profile:
   tab list in reverse; handles always-hex wrapper transparently
 - **Result:** Correlation of multiple log files in a shared timeline
 
-### Phase 5 — Folder Log Discovery
+### Phase 5 — Folder Log Discovery ✓ (2026-04-11)
 - Right-click a folder in the VFS tree → "Open Logs in Multi-Log Studio"
 - Recursively walk the VFS subtree; probe each file with a fast heuristic:
   - Known log extensions (`.log`, `.txt`, `.json`, `.jsonl`) **or**
@@ -200,6 +200,13 @@ Example profile:
   each in its own background worker (Phase 2)
 - **Dependencies:** Phase 2 (background loading) + Phase 3 (multi-source) must be complete
 - **Result:** Entire log folder analysable in one action
+- **Implementation:** `_probe_is_log()` / `_discover_log_nodes()` / `FolderDiscoveryDialog`
+  in `multi_log_viewer.py`; `"multi_log_folder"` mode wired in `fs_panel.py` +
+  `main_window.py`
+- **Architecture change (post-phase):** Multi-Log Studio moved from embedded tab to
+  standalone OS window (`Qt.Window` flag, parented to MainWindow). Sizing: 80% of
+  available screen geometry, capped at 1400×850. Toolbar uses `setMaximumWidth` /
+  `Expanding` policy instead of fixed widths so the window is freely resizable.
 
 ### Phase 4 — Custom Format Dialog ✓ (2026-04-10)
 - `CustomFormatProfile` dataclass + `ProfileManager` (save/load/delete JSON profiles

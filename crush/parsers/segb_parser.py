@@ -16,11 +16,20 @@ class SegbParser(AbstractParser):
     SUPPORTED_EXTENSIONS = [".segb", ".segb1", ".segb2", ".biome"]
     DISPLAY_NAME = "SEGB (v1/v2)"
 
+    # SEGB v1 header is 56 bytes; magic is at the last 4 bytes (offset 52 = 0x34)
+    _SEGB_V1_MAGIC_OFFSET = 52
+
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:
         if any(path.lower().endswith(ext) for ext in self.SUPPORTED_EXTENSIONS):
             return True
-        # SEGB v2 has magic at file start
-        return peek_bytes.startswith(b"SEGB")
+        # SEGB v2: magic at offset 0
+        if peek_bytes.startswith(b"SEGB"):
+            return True
+        # SEGB v1: magic at offset 52 (0x34), end of the 56-byte file header
+        end = self._SEGB_V1_MAGIC_OFFSET + 4
+        if len(peek_bytes) >= end and peek_bytes[self._SEGB_V1_MAGIC_OFFSET:end] == b"SEGB":
+            return True
+        return False
 
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         import logging
