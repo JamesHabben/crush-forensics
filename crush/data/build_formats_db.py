@@ -502,19 +502,30 @@ FORMATS: list[dict[str, Any]] = [
         "status": "reviewed",
     },
     {
-        "name": "Unified Log Archive (logarchive)",
+        "name": "Apple Unified Log Archive (logarchive)",
         "short_name": "logarchive",
         "category": "log",
         "forensic_relevance": (
-            "Packaged collection of tracev3 log files and UUID maps. "
-            "Primary log artifact from sysdiagnose captures."
+            "Packaged Apple Unified Log bundle containing tracev3 binary log files, "
+            "uuidtext string catalogs, and timesync boot-anchor records. "
+            "Produced by 'log collect' on macOS or extracted from a full iOS filesystem "
+            "acquisition. Provides a complete, timestamp-anchored log timeline with "
+            "resolved process names, subsystems, and categories. "
+            "Key forensic artifacts include app launches, crashes, network connections, "
+            "lock/unlock events, Siri queries, and user interactions. "
+            "Crush assembles the correct logarchive layout from iOS full-filesystem "
+            "acquisitions automatically (diagnostics/ + uuidtext/ siblings)."
         ),
         "platforms": ["iOS", "macOS"],
-        "parser_class": None,
+        "parser_class": "UnifiedLogConverter",
         "magic": [],
         "extensions": [".logarchive"],
-        "links": [("Source code", "https://github.com/mandiant/macos-UnifiedLogs")],
-        "status": "draft",
+        "links": [
+            ("Apple OSLog documentation", "https://developer.apple.com/documentation/oslog"),
+            ("Mandiant macos-UnifiedLogs (converter)", "https://github.com/mandiant/macos-UnifiedLogs"),
+            ("iOS Unified Logs research", "https://www.ios-unifiedlogs.com/"),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "LZFSE Compressed Data",
@@ -1156,21 +1167,37 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "tracev3",
         "category": "log",
         "forensic_relevance": (
-            "System and application logs since iOS 10 / macOS Sierra. "
-            "Rich timeline of app launches, crashes, network events, and user activity."
+            "Binary log file used by Apple's Unified Logging system since iOS 10 / macOS Sierra. "
+            "Replaces ASL and syslog as the primary system log store on all modern Apple platforms. "
+            "Each file covers one boot session and records subsystem, category, process, PID, "
+            "thread ID, activity ID, log level, and the event message with nanosecond timestamps. "
+            "Key forensic value: app launches and terminations, network connections, "
+            "lock/unlock and screen events, Siri activations, crash precursors, "
+            "userActionEvent entries (explicit user interactions), lossEvent entries "
+            "(indicates gaps in the log due to buffer overflow), and signpost intervals "
+            "(performance markers that reveal feature usage). "
+            "Private message_entries fields may contain data redacted in live-system logs "
+            "but preserved in the binary acquisition. "
+            "Full string resolution requires the uuidtext/ catalog and DSC (Dyld Shared Cache); "
+            "without them message text falls back to raw format-string fragments."
         ),
         "platforms": ["iOS", "macOS"],
-        "parser_class": None,
+        "parser_class": "UnifiedLogConverter",
         "magic": [
             {
                 "offset": 0,
                 "value": b"\x30\x74\x72\x33",
-                "description": "tracev3 magic",
+                "description": "tracev3 header magic ('0tr3')",
             }
         ],
         "extensions": [".tracev3"],
-        "links": [],
-        "status": "draft",
+        "links": [
+            ("Apple OSLog documentation", "https://developer.apple.com/documentation/oslog"),
+            ("Mandiant macos-UnifiedLogs (converter)", "https://github.com/mandiant/macos-UnifiedLogs"),
+            ("iOS Unified Logs research", "https://www.ios-unifiedlogs.com/"),
+            ("Sarah Edward's research (mac4n6)", "https://www.mac4n6.com/blog/2016/11/13/new-macos-sierra-log-format-and-how-to-access-it"),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "XML Document",

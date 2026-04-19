@@ -48,6 +48,12 @@ _ACK_BODY = """\
     <td class="lic">MIT</td>
     <td><a href="https://github.com/cclgroupltd/ccl-leveldb">CCL Solutions Group</a></td>
   </tr>
+  <tr class="alt">
+    <td><b>unifiedlog_iterator</b></td>
+    <td>Apple Unified Log (.tracev3 / .logarchive) converter — bundled in portable builds; when running from source, place the binary under <code>crush/bin/unifiedlog_iterator/</code></td>
+    <td class="lic">Apache 2.0</td>
+    <td><a href="https://github.com/mandiant/macos-UnifiedLogs">Mandiant</a></td>
+  </tr>
 </table>
 
 <h3>Python package dependencies</h3>

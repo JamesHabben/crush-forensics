@@ -171,14 +171,18 @@ A high-performance log viewer for large files and multi-source correlation. Open
 | Control | Action |
 |---|---|
 | Level buttons | Toggle ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN on or off |
-| **Search** field | Filter by message, process, PID, or any extra field (e.g. `subsystem`) |
+| **Search** field | Filter by message, process, PID, subsystem, or category |
 | **Format…** | Define or load a custom log format profile |
 
 **Source bar** — one colour-coded chip per loaded file. Click a chip to hide or show that source. Chips scroll horizontally if many sources are loaded.
 
 **Time-range filter** — appears after the first file with timestamps finishes loading. Check **Time range:** to enable the from/to pickers; **Reset** restores the full range. The **Display TZ** dropdown toggles between UTC and local time.
 
-**Detail panel** — selecting a row shows the raw original line(s). If the parser extracted extra fields (e.g. `subsystem`, `category`, `thread_id` from Apple Unified Log text exports), they appear below a separator.
+**Column filter bar** — appears below the toolbar when a column filter is active. Each active filter is shown as a chip (e.g. `subsystem = com.apple.security`). Click a chip's **×** to remove that filter, or **Clear all** to remove all at once.
+
+**Detail panel** — selecting a row shows the raw original line(s). If the parser extracted extra fields (e.g. `subsystem`, `category`, `event_type`, `euid`, `thread_id` from Apple Unified Log entries), they appear below a separator.
+
+**Apple Unified Log specifics** — `.tracev3` and `.logarchive` files are parsed via the bundled `unifiedlog_iterator` binary. Columns **Subsystem** and **Category** are populated directly. The detail panel also shows `event_type` (e.g. `logEvent`, `activityCreateEvent`, `lossEvent`), `euid`, `thread_id`, and `activity_id`. `lossEvent` entries — indicating missing log entries due to buffer overflow — are shown at WARN level with a descriptive message. `message_entries` of type Private or Sensitive are annotated `[private]` / `[sensitive]`; these may contain data that is redacted in live system logs but preserved in an offline acquisition.
 
 **Context menu** (right-click any row):
 
@@ -187,6 +191,7 @@ A high-performance log viewer for large files and multi-source correlation. Open
 | Copy message | Copies the parsed message text |
 | Copy raw line | Copies the original unparsed line(s) |
 | Copy selection (TSV) | Copies all selected rows as tab-separated values |
+| Filter: [Column] = [value] | Pins an exact-match filter for the clicked cell; filter chip appears in the column filter bar |
 
 **Custom format profiles**
 

@@ -12,7 +12,7 @@ Crush — Digital Forensic Analysis Workbench
 
 ## Features
 
-Open and navigate ZIP and TAR archives, folders, and individual files — without extracting anything to disk first.
+Open and navigate ZIP and TAR archives, folders, and individual files without extracting anything to disk first.
 
 **Built-in file format database** — Crush identifies forensically relevant formats by magic bytes and extension, and shows format name, platform, forensic relevance, and a link to the specification for every selected file, including formats without a dedicated viewer.
 
@@ -28,7 +28,7 @@ Supported viewers (more planned):
 - ABX (Android Binary XML) Viewer
 - Image Viewer
 - Media Viewer (audio/video)
-- Log Viewer (e.g. syslog - more planned)
+- Multi-Log Studio (multi-source log analysis with format auto-detection; Apple Unified Log / `.tracev3` / `.logarchive`, syslog, and more)
 - Protobuf Viewer (schema-less; optional schema decoding)
 - PDF text extraction (displays extracted text)
 - Realm Database Viewer (header, schema/class extraction, top-ref comparison, table/column data decoding)
@@ -76,7 +76,12 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-3. Run Crush
+3. Download the Unified Log parser binaries (required for Apple `.tracev3` / `.logarchive` support)
+```bash
+python scripts/download_unifiedlog_binaries.py
+```
+
+4. Run Crush
 ```bash
 crush
 ```
@@ -138,5 +143,7 @@ This project builds on the great work of the DFIR community. The following third
 - [ccl_bplist](https://github.com/cclgroupltd/ccl-bplist) — Binary plist module (BSD 3-Clause)
 - [ccl_segb](https://github.com/cclgroupltd/ccl_segb) — SEGB (Significant Energy Bearer) module (MIT)
 - [ccl_leveldb](https://github.com/cclgroupltd/ccl-leveldb) — LevelDB / Chrome LevelDB module (MIT)
+
+Apple Unified Log (`.tracev3` / `.logarchive`) parsing uses the [macos-UnifiedLogs](https://github.com/mandiant/macos-UnifiedLogs) `unifiedlog_iterator` binary by [Mandiant](https://github.com/mandiant) (Apache License 2.0). The binary is bundled automatically in portable builds. When running from source, run `scripts/download_unifiedlog_binaries.py` to download the platform binaries into `crush/bin/unifiedlog_iterator/` (they are git-ignored and never committed).
 
 Parts of this software were developed with assistance from [Claude AI / Claude Code](https://claude.ai) by Anthropic.

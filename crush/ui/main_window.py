@@ -714,10 +714,11 @@ class MainWindow(QMainWindow):
         independent top-level window in the OS task bar.
         """
         from crush.viewers.multi_log_viewer import MultiLogViewer
-        viewer = MultiLogViewer(node, vfs, parent=self)
-        viewer.setWindowFlags(viewer.windowFlags() | Qt.WindowType.Window)
+        viewer = MultiLogViewer(node, vfs, parent=None)
+        viewer.setWindowFlags(Qt.WindowType.Window)
         viewer.setWindowTitle(f"Multi-Log Studio — {node.name}")
         viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._log_dock.show()
         # Size to 80 % of the available screen area, capped at 1400 × 850.
         avail = self.screen().availableGeometry()
         w = min(1400, int(avail.width()  * 0.80))
@@ -1112,8 +1113,34 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Export log failed", str(exc))
 
+    _LOG_COLORS = {
+        "ERROR":    "#e74c3c",
+        "CRITICAL": "#c0392b",
+        "WARNING":  "#e67e22",
+        "DEBUG":    "#7f8c8d",
+    }
+
     def _append_log_line(self, line: str) -> None:
-        self._log_view.append(line)
+        import html as _html
+        from PySide6.QtGui import QTextCursor
+        color = None
+        for level, clr in self._LOG_COLORS.items():
+            if f" {level} " in line:
+                color = clr
+                break
+        escaped = _html.escape(line)
+        html_line = (
+            f"<span style='color:{color};font-family:monospace;'>{escaped}</span>"
+            if color else
+            f"<span style='font-family:monospace;'>{escaped}</span>"
+        )
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self._log_view.document().isEmpty():
+            cursor.insertBlock()
+        cursor.insertHtml(html_line)
+        self._log_view.setTextCursor(cursor)
+        self._log_view.ensureCursorVisible()
 
     def _set_theme_system(self) -> None:
         app = QApplication.instance()

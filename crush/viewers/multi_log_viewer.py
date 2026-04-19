@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 - now Marco Neumann (kalink0)
-"""Multi-Log Studio viewer — Phase 3: multiple sources, merged timeline.
+"""Multi-Log Studio viewer — SQLite-backed, scalable to millions of entries.
 
-Architecture:
+Architecture
+------------
   LogLoaderWorker (QThread)  — reads + parses a VFS node off the main thread,
                                emits results in chunks of CHUNK_SIZE entries.
                                Carries source_id in every signal.
-  MultiLogModel              — QAbstractTableModel backed by a plain Python list;
-                               accepts chunks via append_chunk() using
-                               beginInsertRows/endInsertRows (no full reset per chunk).
-                               Supports N simultaneous sources; each source has a
-                               colour and can be toggled on/off independently.
-  MultiLogViewer             — widget that owns N workers and one model; shows an
-                               indeterminate progress bar while any worker is loading.
-                               "Add Source" button / public add_source() method.
+  LogDatabase                — temporary SQLite file (crush/core/log_db.py);
+                               all entries from all sources are stored here.
+                               Owned by MultiLogViewer, shared with the model.
+  MultiLogModel              — QAbstractTableModel backed by LogDatabase;
+                               keeps only a small LRU page cache in RAM.
+                               Filters and sorts are translated to SQL.
+  MultiLogViewer             — widget that owns N workers, one LogDatabase,
+                               and one model.  Closes/deletes the DB on destroy.
 
 Entry dict schema (standard fields — all parsers must map to these):
     timestamp  : datetime | None   — UTC-normalised
@@ -22,8 +23,8 @@ Entry dict schema (standard fields — all parsers must map to these):
     pid        : str               — process ID (empty string if unavailable)
     message    : str               — primary message (may be multiline)
     raw        : str               — original line(s) for copy / export
-    source     : str               — filename of the source
-    source_id  : int               — internal source index
+    source     : str               — filename of the source (stamped by model)
+    source_id  : int               — internal source index (stamped by model)
     extra      : dict[str, str]    — parser-specific fields not covered above
                                      (e.g. subsystem, category, thread_id,
                                       activity_id, facility, sender for Apple UL)
@@ -33,8 +34,13 @@ from __future__ import annotations
 import html
 import json
 import re
+import sqlite3
+from collections import OrderedDict
 from datetime import datetime, timezone, tzinfo
-from typing import Any
+from typing import TYPE_CHECKING, Any, Generator
+
+if TYPE_CHECKING:
+    pass
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -73,7 +79,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import array as _array
+import logging
+import time
+
+from crush.core.log_db import FilterSpec, LogDatabase, _INSERT_SQL, _ts_to_unix, _unix_to_ts
+
 from crush.core.vfs import VFS, VFSNode
+
+_log = logging.getLogger("crush")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -108,9 +122,11 @@ _COL_TS   = 1
 _COL_LVL  = 2
 _COL_PROC = 3
 _COL_PID  = 4
-_COL_MSG  = 5
+_COL_SUB  = 5
+_COL_CAT  = 6
+_COL_MSG  = 7
 
-_HEADERS = ["Source", "Timestamp", "Level", "Process / Tag", "PID", "Message"]
+_HEADERS = ["Source", "Timestamp", "Level", "Process / Tag", "PID", "Subsystem", "Category", "Message"]
 
 # Custom data roles
 _ROLE_TS_DT    = Qt.ItemDataRole.UserRole + 1   # datetime | None
@@ -528,107 +544,308 @@ class DefineFormatDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class LogLoaderWorker(QThread):
-    """Parses a VFS node in a worker thread and emits entries in chunks.
+    """Parses a VFS node in a worker thread and writes entries directly to SQLite.
+
+    The worker opens its own DB connection (WAL mode, synchronous=OFF) and
+    inserts entries in batches without touching the main thread.  Only small
+    progress/status signals cross the thread boundary — no entry data is
+    passed via signals.
 
     Signals
     -------
-    chunk_ready(int, list[dict])     — (source_id, entries) for each CHUNK_SIZE batch.
-    load_finished(int, str, dict)    — (source_id, format_name, metadata) once done.
-    error(int, str)                  — (source_id, message) if parsing raises.
+    progress(int, int)           — (source_id, total_inserted) periodically during load.
+    load_finished(int, str, dict)— (source_id, format_name, metadata) when done.
+    error(int, str)              — (source_id, message) if parsing raises.
+    status_update(int, str)      — (source_id, status_text) for long binary conversions.
     """
 
-    chunk_ready:   Signal = Signal(int, list)
+    progress:      Signal = Signal(int, int)
     load_finished: Signal = Signal(int, str, dict)
     error:         Signal = Signal(int, str)
+    status_update: Signal = Signal(int, str)
 
-    CHUNK_SIZE = 5_000
+    CHUNK_SIZE    = 5_000
+    UL_CHUNK_SIZE = 50_000
 
     def __init__(
         self,
-        node: VFSNode,
-        vfs: VFS,
+        node:      VFSNode,
+        vfs:       VFS,
         source_id: int,
-        profile: Any = None,          # CustomFormatProfile | None
-        parent: QWidget | None = None,
+        db_path:   str,
+        profile:   Any = None,
+        parent:    QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._node         = node
-        self._vfs          = vfs
-        self._source_id    = source_id
-        self._profile      = profile
-        self._cancel_flag  = False
+        self._node        = node
+        self._vfs         = vfs
+        self._source_id   = source_id
+        self._db_path     = db_path
+        self._profile     = profile
+        self._cancel_flag = False
 
     def cancel(self) -> None:
-        """Request the worker to stop emitting after the current chunk."""
         self._cancel_flag = True
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _insert_entries(
+        self,
+        con: "sqlite3.Connection",
+        entries: list[dict[str, Any]],
+    ) -> None:
+        """Bulk-insert *entries* into the worker's own DB connection."""
+        rows = [
+            (
+                self._source_id,
+                _ts_to_unix(e.get("timestamp")),
+                e.get("level",   "UNKNOWN"),
+                e.get("process", ""),
+                e.get("pid",     ""),
+                e.get("message", ""),
+                e.get("raw",     ""),
+                json.dumps(e.get("extra") or {}),
+                (e.get("extra") or {}).get("subsystem", ""),
+                (e.get("extra") or {}).get("category", ""),
+            )
+            for e in entries
+        ]
+        con.executemany(_INSERT_SQL, rows)
+
+    def _stream_to_db(
+        self,
+        con: "sqlite3.Connection",
+        generator: "Generator[dict[str, Any], None, None]",
+        chunk_size: int,
+    ) -> int:
+        """Consume *generator*, insert in chunks, return total inserted."""
+        chunk: list[dict[str, Any]] = []
+        total = 0
+        for entry in generator:
+            if self._cancel_flag:
+                con.commit()
+                return total
+            chunk.append(entry)
+            total += 1
+            if len(chunk) >= chunk_size:
+                self._insert_entries(con, chunk)
+                con.commit()
+                con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                chunk = []
+                self.progress.emit(self._source_id, total)
+        if chunk:
+            self._insert_entries(con, chunk)
+            con.commit()
+            con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            self.progress.emit(self._source_id, total)
+        return total
+
+    # ------------------------------------------------------------------
+    # Thread entry point
+    # ------------------------------------------------------------------
 
     def run(self) -> None:
         self._cancel_flag = False
+        con = LogDatabase.open_worker_connection(self._db_path)
         try:
-            if self._profile is not None:
+            name_lower = self._node.name.lower()
+            is_unified = (
+                name_lower.endswith(".tracev3")
+                or name_lower.endswith(".logarchive")
+            )
+            from crush.parsers.unified_log_parser import is_ios_diagnostics_node
+            _is_ios_diag = self._node.is_dir and is_ios_diagnostics_node(self._node)
+
+            if _is_ios_diag:
+                from crush.parsers.unified_log_parser import UnifiedLogConverter
+                converter = UnifiedLogConverter()
+                self.status_update.emit(self._source_id, "Converting binary log — may take several minutes…")
+                gen = converter.stream_entries_from_diagnostics(self._node, self._vfs)
+                total = self._stream_to_db(con, gen, self.UL_CHUNK_SIZE)
+                if not self._cancel_flag:
+                    self.load_finished.emit(
+                        self._source_id,
+                        "Apple Unified Log (iOS acquisition)",
+                        {"Log format": "Apple Unified Log (iOS acquisition)", "Total entries": str(total)},
+                    )
+
+            elif is_unified:
+                from crush.parsers.unified_log_parser import UnifiedLogConverter
+                converter = UnifiedLogConverter()
+                self.status_update.emit(self._source_id, "Converting binary log — may take several minutes…")
+                gen = converter.stream_entries(self._node, self._vfs)
+                total = self._stream_to_db(con, gen, self.UL_CHUNK_SIZE)
+                if not self._cancel_flag:
+                    self.load_finished.emit(
+                        self._source_id,
+                        "Apple Unified Log (binary)",
+                        {"Log format": "Apple Unified Log (binary)", "Total entries": str(total)},
+                    )
+
+            elif self._profile is not None:
                 from crush.parsers.multi_log_parser import CustomFormatParser
                 parser: Any = CustomFormatParser(self._profile)
+                result = parser.parse(self._node, self._vfs)
+                entries: list[dict[str, Any]] = result.data  # type: ignore[assignment]
+                total = self._stream_to_db(con, iter(entries), self.CHUNK_SIZE)
+                if not self._cancel_flag:
+                    self.load_finished.emit(
+                        self._source_id,
+                        result.metadata.get("Log format", "Unknown"),
+                        result.metadata,
+                    )
+
             else:
                 from crush.parsers.log_parser import LogParser
                 parser = LogParser()
-            result = parser.parse(self._node, self._vfs)
-            entries: list[dict[str, Any]] = result.data  # type: ignore[assignment]
-            for i in range(0, len(entries), self.CHUNK_SIZE):
-                if self._cancel_flag:
-                    return
-                self.chunk_ready.emit(self._source_id, entries[i : i + self.CHUNK_SIZE])
-            if not self._cancel_flag:
-                self.load_finished.emit(
-                    self._source_id,
-                    result.metadata.get("Log format", "Unknown"),
-                    result.metadata,
-                )
+                result = parser.parse(self._node, self._vfs)
+                entries = result.data  # type: ignore[assignment]
+                total = self._stream_to_db(con, iter(entries), self.CHUNK_SIZE)
+                if not self._cancel_flag:
+                    self.load_finished.emit(
+                        self._source_id,
+                        result.metadata.get("Log format", "Unknown"),
+                        result.metadata,
+                    )
         except Exception as exc:  # noqa: BLE001
             self.error.emit(self._source_id, str(exc))
+        finally:
+            con.close()
 
 
 # ---------------------------------------------------------------------------
 # Virtual table model
 # ---------------------------------------------------------------------------
 
-class MultiLogModel(QAbstractTableModel):
-    """QAbstractTableModel backed directly by a Python list of entry dicts.
+# ---------------------------------------------------------------------------
+# Background sort worker
+# ---------------------------------------------------------------------------
 
-    Filtering is maintained as ``_visible`` — a list of indices into
-    ``_entries`` that pass all active filters, ordered by ``_sort_order``.
+class _SortWorker(QThread):
+    """Runs fetch_sorted_rowids() off the main thread.
 
-    During background loading entries are appended via ``append_chunk()``
-    using beginInsertRows / endInsertRows (no full reset per chunk).
-    After each source finishes loading ``finalize_sort()`` re-sorts everything.
-
-    Multiple sources are tracked in ``_sources``; each source can be toggled
-    on/off via ``set_source_visible()``.
-
-    See the module docstring for the full entry dict schema.
+    The generation counter lets the model discard results from superseded
+    sort requests (e.g. rapid column-header clicks).
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    sort_done: Signal = Signal(int, object)   # (generation, array.array)
+
+    def __init__(
+        self,
+        db_path:     str,
+        filter_spec: FilterSpec,
+        order_col:   str,
+        order_asc:   bool,
+        generation:  int,
+        parent:      "QWidget | None" = None,
+    ) -> None:
         super().__init__(parent)
-        self._entries: list[dict[str, Any]] = []
+        self._db_path     = db_path
+        self._filter_spec = filter_spec
+        self._order_col   = order_col
+        self._order_asc   = order_asc
+        self._generation  = generation
+
+    def run(self) -> None:
+        con = LogDatabase.open_worker_connection(self._db_path)
+        try:
+            direction = "ASC" if self._order_asc else "DESC"
+            where, params = self._filter_spec.where()
+            sql = (
+                f"SELECT rowid FROM entries {where} "
+                f"ORDER BY {self._order_col} {direction} NULLS LAST"
+            )
+            cur = con.execute(sql, params)
+            rowids = _array.array("q", (row[0] for row in cur))
+            self.sort_done.emit(self._generation, rowids)
+        finally:
+            con.close()
+
+
+# ---------------------------------------------------------------------------
+# Column filter metadata — columns that support right-click "Filter by value"
+# ---------------------------------------------------------------------------
+
+# Maps column index → (sql_column_name, display_label)
+_COL_FILTER_MAP: dict[int, tuple[str, str]] = {
+    _COL_LVL:  ("level",     "Level"),
+    _COL_PROC: ("process",   "Process"),
+    _COL_PID:  ("pid",       "PID"),
+    _COL_SUB:  ("subsystem", "Subsystem"),
+    _COL_CAT:  ("category",  "Category"),
+    _COL_MSG:  ("message",   "Message"),
+}
+
+# Page cache: how many rows per page, and how many pages to keep in RAM
+_PAGE_SIZE  = 500
+_PAGE_COUNT = 8   # max 8 × 500 = 4 000 rows in RAM
+
+# SQL column names used for ORDER BY (indexed on these columns)
+_SQL_SORT_COL: dict[int, str] = {
+    _COL_SRC:  "source_id",
+    _COL_TS:   "ts_unix",
+    _COL_LVL:  "level",
+    _COL_PROC: "process",
+    _COL_PID:  "pid",
+    _COL_SUB:  "subsystem",
+    _COL_CAT:  "category",
+    _COL_MSG:  "message",
+}
+
+
+class MultiLogModel(QAbstractTableModel):
+    """QAbstractTableModel backed by LogDatabase (SQLite).
+
+    Only a small LRU page cache is kept in RAM; all filtering and sorting
+    is delegated to SQL.  The model is suitable for tens of millions of
+    rows without significant memory overhead.
+
+    Lifecycle
+    ---------
+    The caller (MultiLogViewer) owns the LogDatabase instance and passes it
+    to the constructor.  The model does NOT close the database.
+    """
+
+    sort_started:  Signal = Signal()
+    sort_finished: Signal = Signal()
+
+    def __init__(self, db: LogDatabase, parent: "QWidget | None" = None) -> None:
+        super().__init__(parent)
+        self._db = db
         self._display_tz: tzinfo = timezone.utc
 
         # Source registry: source_id -> {name, color, visible}
         self._sources: dict[int, dict[str, Any]] = {}
         self._hidden_source_ids: set[int] = set()
 
-        # Sorting — default: ascending by timestamp (applied after load)
-        self._sort_col: int = _COL_TS
+        # Sorting
+        self._sort_col: int  = _COL_TS
         self._sort_asc: bool = True
-        # During loading _sort_order == natural append order
-        self._sort_order: list[int] = []
 
         # Filter state
-        self._allowed_levels: set[str] = set(_LEVELS)
+        self._allowed_levels: frozenset[str] = frozenset(_LEVELS)
         self._ts_from: datetime | None = None
         self._ts_to:   datetime | None = None
         self._text: str = ""
+        self._column_filters: dict[str, str] = {}   # sql_col → exact value
 
-        self._visible: list[int] = []
+        # Sorted rowid index for the current filter+sort — rebuilt on _invalidate().
+        # array.array('q') uses 8 bytes/entry; len() == visible row count.
+        self._rowid_index: _array.array = _array.array("q")
+        # Running total written by workers (for the count label during loading)
+        self._total_inserted: int = 0
+
+        # LRU page cache: page_num -> list of row tuples
+        self._page_cache: OrderedDict[int, list[tuple[Any, ...]]] = OrderedDict()
+
+        # Cache for source_id → source name (used in data())
+        self._source_names: dict[int, str] = {}
+
+        # Background sort state
+        self._sort_generation: int = 0
+        self._sort_worker: "_SortWorker | None" = None
 
     # ------------------------------------------------------------------
     # Source management
@@ -636,6 +853,7 @@ class MultiLogModel(QAbstractTableModel):
 
     def register_source(self, source_id: int, name: str, color: QColor) -> None:
         self._sources[source_id] = {"name": name, "color": color, "visible": True}
+        self._source_names[source_id] = name
 
     def set_source_visible(self, source_id: int, visible: bool) -> None:
         src = self._sources.get(source_id)
@@ -646,7 +864,7 @@ class MultiLogModel(QAbstractTableModel):
             self._hidden_source_ids.discard(source_id)
         else:
             self._hidden_source_ids.add(source_id)
-        self._rebuild_visible()
+        self._invalidate()
 
     def source_name(self, source_id: int) -> str:
         src = self._sources.get(source_id)
@@ -663,7 +881,7 @@ class MultiLogModel(QAbstractTableModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
             return 0
-        return len(self._visible)
+        return len(self._rowid_index)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -683,118 +901,126 @@ class MultiLogModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        entry = self._entries[self._visible[index.row()]]
+        row = index.row()
         col = index.column()
+
+        # Fetch the page that contains this row
+        page_num = row // _PAGE_SIZE
+        page = self._get_page(page_num)
+        if not page:
+            return None
+        page_row = row % _PAGE_SIZE
+        if page_row >= len(page):
+            return None
+
+        # Tuple layout: (rowid, source_id, ts_unix, level, process, pid, message, subsystem, category)
+        db_rowid, source_id, ts_unix, level, process, pid, message, subsystem, category = page[page_row]
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == _COL_SRC:
-                return entry.get("source", "")
+                return self._source_names.get(source_id, str(source_id))
             if col == _COL_TS:
-                return _fmt_ts(entry.get("timestamp"), self._display_tz)
+                return _fmt_ts(_unix_to_ts(ts_unix), self._display_tz)
             if col == _COL_LVL:
-                return entry.get("level", "UNKNOWN")
+                return level
             if col == _COL_PROC:
-                return entry.get("process", "")
+                return process
             if col == _COL_PID:
-                return entry.get("pid", "")
+                return pid
+            if col == _COL_SUB:
+                return subsystem
+            if col == _COL_CAT:
+                return category
             if col == _COL_MSG:
-                return _msg_display(entry.get("message", ""))
+                return _msg_display(message)
 
         if role == Qt.ItemDataRole.ForegroundRole:
             if col == _COL_LVL:
-                return _LEVEL_COLORS.get(entry.get("level", "UNKNOWN"), _LEVEL_COLORS["UNKNOWN"])
+                return _LEVEL_COLORS.get(level, _LEVEL_COLORS["UNKNOWN"])
             if col == _COL_SRC:
-                color = self.source_color(entry.get("source_id", -1))
+                color = self.source_color(source_id)
                 if color:
                     return color
 
         if role == Qt.ItemDataRole.ToolTipRole and col == _COL_MSG:
-            msg = entry.get("message", "")
-            return msg if "\n" in msg else None
+            return message if "\n" in message else None
 
         if role == _ROLE_TS_DT:
-            return entry.get("timestamp")
+            return _unix_to_ts(ts_unix)
         if role == _ROLE_LEVEL:
-            return entry.get("level", "UNKNOWN")
+            return level
         if role == _ROLE_RAW:
-            return entry.get("raw", "")
+            # Raw is only fetched on demand (not in the page query)
+            detail = self._db.fetch_row_detail(db_rowid)
+            return detail[0] if detail else ""
         if role == _ROLE_MSG_FULL:
-            return entry.get("message", "")
+            return message
+
+        # Store the db_rowid so the viewer can call fetch_row_detail()
+        if role == Qt.ItemDataRole.UserRole:
+            return db_rowid
 
         return None
 
     def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
-        asc = order == Qt.SortOrder.AscendingOrder
         self._sort_col = column
-        self._sort_asc = asc
-        self.beginResetModel()
-        self._sort_order = self._build_sort_order(column, asc)
-        self._visible = self._apply_filter(self._sort_order)
-        self.endResetModel()
+        self._sort_asc = order == Qt.SortOrder.AscendingOrder
+        self._invalidate()
 
     # ------------------------------------------------------------------
-    # Incremental loading (called from the main thread via queued signals)
+    # Incremental loading
     # ------------------------------------------------------------------
 
-    def append_chunk(self, source_id: int, entries: list[dict[str, Any]]) -> None:
-        """Append a chunk of entries from one source.
+    def on_progress(self, _source_id: int, total_inserted: int) -> None:
+        """Called when the worker reports progress (entries already in DB).
 
-        Stamps each entry with source_id and source name, then inserts using
-        beginInsertRows / endInsertRows so the view only repaints new rows.
-        A full sort is applied once per source via finalize_sort().
+        Only updates the running total for the count label — no model reset,
+        no index rebuild, no page cache flush.
         """
-        if not entries:
-            return
-        src_name = self.source_name(source_id)
-        for e in entries:
-            e["source_id"] = source_id
-            e["source"]    = src_name
-
-        start_idx = len(self._entries)
-        self._entries.extend(entries)
-        new_indices = list(range(start_idx, len(self._entries)))
-        self._sort_order.extend(new_indices)
-
-        new_visible = self._apply_filter(new_indices)
-        if new_visible:
-            first_row = len(self._visible)
-            last_row = first_row + len(new_visible) - 1
-            self.beginInsertRows(QModelIndex(), first_row, last_row)
-            self._visible.extend(new_visible)
-            self.endInsertRows()
+        self._total_inserted = total_inserted
 
     def finalize_sort(self) -> None:
-        """Apply the current sort across all loaded entries.
+        """Invalidate page cache and reset model view after a source finishes.
 
-        Called after each source finishes loading.
+        The worker has committed all its entries.  This triggers one model
+        reset so the view renders the full merged timeline.
         """
-        self.beginResetModel()
-        self._sort_order = self._build_sort_order(self._sort_col, self._sort_asc)
-        self._visible = self._apply_filter(self._sort_order)
-        self.endResetModel()
+        self._invalidate()
 
     # ------------------------------------------------------------------
     # Filter setters
     # ------------------------------------------------------------------
 
     def set_levels(self, levels: set[str]) -> None:
-        self._allowed_levels = levels
-        self._rebuild_visible()
+        self._allowed_levels = frozenset(levels)
+        self._invalidate()
 
     def set_time_range(self, from_dt: datetime | None, to_dt: datetime | None) -> None:
         self._ts_from = from_dt
         self._ts_to   = to_dt
-        self._rebuild_visible()
+        self._invalidate()
 
     def set_text(self, text: str) -> None:
         self._text = text.lower()
-        self._rebuild_visible()
+        self._invalidate()
+
+    def set_column_filter(self, col_name: str, value: str) -> None:
+        self._column_filters[col_name] = value
+        self._invalidate()
+
+    def clear_column_filter(self, col_name: str) -> None:
+        if self._column_filters.pop(col_name, None) is not None:
+            self._invalidate()
+
+    def active_column_filters(self) -> dict[str, str]:
+        return dict(self._column_filters)
 
     def set_display_tz(self, tz: tzinfo) -> None:
         self._display_tz = tz
-        if self._visible:
+        n = len(self._rowid_index)
+        if n:
             top    = self.index(0, _COL_TS)
-            bottom = self.index(len(self._visible) - 1, _COL_TS)
+            bottom = self.index(n - 1, _COL_TS)
             self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.DisplayRole])
 
     # ------------------------------------------------------------------
@@ -802,120 +1028,135 @@ class MultiLogModel(QAbstractTableModel):
     # ------------------------------------------------------------------
 
     def total_count(self) -> int:
-        return len(self._entries)
+        return self._total_inserted if self._total_inserted else self._db.count_all()
 
     def visible_count(self) -> int:
-        return len(self._visible)
+        return len(self._rowid_index)
 
     def entry_at(self, proxy_row: int) -> dict[str, Any]:
-        return self._entries[self._visible[proxy_row]]
+        """Return a synthetic entry dict for one visible row (used by raw panel / clipboard)."""
+        page_num = proxy_row // _PAGE_SIZE
+        page = self._get_page(page_num)
+        page_row = proxy_row % _PAGE_SIZE
+        if not page or page_row >= len(page):
+            return {}
+        db_rowid, source_id, ts_unix, level, process, pid, message, subsystem, category = page[page_row]
+        detail = self._db.fetch_row_detail(db_rowid)
+        raw   = detail[0] if detail else ""
+        extra = detail[1] if detail else {}
+        return {
+            "source_id": source_id,
+            "source":    self._source_names.get(source_id, ""),
+            "timestamp": _unix_to_ts(ts_unix),
+            "level":     level,
+            "process":   process,
+            "pid":       pid,
+            "subsystem": subsystem,
+            "category":  category,
+            "message":   message,
+            "raw":       raw,
+            "extra":     extra,
+        }
 
     def timestamp_range(self) -> tuple[datetime | None, datetime | None]:
-        timestamps = [e["timestamp"] for e in self._entries if e.get("timestamp") is not None]
-        if not timestamps:
-            return None, None
-        return min(timestamps), max(timestamps)
+        return self._db.timestamp_range(self._make_filter())
 
-    def replace_source_entries(
-        self,
-        source_id: int,
-        new_entries: list[dict[str, Any]],
-    ) -> None:
-        """Replace all entries from one source — used when reloading with a custom format.
+    def replace_source_entries(self, source_id: int) -> None:
+        """Delete all entries for *source_id* from the DB.
 
-        After this call the model contains entries from all *other* sources plus
-        ``new_entries`` (stamped with source_id / source name).  A full
-        ``finalize_sort()`` is expected to follow once the new worker finishes.
+        Called before a reload-worker starts; the worker writes new entries
+        directly into the DB itself.
         """
-        src_name = self.source_name(source_id)
-        # Remove old entries for this source
-        self._entries = [e for e in self._entries if e.get("source_id") != source_id]
-        # Stamp and append the new ones
-        for e in new_entries:
-            e["source_id"] = source_id
-            e["source"]    = src_name
-        self._entries.extend(new_entries)
-        # Reset to natural order; finalize_sort() will sort when the worker finishes
-        self.beginResetModel()
-        self._sort_order = list(range(len(self._entries)))
-        self._visible    = self._apply_filter(self._sort_order)
-        self.endResetModel()
+        self._db.delete_source(source_id)
+        self._invalidate()
 
     def preview_lines_for_source(self, source_id: int, max_lines: int = 20) -> list[str]:
-        """Return up to *max_lines* raw log lines for a given source.
-
-        Uses the ``raw`` field from already-loaded entries — no file re-read.
-        """
+        """Return up to *max_lines* raw log lines for *source_id* from the DB."""
+        raws = self._db.fetch_raw_lines_for_source(source_id, max_lines)
         lines: list[str] = []
-        for e in self._entries:
-            if e.get("source_id") == source_id:
-                raw = e.get("raw", "")
-                lines.extend(raw.split("\n"))
-                if len(lines) >= max_lines:
-                    break
+        for raw in raws:
+            lines.extend(raw.split("\n"))
+            if len(lines) >= max_lines:
+                break
         return lines[:max_lines]
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _build_sort_order(self, column: int, asc: bool) -> list[int]:
-        entries = self._entries
+    def _make_filter(self) -> FilterSpec:
+        return FilterSpec(
+            allowed_levels=    self._allowed_levels,
+            hidden_source_ids= frozenset(self._hidden_source_ids),
+            ts_from=           self._ts_from,
+            ts_to=             self._ts_to,
+            text=              self._text,
+            column_filters=    dict(self._column_filters),
+        )
 
-        def key(i: int) -> Any:
-            e = entries[i]
-            if column == _COL_TS:
-                dt = e.get("timestamp")
-                return (1, float("inf")) if dt is None else (0, dt.timestamp())
-            if column == _COL_LVL:
-                order = {"ERROR": 0, "WARN": 1, "INFO": 2, "DEBUG": 3, "TRACE": 4, "UNKNOWN": 5}
-                return order.get(e.get("level", "UNKNOWN"), 5)
-            if column == _COL_SRC:
-                return (e.get("source") or "").lower()
-            if column == _COL_PROC:
-                return (e.get("process") or "").lower()
-            if column == _COL_PID:
-                return (e.get("pid") or "").lower()
-            return (e.get("message") or "").lower()
+    def _make_filter_for_source(self, source_id: int) -> FilterSpec:
+        """Filter that shows only *source_id*, no other active filters."""
+        return FilterSpec(
+            allowed_levels=    frozenset(_LEVELS),
+            hidden_source_ids= frozenset(
+                sid for sid in self._sources if sid != source_id
+            ),
+            ts_from=None,
+            ts_to=None,
+            text="",
+        )
 
-        indices = list(range(len(entries)))
-        indices.sort(key=key, reverse=not asc)
-        return indices
+    def _invalidate(self) -> None:
+        """Rebuild the sorted rowid index off the main thread.
 
-    def _apply_filter(self, source: list[int]) -> list[int]:
-        allowed        = self._allowed_levels
-        hidden_sources = self._hidden_source_ids
-        ts_from        = self._ts_from
-        ts_to          = self._ts_to
-        text           = self._text
-        entries        = self._entries
-        result: list[int] = []
-        for i in source:
-            e = entries[i]
-            if e.get("level", "UNKNOWN") not in allowed:
-                continue
-            if hidden_sources and e.get("source_id") in hidden_sources:
-                continue
-            dt: datetime | None = e.get("timestamp")
-            if dt is not None:
-                if ts_from and dt < ts_from:
-                    continue
-                if ts_to and dt > ts_to:
-                    continue
-            if text:
-                extra_values = " ".join((e.get("extra") or {}).values()).lower()
-                if text not in (e.get("message") or "").lower() and \
-                   text not in (e.get("process") or "").lower() and \
-                   text not in (e.get("pid") or "").lower() and \
-                   text not in extra_values:
-                    continue
-            result.append(i)
-        return result
+        Increments the generation counter so any in-flight sort worker whose
+        result arrives late is silently discarded.  The page cache is cleared
+        immediately; the view resets only when the worker delivers results.
+        """
+        self._page_cache.clear()
+        self._sort_generation += 1
+        gen = self._sort_generation
+        order_col = _SQL_SORT_COL.get(self._sort_col, "ts_unix")
 
-    def _rebuild_visible(self) -> None:
+        worker = _SortWorker(
+            self._db.path,
+            self._make_filter(),
+            order_col,
+            self._sort_asc,
+            gen,
+            self,
+        )
+        worker.sort_done.connect(self._on_sort_done)
+        self._sort_worker = worker
+        self.sort_started.emit()
+        worker.start()
+
+    def _on_sort_done(self, generation: int, rowids: "_array.array[int]") -> None:
+        if generation != self._sort_generation:
+            return   # stale result from a superseded request — discard
+        self._rowid_index = rowids
+        self.sort_finished.emit()
         self.beginResetModel()
-        self._visible = self._apply_filter(self._sort_order)
         self.endResetModel()
+
+    def _get_page(self, page_num: int) -> list[tuple[Any, ...]]:
+        """Return page *page_num* from cache, fetching from DB on a miss.
+
+        Uses rowid-based lookup (O(1) per page) instead of OFFSET.
+        """
+        if page_num in self._page_cache:
+            self._page_cache.move_to_end(page_num)
+            return self._page_cache[page_num]
+
+        start = page_num * _PAGE_SIZE
+        end   = start + _PAGE_SIZE
+        page_rowids = self._rowid_index[start:end]
+        rows = self._db.fetch_by_rowids(page_rowids)
+        self._page_cache[page_num] = rows
+        self._page_cache.move_to_end(page_num)
+        if len(self._page_cache) > _PAGE_COUNT:
+            self._page_cache.popitem(last=False)
+        return rows
 
 
 # ---------------------------------------------------------------------------
@@ -940,14 +1181,43 @@ class MultiLogViewer(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._model              = MultiLogModel(self)
+        self._db                 = LogDatabase()
+        self._model              = MultiLogModel(self._db, self)
         self._display_tz: tzinfo = timezone.utc
         self._workers: dict[int, LogLoaderWorker] = {}
         self._source_chips: dict[int, QPushButton] = {}
         self._source_nodes: dict[int, tuple[VFSNode, VFS]] = {}
+        self._load_start_times: dict[int, float] = {}
         self._next_source_id     = 0
+
+        # Colour-cycling animation for the status label during binary conversion
+        self._status_anim_colors = [
+            "#e8a020",  # amber
+            "#e07030",  # orange
+            "#c040a0",  # magenta
+            "#4080e0",  # blue
+            "#20b080",  # teal
+            "#60c030",  # green
+        ]
+        self._status_anim_idx   = 0
+        self._status_anim_timer = QTimer(self)
+        self._status_anim_timer.setInterval(450)
+        self._status_anim_timer.timeout.connect(self._on_status_anim_tick)
+
         self._build_ui()
         self.add_source(node, vfs)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event: Any) -> None:
+        for w in self._workers.values():
+            if w.isRunning():
+                w.cancel()
+                w.wait()
+        self._db.close()
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # Public API
@@ -960,13 +1230,16 @@ class MultiLogViewer(QWidget):
         color = _SOURCE_COLORS[sid % len(_SOURCE_COLORS)]
 
         self._source_nodes[sid] = (node, vfs)
+        self._load_start_times[sid] = time.monotonic()
         self._model.register_source(sid, node.name, color)
         self._add_source_chip(sid, node.name, color)
+        _log.info("[Multi-Log] Loading: %s", node.name)
 
-        worker = LogLoaderWorker(node, vfs, sid, parent=self)
-        worker.chunk_ready.connect(self._on_chunk_ready)
+        worker = LogLoaderWorker(node, vfs, sid, self._db.path, parent=self)
+        worker.progress.connect(self._on_progress)
         worker.load_finished.connect(self._on_load_finished)
         worker.error.connect(self._on_error)
+        worker.status_update.connect(self._on_status_update)
         self._workers[sid] = worker
 
         self._progress.setVisible(True)
@@ -998,6 +1271,11 @@ class MultiLogViewer(QWidget):
         self._time_bar.setVisible(False)
         root.addWidget(self._time_bar)
 
+        # Column filter bar — shown when at least one column filter is active
+        self._col_filter_bar = self._build_col_filter_bar()
+        self._col_filter_bar.setVisible(False)
+        root.addWidget(self._col_filter_bar)
+
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         self._table = QTableView()
@@ -1006,7 +1284,7 @@ class MultiLogViewer(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.horizontalHeader().setStretchLastSection(False)
         self._table.horizontalHeader().setSectionResizeMode(
             _COL_MSG, QHeaderView.ResizeMode.Stretch
         )
@@ -1031,6 +1309,8 @@ class MultiLogViewer(QWidget):
 
         self._model.modelReset.connect(self._update_count)
         self._model.rowsInserted.connect(self._update_count)
+        self._model.sort_started.connect(self._on_sort_started)
+        self._model.sort_finished.connect(self._on_sort_finished)
 
     def _build_toolbar(self) -> QWidget:
         bar = QWidget()
@@ -1192,29 +1472,119 @@ class MultiLogViewer(QWidget):
         layout.addStretch()
         return bar
 
+    def _build_col_filter_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setFixedHeight(30)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(6)
+        layout.addWidget(QLabel("Active filters:"))
+        self._col_filter_chip_layout = QHBoxLayout()
+        self._col_filter_chip_layout.setSpacing(4)
+        layout.addLayout(self._col_filter_chip_layout)
+        clear_all_btn = QPushButton("Clear all")
+        clear_all_btn.setFixedHeight(22)
+        clear_all_btn.clicked.connect(self._clear_all_col_filters)
+        layout.addWidget(clear_all_btn)
+        layout.addStretch()
+        return bar
+
+    def _refresh_col_filter_bar(self) -> None:
+        # Remove existing chips
+        while self._col_filter_chip_layout.count():
+            item = self._col_filter_chip_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        filters = self._model.active_column_filters()
+        for col_name, value in filters.items():
+            label = f"{col_name} = {value!r}"
+            chip = QPushButton(f"✕  {label}")
+            chip.setFixedHeight(22)
+            chip.setToolTip(f"Remove filter: {label}")
+            chip.clicked.connect(
+                lambda _checked=False, c=col_name: self._remove_col_filter(c)
+            )
+            self._col_filter_chip_layout.addWidget(chip)
+
+        self._col_filter_bar.setVisible(bool(filters))
+
+    def _remove_col_filter(self, col_name: str) -> None:
+        self._model.clear_column_filter(col_name)
+        self._refresh_col_filter_bar()
+
+    def _clear_all_col_filters(self) -> None:
+        for col_name in list(self._model.active_column_filters()):
+            self._model.clear_column_filter(col_name)
+        self._refresh_col_filter_bar()
+
+    # ------------------------------------------------------------------
+    # Sort indicator handlers
+    # ------------------------------------------------------------------
+
+    def _on_sort_started(self) -> None:
+        if all(not w.isRunning() for w in self._workers.values()):
+            self._progress.setVisible(True)
+
+    def _on_sort_finished(self) -> None:
+        if all(not w.isRunning() for w in self._workers.values()):
+            self._progress.setVisible(False)
+        self._update_count()
+
     # ------------------------------------------------------------------
     # Worker signal handlers
     # ------------------------------------------------------------------
 
-    def _on_chunk_ready(self, source_id: int, entries: list[dict[str, Any]]) -> None:
-        self._model.append_chunk(source_id, entries)
+    def _on_progress(self, source_id: int, total_inserted: int) -> None:
+        self._stop_status_anim()
+        self._model.on_progress(source_id, total_inserted)
+        self._update_count()
 
-    def _on_load_finished(self, source_id: int, fmt: str, _metadata: dict[str, Any]) -> None:
+    def _on_status_update(self, source_id: int, text: str) -> None:
+        self._count_label.setText(text)
+        self._status_anim_idx = 0
+        if not self._status_anim_timer.isActive():
+            self._status_anim_timer.start()
+        src_name = self._model.source_name(source_id)
+        _log.info("[Multi-Log] %s — %s", src_name, text)
+
+    def _on_status_anim_tick(self) -> None:
+        color = self._status_anim_colors[
+            self._status_anim_idx % len(self._status_anim_colors)
+        ]
+        self._status_anim_idx += 1
+        self._count_label.setStyleSheet(
+            f"QLabel {{ color: {color}; font-weight: bold; }}"
+        )
+
+    def _stop_status_anim(self) -> None:
+        self._status_anim_timer.stop()
+        self._count_label.setStyleSheet("")
+
+    def _on_load_finished(self, source_id: int, fmt: str, metadata: dict[str, Any]) -> None:
+        self._stop_status_anim()
         self._model.finalize_sort()
         self._update_count()
+
+        elapsed = time.monotonic() - self._load_start_times.pop(source_id, time.monotonic())
+        src_name = self._model.source_name(source_id)
+        total = metadata.get("Total entries", str(self._model.total_count()))
+        _log.info(
+            "[Multi-Log] %s — %s entries loaded (%s) in %.1fs",
+            src_name, total, fmt, elapsed,
+        )
 
         # Resize fixed columns (idempotent; cheap after finalize_sort).
         # Cap source and process at 200 px — long subsystem/tag names or deep
         # file paths would otherwise push the table far beyond the window width.
-        _COL_CAPS = {_COL_SRC: 200, _COL_PROC: 200}
-        for col in (_COL_SRC, _COL_TS, _COL_LVL, _COL_PROC, _COL_PID):
+        _COL_CAPS = {_COL_SRC: 200, _COL_PROC: 200, _COL_SUB: 240, _COL_CAT: 160}
+        for col in (_COL_SRC, _COL_TS, _COL_LVL, _COL_PROC, _COL_PID, _COL_SUB, _COL_CAT):
             self._table.resizeColumnToContents(col)
             cap = _COL_CAPS.get(col)
             if cap and self._table.columnWidth(col) > cap:
                 self._table.setColumnWidth(col, cap)
 
         # Append source info to the format label
-        src_name = self._model.source_name(source_id)
         new_entry = f"{src_name}: {fmt}"
         existing = self._fmt_label.text()
         self._fmt_label.setText(new_entry if not existing else f"{existing}  |  {new_entry}")
@@ -1236,8 +1606,10 @@ class MultiLogViewer(QWidget):
             self._time_bar.setVisible(True)
 
     def _on_error(self, source_id: int, message: str) -> None:
+        self._stop_status_anim()
         src_name = self._model.source_name(source_id) or "?"
         self._fmt_label.setText(f"Error ({src_name}): {message}")
+        _log.error("[Multi-Log] Error loading %s: %s", src_name, message)
         if all(not w.isRunning() for w in self._workers.values()):
             self._progress.setVisible(False)
 
@@ -1281,12 +1653,12 @@ class MultiLogViewer(QWidget):
             old_worker.cancel()
             old_worker.wait()   # brief block — parse is typically fast
 
-        # Clear existing entries for this source
-        self._model.replace_source_entries(source_id, [])
+        # Clear existing entries for this source from the DB
+        self._model.replace_source_entries(source_id)
 
         # Launch a fresh worker with the custom profile
-        worker = LogLoaderWorker(node, vfs, source_id, profile=profile, parent=self)
-        worker.chunk_ready.connect(self._on_chunk_ready)
+        worker = LogLoaderWorker(node, vfs, source_id, self._db.path, profile=profile, parent=self)
+        worker.progress.connect(self._on_progress)
         worker.load_finished.connect(self._on_load_finished)
         worker.error.connect(self._on_error)
         self._workers[source_id] = worker
@@ -1387,13 +1759,34 @@ class MultiLogViewer(QWidget):
         index = self._table.indexAt(pos)
         if not index.isValid():
             return
+        row = index.row()
+        col = index.column()
+        entry = self._model.entry_at(row)
+
         menu = QMenu(self)
         copy_msg  = menu.addAction("Copy message")
         copy_raw  = menu.addAction("Copy raw line")
         copy_rows = menu.addAction("Copy selection (TSV)")
+
+        # Column filter action — only for filterable columns
+        filter_action = None
+        col_info = _COL_FILTER_MAP.get(col)
+        if col_info is not None:
+            sql_col, display_label = col_info
+            # Determine cell value from entry dict
+            _col_entry_keys: dict[str, str] = {
+                "level": "level", "process": "process", "pid": "pid",
+                "subsystem": "subsystem", "category": "category", "message": "message",
+            }
+            cell_val = entry.get(_col_entry_keys.get(sql_col, ""), "")
+            if cell_val:
+                menu.addSeparator()
+                filter_action = menu.addAction(
+                    f"Filter: {display_label} = {cell_val!r}"
+                )
+
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
-        row = index.row()
-        entry = self._model.entry_at(row)
+
         if action == copy_msg:
             QApplication.clipboard().setText(_msg_display(entry.get("message", "")))
         elif action == copy_raw:
@@ -1409,19 +1802,31 @@ class MultiLogViewer(QWidget):
                     e.get("level", ""),
                     e.get("process", ""),
                     e.get("pid", ""),
+                    e.get("subsystem", ""),
+                    e.get("category", ""),
                     _msg_display(e.get("message", "")),
                 ]))
             QApplication.clipboard().setText("\n".join(lines))
+        elif filter_action is not None and action == filter_action:
+            self._model.set_column_filter(sql_col, cell_val)
+            self._refresh_col_filter_bar()
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _update_count(self) -> None:
-        visible = self._model.visible_count()
         total   = self._model.total_count()
+        visible = self._model.visible_count()
+        loading = any(w.isRunning() for w in self._workers.values())
         if total == 0:
-            self._count_label.setText("")
+            if not loading:
+                self._count_label.setText("")
+            # else: status_update already set the label text
+        elif loading:
+            # visible is 0 during silent loading; show total so user sees progress
+            word = "entry" if total == 1 else "entries"
+            self._count_label.setText(f"Loading… {total:,} {word}")
         elif visible == total:
             word = "entry" if total == 1 else "entries"
             self._count_label.setText(f"{total:,} {word}")

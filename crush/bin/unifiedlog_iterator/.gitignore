@@ -1,0 +1,4 @@
+# Ignore all binaries — download via scripts/download_unifiedlog_binaries.py
+*
+!README.md
+!.gitignore

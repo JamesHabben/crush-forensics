@@ -96,6 +96,7 @@ Limitations
 ### Log Files (Explicit Only)
 - Open via context menu: **Open in Multi-Log Studio**.
 - Auto-detects JSON Lines, Android logcat, Syslog (RFC 3164), and generic timestamped/plain-text logs.
+- **Apple Unified Log** (`.tracev3` / `.logarchive`): parsed via the bundled Mandiant `unifiedlog_iterator` binary. Extracts timestamp, level, process, PID, subsystem, category, event type (`logEvent`, `activityCreateEvent`, `signpostEvent`, `lossEvent`, etc.), euid, and message entries. `lossEvent` entries (buffer overflow gaps) are flagged as WARN. Private/Sensitive `message_entries` are annotated `[private]` / `[sensitive]` — data that is redacted in live logs but may be present in offline acquisitions.
 - Multiple files can be loaded simultaneously into a shared, merged timeline.
 - Custom formats can be defined via a named-group regex and a `strptime` timestamp format; profiles are saved to `~/.config/crush/log_profiles/`.
 
@@ -103,6 +104,7 @@ Limitations
 - Not auto-detected by default; must be opened explicitly.
 - Timestamp parsing is heuristic for unrecognised formats; logcat logs do not include the year.
 - Year is assumed to be the current year for Syslog (RFC 3164).
+- Apple Unified Log parsing requires the platform `unifiedlog_iterator` binary (included in portable builds; run `scripts/download_unifiedlog_binaries.py` when running from source).
 
 ### Hex Fallback
 - Any file without a matching parser opens in the Hex Viewer.
@@ -162,18 +164,18 @@ Limitations
 - XML reconstruction is best-effort.
 
 ### Multi-Log Studio
-- Level toggles (ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN), free-text search (message, process, PID, and all extra fields), time-range filter with calendar pickers, and per-source visibility toggle.
+- Level toggles (ERROR / WARN / INFO / DEBUG / TRACE / UNKNOWN), free-text search (message, process, PID, subsystem, category), time-range filter with calendar pickers, and per-source visibility toggle.
 - Sources are colour-coded; each appears as a chip in the source bar that toggles the source on/off.
 - Background async loading: the tab opens immediately and rows stream in as they are parsed; files of any size are supported without blocking the UI.
+- Column sorting runs in a background thread — the UI stays responsive during sort; a progress bar appears while sorting large datasets.
 - Virtual model: no Qt item objects per cell — handles 200 k+ entries with low memory overhead.
 - Custom format profiles: define a named-group regex (groups `timestamp`, `level`, `process`, `pid`, `message`; extras go to a side panel), a `strptime` string, an optional line-start regex for multiline events, and a level translation map. Live preview highlights each group in a distinct colour. Profiles are saved as JSON and reloaded on next start.
-- Detail panel shows the raw original line(s) and any extra fields (e.g. `subsystem`, `category`, `thread_id` for Apple Unified Log entries).
-- Context menu: copy message, copy raw line, copy selection as TSV.
+- Detail panel shows the raw original line(s) and any extra fields (e.g. `subsystem`, `category`, `event_type`, `euid`, `thread_id` for Apple Unified Log entries).
+- Context menu: copy message, copy raw line, copy selection as TSV, filter by column value (pins an exact-match filter chip below the toolbar).
 
 Limitations
 - Time filtering only applies to entries with a parsed timestamp.
 - Multiline event grouping for custom formats requires an explicit line-start regex.
-- Apple Unified Log (`.logarchive` / `tracev3`) binary format is not yet parsed; plain-text exports from `log show` are supported.
 
 ### Protobuf Viewer
 - Schema-less decode in a tree view (field numbers, wire types, values).
@@ -184,7 +186,6 @@ Limitations
 
 ## Known Gaps (Planned)
 
-- Unified Logs
 - Extended EXIF/metadata viewer
 - PDF page rendering (not just text extraction)
 - Type/extension filters in the filesystem panel

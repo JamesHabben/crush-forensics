@@ -349,7 +349,17 @@ class FilesystemPanel(QWidget):
         open_logs_folder_action = None
         open_multi_log_action   = None
         add_multi_log_action    = None
+        open_ios_diag_action    = None
+        add_ios_diag_action     = None
+        _is_logarchive = node.name.lower().endswith(".logarchive")
+        _is_ios_diag = False
         if node.is_dir:
+            from crush.parsers.unified_log_parser import is_ios_diagnostics_node
+            _is_ios_diag = is_ios_diagnostics_node(node)
+        if _is_ios_diag:
+            open_ios_diag_action = menu.addAction("Open as Unified Log Archive")
+            add_ios_diag_action  = menu.addAction("Add to Multi-Log Studio as Unified Log Archive")
+        elif node.is_dir and not _is_logarchive:
             open_logs_folder_action = menu.addAction("Open Logs in Multi-Log Studio")
         else:
             open_multi_log_action = menu.addAction("Open in Multi-Log Studio")
@@ -374,6 +384,8 @@ class FilesystemPanel(QWidget):
             menu.addSeparator()
             close_source_action = menu.addAction("Close Source")
         action = menu.exec(global_pos)
+        if action is None:
+            return
         if action == open_action:
             self.open_requested.emit(node, vfs, "default")
         elif action == open_hex_action:
@@ -382,6 +394,10 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "text")
         elif action == open_logs_folder_action:
             self.open_requested.emit(node, vfs, "multi_log_folder")
+        elif action == open_ios_diag_action:
+            self.open_requested.emit(node, vfs, "multi_log")
+        elif action == add_ios_diag_action:
+            self.open_requested.emit(node, vfs, "multi_log_add")
         elif action == open_multi_log_action:
             self.open_requested.emit(node, vfs, "multi_log")
         elif action == add_multi_log_action:

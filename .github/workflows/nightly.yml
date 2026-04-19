@@ -10,6 +10,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UL_VERSION: "0.5.1"
 
 jobs:
   build:
@@ -63,6 +64,33 @@ jobs:
           python -m pip install .
           python -m pip install python-magic-bin
 
+      - name: Download unifiedlog_iterator binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ASSET="unifiedlog_iterator-v${UL_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          URL="https://github.com/mandiant/macos-UnifiedLogs/releases/download/v${UL_VERSION}/${ASSET}"
+          mkdir -p crush/bin/unifiedlog_iterator
+          mkdir -p /tmp/ul-extract
+          curl -fsSL "$URL" -o /tmp/ul.tar.gz
+          tar -xzf /tmp/ul.tar.gz -C /tmp/ul-extract
+          find /tmp/ul-extract -name 'unifiedlog_iterator' -type f \
+            | head -1 \
+            | xargs -I{} cp {} crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu
+          chmod +x crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu
+
+      - name: Download unifiedlog_iterator binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ASSET = "unifiedlog_iterator-v$env:UL_VERSION-x86_64-pc-windows-msvc.zip"
+          $URL   = "https://github.com/mandiant/macos-UnifiedLogs/releases/download/v$env:UL_VERSION/$ASSET"
+          New-Item -ItemType Directory -Force -Path crush\bin\unifiedlog_iterator | Out-Null
+          Invoke-WebRequest -Uri $URL -OutFile "$env:TEMP\ul.zip"
+          Expand-Archive -Path "$env:TEMP\ul.zip" -DestinationPath "$env:TEMP\ul-extract" -Force
+          Get-ChildItem "$env:TEMP\ul-extract" -Recurse -Filter "unifiedlog_iterator.exe" `
+            | Select-Object -First 1 `
+            | Copy-Item -Destination "crush\bin\unifiedlog_iterator\unifiedlog_iterator-x86_64-pc-windows-msvc.exe"
+
       - name: Build (PyInstaller) Linux
         if: runner.os == 'Linux'
         run: |
@@ -70,6 +98,7 @@ jobs:
             --collect-all PySide6 \
             --collect-all magic \
             --add-data "crush/data/formats.db:data" \
+            --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu:crush/bin/unifiedlog_iterator/" \
             crush/__main__.py
 
       - name: Build (PyInstaller) Windows
@@ -79,6 +108,7 @@ jobs:
             --collect-all PySide6 `
             --collect-all magic `
             --add-data "crush/data/formats.db;data" `
+            --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-pc-windows-msvc.exe;crush/bin/unifiedlog_iterator/" `
             crush/__main__.py
 
       - name: Package artifact (Linux)
