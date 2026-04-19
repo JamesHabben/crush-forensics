@@ -254,7 +254,7 @@ def _try_unified_log_ndjson(lines: list[str]) -> list[dict[str, Any]] | None:
     if not non_empty[0].strip().startswith("{"):
         return None
 
-    sample_objs: list[dict] = []
+    sample_objs: list[dict[str, Any]] = []
     for ln in non_empty[:_SAMPLE_LINES]:
         try:
             obj = json.loads(ln)

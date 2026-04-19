@@ -177,7 +177,7 @@ class TestEntryFromMandiantJson:
     def test_timestamp_parsed(self) -> None:
         entry = _entry_from_mandiant_json(self._base())
         assert isinstance(entry["timestamp"], datetime)
-        assert entry["timestamp"].year == 2024  # type: ignore[union-attr]
+        assert entry["timestamp"].year == 2024
 
     def test_event_type_in_extra(self) -> None:
         entry = _entry_from_mandiant_json(self._base())

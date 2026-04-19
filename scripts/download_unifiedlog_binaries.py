@@ -13,7 +13,6 @@ by UnifiedLogConverter._select_binary().
 from __future__ import annotations
 
 import hashlib
-import os
 import stat
 import sys
 import tarfile
