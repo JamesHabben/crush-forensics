@@ -4,12 +4,14 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+## [0.4.0] — 2026-04-19
+
 ### New Features
 
 - **Multi-Log Studio** — dedicated viewer for large and multi-source log analysis, replacing the old Log Viewer:
   - Load multiple log files simultaneously into a shared, merged timeline; each source is colour-coded and can be toggled on/off independently
   - Level toggles, free-text search (message, process, PID, subsystem, category), and time-range filter with calendar pickers
-  - **Apple Unified Log support** — `.tracev3` files and `.logarchive` bundles are parsed directly; extracts subsystem, category, event type, euid, and message entries; `lossEvent` gaps and Private/Sensitive entries are clearly annotated
+  - **Apple Unified Log support** — `.tra## [0.3.0] — 2026-04-03cev3` files and `.logarchive` bundles are parsed directly; extracts subsystem, category, event type, euid, and message entries; `lossEvent` gaps and Private/Sensitive entries are clearly annotated
   - **Column filters** — right-click any cell to pin an exact-match filter for that column; active filters shown as removable chips below the toolbar
   - **Custom format profiles** — define arbitrary log formats via a named-group regex with live preview; profiles saved and reloaded automatically
   - Background loading and sorting — the UI stays responsive at all times; a progress bar shows sort activity on large datasets
