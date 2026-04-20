@@ -40,6 +40,7 @@ sender      ← last path component of "senderImagePath"
 """
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -604,6 +605,104 @@ def _stream_mandiant_ndjson(path: Path) -> Generator[dict[str, Any], None, None]
                 }
 
 
+def _entry_from_mandiant_csv(row: dict[str, str]) -> dict[str, Any]:
+    """Map one CSV row (from DictReader) to a standard entry dict.
+
+    CSV columns produced by unifiedlog_iterator -f csv:
+    Timestamp, Event Type, Log Type, Subsystem, Thread ID, PID, EUID,
+    Library, Library UUID, Activity ID, Category, Process, Process UUID,
+    Message, Raw Message, Boot UUID, System Timezone Name
+    """
+    ts_str = row.get("Timestamp", "")
+    ts = _parse_ul_timestamp(ts_str) if ts_str else None
+    boot_relative = ts is not None and ts < _MIN_REAL_TS
+    if boot_relative:
+        ts = None
+
+    log_type = row.get("Log Type", "")
+    level = _MANDIANT_LEVEL_MAP.get(log_type.lower(), "UNKNOWN")
+
+    event_type = row.get("Event Type", "")
+
+    process_raw = row.get("Process", "")
+    process = _path_basename(process_raw) or process_raw
+
+    pid = row.get("PID", "")
+
+    message = row.get("Message", "")
+    raw_message = row.get("Raw Message", "")
+    if message == _UNKNOWN_MSG or not message:
+        if raw_message and raw_message != _UNKNOWN_MSG:
+            message = f"[partial] {raw_message}"
+        else:
+            message = ""
+
+    if event_type.lower() == "lossevent" and not message:
+        message = "[loss event — log entries missing due to buffer overflow]"
+        if level == "UNKNOWN":
+            level = "WARN"
+
+    extra: dict[str, str] = {}
+
+    if event_type:
+        extra["event_type"] = event_type
+    subsystem = row.get("Subsystem", "")
+    if subsystem:
+        extra["subsystem"] = subsystem
+    category = row.get("Category", "")
+    if category:
+        extra["category"] = category
+    euid = row.get("EUID", "")
+    if euid:
+        extra["euid"] = euid
+    thread_raw = row.get("Thread ID", "")
+    if thread_raw:
+        try:
+            extra["thread_id"] = hex(int(thread_raw))
+        except ValueError:
+            extra["thread_id"] = thread_raw
+    act_raw = row.get("Activity ID", "")
+    if act_raw:
+        try:
+            extra["activity_id"] = hex(int(act_raw))
+        except ValueError:
+            extra["activity_id"] = act_raw
+    library = row.get("Library", "")
+    if library:
+        extra["sender"] = _path_basename(library) or library
+    boot_uuid = row.get("Boot UUID", "")
+    if boot_uuid:
+        extra["boot_uuid"] = boot_uuid
+    tz_name = row.get("System Timezone Name", "")
+    if tz_name:
+        extra["timezone"] = tz_name
+
+    return {
+        "timestamp": ts,
+        "level":     level,
+        "process":   process,
+        "pid":       pid,
+        "message":   message,
+        "raw":       raw_message,
+        "extra":     extra,
+    }
+
+
+def _stream_mandiant_csv(path: Path) -> Generator[dict[str, Any], None, None]:
+    """Yield standard entry dicts from a Mandiant-format CSV output file."""
+    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            try:
+                yield _entry_from_mandiant_csv(row)
+            except Exception:
+                yield {
+                    "timestamp": None, "level": "UNKNOWN",
+                    "process": "", "pid": "", "message": str(row),
+                    "raw": str(row), "extra": {},
+                }
+
+
 # ---------------------------------------------------------------------------
 # iOS full filesystem acquisition support
 # ---------------------------------------------------------------------------
@@ -761,14 +860,14 @@ class UnifiedLogConverter:
             else:
                 mode = "single-file"
 
-            out_file = tmp_out / "output.jsonl"
+            out_file = tmp_out / "output.csv"
 
             # --- run converter ---
             _log.info("[UnifiedLog] Running: unifiedlog_iterator -m %s -i %s", mode, input_path)
             proc = subprocess.run(
-                [str(bin_path), "-m", mode, "-i", input_path, "-o", str(out_file)],
+                [str(bin_path), "-m", mode, "-i", input_path, "-o", str(out_file), "-f", "csv"],
                 capture_output=True,
-                timeout=600,
+                timeout=None,
             )
             stderr_raw = proc.stderr.decode("utf-8", errors="replace").strip()
             if stderr_raw:
@@ -792,7 +891,7 @@ class UnifiedLogConverter:
                     "The input may not be a valid logarchive or tracev3."
                 )
 
-            yield from _stream_mandiant_ndjson(out_file)
+            yield from _stream_mandiant_csv(out_file)
 
         finally:
             shutil.rmtree(tmp_in,  ignore_errors=True)
@@ -825,7 +924,7 @@ class UnifiedLogConverter:
             if sys.platform != "win32":
                 os.chmod(bin_path, 0o755)
 
-            out_file = tmp_out / "output.jsonl"
+            out_file = tmp_out / "output.csv"
 
             _log.info("[UnifiedLog] Running: unifiedlog_iterator -m log-archive -i %s", logarchive_path)
             proc = subprocess.run(
@@ -833,9 +932,10 @@ class UnifiedLogConverter:
                     str(bin_path), "-m", "log-archive",
                     "-i", str(logarchive_path),
                     "-o", str(out_file),
+                    "-f", "csv",
                 ],
                 capture_output=True,
-                timeout=600,
+                timeout=None,
             )
             stderr_raw = proc.stderr.decode("utf-8", errors="replace").strip()
             if stderr_raw:
@@ -867,7 +967,7 @@ class UnifiedLogConverter:
                     "The input may not be a valid logarchive."
                 )
 
-            yield from _stream_mandiant_ndjson(out_file)
+            yield from _stream_mandiant_csv(out_file)
 
         finally:
             shutil.rmtree(tmp_root, ignore_errors=True)

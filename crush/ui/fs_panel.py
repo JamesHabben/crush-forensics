@@ -3,8 +3,10 @@
 """Filesystem panel — left dock, shows the VFS tree."""
 from __future__ import annotations
 
+import concurrent.futures
 from collections import deque
 import logging
+import os
 import threading
 import time
 
@@ -78,7 +80,7 @@ class FilesystemPanel(QWidget):
         self._search_results_ready.connect(self._on_search_results_ready)
         self._prescan_activity.connect(self._on_prescan_activity)
         self._type_cache: dict[tuple[int, str], str] = {}
-        self._vfs_lock = threading.Lock()
+        self._prescan_workers: int = min(8, os.cpu_count() or 4)
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(150)
@@ -688,8 +690,7 @@ class FilesystemPanel(QWidget):
             return self._type_cache[cache_key]
         label = ""
         try:
-            with self._vfs_lock:
-                peek = vfs.peek(node, 2048)
+            peek = vfs.peek(node, 2048)
             label = detect_fast_label(peek, node.path)
             if not label:
                 try:
@@ -720,29 +721,69 @@ class FilesystemPanel(QWidget):
             self._activity_end(name)
 
     def _prescan_worker(self, vfs_list: list[VFS], gen: int) -> None:
-        """Walk all VFS nodes in background to warm the type cache."""
-        _logger.info("Type pre-scan started")
+        """Walk all VFS nodes in background to warm the type cache.
+
+        File nodes are collected first, then dispatched to a ThreadPoolExecutor
+        whose size is controlled by self._prescan_workers.  VFS implementations
+        are thread-safe (DirectoryVFS opens independent handles; ZipVFS uses
+        thread-local ZipFile handles; TarVFS serialises via a per-instance lock).
+        """
+        from crush.core.vfs import DirectoryVFS, FileVFS
+        # Archive VFS types (ZIP, tar) serialize on a lock anyway — extra threads
+        # only add overhead.  Use parallel workers only when every source is a
+        # plain directory or single-file VFS.
+        if all(isinstance(vfs, (DirectoryVFS, FileVFS)) for vfs in vfs_list):
+            n_workers = self._prescan_workers
+        else:
+            n_workers = 1
+        _logger.info("Type pre-scan started (workers=%d)", n_workers)
         self._prescan_activity.emit("Indexing types", True)
-        count = 0
         t0 = time.monotonic()
+
+        # Collect all file nodes up-front so we can split them evenly.
+        all_nodes: list[tuple[VFSNode, VFS]] = []
+        for vfs in vfs_list:
+            stack: deque[VFSNode] = deque([vfs.root()])
+            while stack:
+                node = stack.popleft()
+                if not node.is_dir:
+                    all_nodes.append((node, vfs))
+                stack.extend(node.children)
+
+        total = len(all_nodes)
+        _logger.info("Type pre-scan: %d files to index", total)
+
+        chunk_size = max(1, (total + n_workers - 1) // n_workers)
+        chunks = [all_nodes[i : i + chunk_size] for i in range(0, total, chunk_size)]
+
+        def _process_chunk(chunk: list[tuple[VFSNode, VFS]]) -> int:
+            processed = 0
+            for node, vfs in chunk:
+                if self._prescan_gen != gen:
+                    return processed
+                self._detect_type_label(node, vfs)
+                processed += 1
+            return processed
+
         try:
-            for vfs in vfs_list:
-                stack = deque([vfs.root()])
-                while stack:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+                futures = [executor.submit(_process_chunk, chunk) for chunk in chunks]
+                for future in concurrent.futures.as_completed(futures):
                     if self._prescan_gen != gen:
-                        _logger.info("Type pre-scan cancelled after %d files", count)
+                        for f in futures:
+                            f.cancel()
+                        _logger.info("Type pre-scan cancelled")
                         return
-                    node = stack.popleft()
-                    if not node.is_dir:
-                        self._detect_type_label(node, vfs)
-                        count += 1
-                        if count % 500 == 0:
-                            time.sleep(0.002)  # brief yield; GIL is released during I/O anyway
-                    stack.extend(node.children)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        _logger.debug("Pre-scan chunk error: %s", exc)
         finally:
             if self._prescan_gen == gen:
                 elapsed = time.monotonic() - t0
-                _logger.info("Type pre-scan complete: %d files indexed in %.1f s", count, elapsed)
+                _logger.info(
+                    "Type pre-scan complete: %d files indexed in %.1f s", total, elapsed
+                )
                 self._prescan_activity.emit("Indexing types", False)
 
     def _ensure_children_loaded(self, parent_item: QStandardItem, node: VFSNode, vfs: VFS) -> None:

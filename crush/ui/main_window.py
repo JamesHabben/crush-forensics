@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QInputDialog,
     QProgressDialog,
     QStatusBar,
     QTabBar,
@@ -242,6 +243,7 @@ class MainWindow(QMainWindow):
         self._setup_logging()
         self._apply_saved_theme()
         self._apply_saved_forensic_mode()
+        self._apply_saved_prescan_workers()
 
     # ------------------------------------------------------------------
     # Layout
@@ -402,6 +404,7 @@ class MainWindow(QMainWindow):
         self._forensic_mode_action.setToolTip("Hash every file on open and write hash to log")
         self._forensic_mode_action.toggled.connect(self._set_forensic_mode)
         tools_menu.addAction(self._forensic_mode_action)
+        tools_menu.addAction("Indexing Threads…", self._set_prescan_workers)
 
         help_menu = menu.addMenu("Help")
         help_menu.addAction("Format Reference…", self._show_format_reference)
@@ -1266,6 +1269,29 @@ class MainWindow(QMainWindow):
         enabled = self._settings.value("forensic_mode", False, type=bool)
         # setChecked triggers the toggled signal which calls _set_forensic_mode
         self._forensic_mode_action.setChecked(enabled)
+
+    def _apply_saved_prescan_workers(self) -> None:
+        import os as _os
+        default = min(8, _os.cpu_count() or 4)
+        workers = self._settings.value("prescan_workers", default, type=int)
+        self._fs_panel._prescan_workers = max(1, workers)
+
+    def _set_prescan_workers(self) -> None:
+        import os as _os
+        default = min(8, _os.cpu_count() or 4)
+        current = self._settings.value("prescan_workers", default, type=int)
+        value, ok = QInputDialog.getInt(
+            self,
+            "Indexing Threads",
+            f"Number of parallel threads for file type indexing\n(CPU cores: {_os.cpu_count() or '?'}):",
+            current,
+            1,
+            64,
+            1,
+        )
+        if ok:
+            self._settings.setValue("prescan_workers", value)
+            self._fs_panel._prescan_workers = value
 
     def _dark_palette(self) -> QPalette:
         pal = QPalette()

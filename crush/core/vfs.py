@@ -6,6 +6,7 @@ through a single interface so viewers never need to know the origin.
 from __future__ import annotations
 
 import tarfile
+import threading
 import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -131,11 +132,17 @@ class DirectoryVFS(VFS):
 
 
 class ZipVFS(VFS):
-    """VFS backed by a ZIP archive (iOS/Android full-fs extractions)."""
+    """VFS backed by a ZIP archive (iOS/Android full-fs extractions).
+
+    A single ZipFile handle is shared across threads and protected by
+    _zf_lock.  open() returns a BytesIO so callers never hold the lock
+    while processing file content.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self._zip_path = Path(path)
         self._zf = zipfile.ZipFile(self._zip_path, "r")
+        self._zf_lock = threading.Lock()
         self._zip_names: dict[str, str] = {}
         self._tree = self._build_tree()
         self._file_counts: dict[str, int] = {}
@@ -177,11 +184,17 @@ class ZipVFS(VFS):
     def root(self) -> VFSNode:
         return self._tree
 
+    def peek(self, node: VFSNode, n: int = 32) -> bytes:
+        with self._zf_lock:
+            with self._zf.open(self._zip_name(node)) as f:
+                return f.read(n)
+
     def read(self, node: VFSNode) -> bytes:
-        return self._zf.read(self._zip_name(node))
+        with self._zf_lock:
+            return self._zf.read(self._zip_name(node))
 
     def open(self, node: VFSNode) -> IO[bytes]:
-        return self._zf.open(self._zip_name(node))
+        return BytesIO(self.read(node))
 
     def _zip_name(self, node: VFSNode) -> str:
         return self._zip_names.get(node.path, node.path.lstrip("/"))
@@ -217,11 +230,16 @@ class ZipVFS(VFS):
 
 
 class TarVFS(VFS):
-    """VFS backed by a TAR archive (plain, gzip, bzip2, or xz compressed)."""
+    """VFS backed by a TAR archive (plain, gzip, bzip2, or xz compressed).
+
+    Compressed tar files cannot seek randomly, so reads are serialized with a
+    per-instance lock to allow safe concurrent peek() from multiple threads.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self._tar_path = Path(path)
         self._tf = tarfile.open(str(self._tar_path), "r:*")
+        self._tf_lock = threading.Lock()
         self._members: dict[str, tarfile.TarInfo] = {}
         self._tree = self._build_tree()
         self._file_counts: dict[str, int] = {}
@@ -268,10 +286,10 @@ class TarVFS(VFS):
         member = self._members.get(node.path)
         if member is None:
             raise FileNotFoundError(f"Not in TAR: {node.path}")
-        f = self._tf.extractfile(member)
-        if f is None:
-            raise OSError(f"Cannot extract (symlink or special file): {node.path}")
-        with f:
+        with self._tf_lock:
+            f = self._tf.extractfile(member)
+            if f is None:
+                raise OSError(f"Cannot extract (symlink or special file): {node.path}")
             return f.read()
 
     def open(self, node: VFSNode) -> IO[bytes]:
