@@ -4,6 +4,14 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+### Performance
+
+- **ZIP pre-scan** — file-type indexing now reads ZIP entries in physical storage order instead of alphabetical order, eliminating random seeks and significantly reducing scan time on large archives
+
+### Improvements
+
+- **Multi-Log Studio column filters** — added a persistent text-input row above the log table with one field per filterable column (Level, Process, PID, Subsystem, Category, Message); typing performs a live contains-match filter, complementing the existing right-click exact-value filter
+
 ## [0.4.1] — 2026-04-21
 
 ### Performance

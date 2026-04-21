@@ -829,7 +829,8 @@ class MultiLogModel(QAbstractTableModel):
         self._ts_from: datetime | None = None
         self._ts_to:   datetime | None = None
         self._text: str = ""
-        self._column_filters: dict[str, str] = {}   # sql_col → exact value
+        self._column_filters: dict[str, str] = {}       # sql_col → exact value (right-click)
+        self._column_text_filters: dict[str, str] = {}  # sql_col → contains text (input row)
 
         # Sorted rowid index for the current filter+sort — rebuilt on _invalidate().
         # array.array('q') uses 8 bytes/entry; len() == visible row count.
@@ -1015,6 +1016,13 @@ class MultiLogModel(QAbstractTableModel):
     def active_column_filters(self) -> dict[str, str]:
         return dict(self._column_filters)
 
+    def set_column_text_filter(self, col_name: str, text: str) -> None:
+        if text.strip():
+            self._column_text_filters[col_name] = text
+        else:
+            self._column_text_filters.pop(col_name, None)
+        self._invalidate()
+
     def set_display_tz(self, tz: tzinfo) -> None:
         self._display_tz = tz
         n = len(self._rowid_index)
@@ -1086,12 +1094,13 @@ class MultiLogModel(QAbstractTableModel):
 
     def _make_filter(self) -> FilterSpec:
         return FilterSpec(
-            allowed_levels=    self._allowed_levels,
-            hidden_source_ids= frozenset(self._hidden_source_ids),
-            ts_from=           self._ts_from,
-            ts_to=             self._ts_to,
-            text=              self._text,
-            column_filters=    dict(self._column_filters),
+            allowed_levels=      self._allowed_levels,
+            hidden_source_ids=   frozenset(self._hidden_source_ids),
+            ts_from=             self._ts_from,
+            ts_to=               self._ts_to,
+            text=                self._text,
+            column_filters=      dict(self._column_filters),
+            column_text_filters= dict(self._column_text_filters),
         )
 
     def _make_filter_for_source(self, source_id: int) -> FilterSpec:
@@ -1275,6 +1284,9 @@ class MultiLogViewer(QWidget):
         self._col_filter_bar = self._build_col_filter_bar()
         self._col_filter_bar.setVisible(False)
         root.addWidget(self._col_filter_bar)
+
+        # Column text filter row — always visible, one QLineEdit per filterable column
+        root.addWidget(self._build_col_text_filter_row())
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -1471,6 +1483,29 @@ class MultiLogViewer(QWidget):
 
         layout.addStretch()
         return bar
+
+    def _build_col_text_filter_row(self) -> QWidget:
+        """A thin row of QLineEdit inputs — one per filterable column — for contains-style filtering."""
+        row = QWidget()
+        row.setFixedHeight(28)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(4)
+        self._col_text_inputs: dict[str, QLineEdit] = {}
+        for _col_idx, (sql_col, label) in _COL_FILTER_MAP.items():
+            edit = QLineEdit()
+            edit.setPlaceholderText(label)
+            edit.setFixedHeight(22)
+            edit.setClearButtonEnabled(True)
+            edit.textChanged.connect(
+                lambda text, c=sql_col: self._on_col_text_filter_changed(c, text)
+            )
+            self._col_text_inputs[sql_col] = edit
+            layout.addWidget(edit)
+        return row
+
+    def _on_col_text_filter_changed(self, col: str, text: str) -> None:
+        self._model.set_column_text_filter(col, text)
 
     def _build_col_filter_bar(self) -> QWidget:
         bar = QWidget()

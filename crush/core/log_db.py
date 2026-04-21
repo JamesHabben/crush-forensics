@@ -47,6 +47,7 @@ class FilterSpec:
         "ts_to",
         "text",
         "column_filters",
+        "column_text_filters",
     )
 
     def __init__(
@@ -57,13 +58,15 @@ class FilterSpec:
         ts_to:   datetime | None,
         text:    str,
         column_filters: dict[str, str] | None = None,
+        column_text_filters: dict[str, str] | None = None,
     ) -> None:
-        self.allowed_levels    = allowed_levels
-        self.hidden_source_ids = hidden_source_ids
-        self.ts_from           = ts_from
-        self.ts_to             = ts_to
-        self.text              = text
-        self.column_filters    = column_filters or {}
+        self.allowed_levels      = allowed_levels
+        self.hidden_source_ids   = hidden_source_ids
+        self.ts_from             = ts_from
+        self.ts_to               = ts_to
+        self.text                = text
+        self.column_filters      = column_filters or {}
+        self.column_text_filters = column_text_filters or {}
 
     # ------------------------------------------------------------------
 
@@ -110,6 +113,12 @@ class FilterSpec:
             if col in _SAFE_COLS:
                 parts.append(f"{col} = ?")
                 params.append(val)
+
+        # Column-specific contains filters (from text input row)
+        for col, val in self.column_text_filters.items():
+            if col in _SAFE_COLS and val.strip():
+                parts.append(f"{col} LIKE ?")
+                params.append(f"%{val}%")
 
         if not parts:
             return ("", [])

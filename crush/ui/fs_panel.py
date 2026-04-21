@@ -728,7 +728,7 @@ class FilesystemPanel(QWidget):
         are thread-safe (DirectoryVFS opens independent handles; ZipVFS uses
         thread-local ZipFile handles; TarVFS serialises via a per-instance lock).
         """
-        from crush.core.vfs import DirectoryVFS, FileVFS
+        from crush.core.vfs import DirectoryVFS, FileVFS, ZipVFS
         # Archive VFS types (ZIP, tar) serialize on a lock anyway — extra threads
         # only add overhead.  Use parallel workers only when every source is a
         # plain directory or single-file VFS.
@@ -741,14 +741,18 @@ class FilesystemPanel(QWidget):
         t0 = time.monotonic()
 
         # Collect all file nodes up-front so we can split them evenly.
+        # For ZIP sources use storage order so reads are sequential (no random seeks).
         all_nodes: list[tuple[VFSNode, VFS]] = []
         for vfs in vfs_list:
-            stack: deque[VFSNode] = deque([vfs.root()])
-            while stack:
-                node = stack.popleft()
-                if not node.is_dir:
-                    all_nodes.append((node, vfs))
-                stack.extend(node.children)
+            if isinstance(vfs, ZipVFS):
+                all_nodes.extend((node, vfs) for node in vfs.storage_ordered_files())
+            else:
+                stack: deque[VFSNode] = deque([vfs.root()])
+                while stack:
+                    node = stack.popleft()
+                    if not node.is_dir:
+                        all_nodes.append((node, vfs))
+                    stack.extend(node.children)
 
         total = len(all_nodes)
         _logger.info("Type pre-scan: %d files to index", total)

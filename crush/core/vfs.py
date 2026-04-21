@@ -153,6 +153,7 @@ class ZipVFS(VFS):
     def _build_tree(self) -> VFSNode:
         root = VFSNode(name=self._zip_path.name, path="/", is_dir=True)
         nodes: dict[str, VFSNode] = {"/": root}
+        _offsets: dict[str, int] = {}  # virtual_path -> header_offset for storage-order prescan
 
         for info in sorted(self._zf.infolist(), key=lambda i: i.filename):
             parts = info.filename.rstrip("/").split("/")
@@ -176,13 +177,22 @@ class ZipVFS(VFS):
                     nodes[virtual_path] = node
                 if depth == len(parts) and not info.filename.endswith("/"):
                     self._zip_names[virtual_path] = info.filename
+                    _offsets[virtual_path] = info.header_offset
 
         for node in nodes.values():
             node.children.sort(key=lambda n: (not n.is_dir, n.name.lower()))
+
+        self._storage_ordered_nodes: list[VFSNode] = [
+            nodes[vp] for vp, _ in sorted(_offsets.items(), key=lambda x: x[1])
+        ]
         return root
 
     def root(self) -> VFSNode:
         return self._tree
+
+    def storage_ordered_files(self) -> list[VFSNode]:
+        """Return all file nodes sorted by their offset in the ZIP (sequential read order)."""
+        return self._storage_ordered_nodes
 
     def peek(self, node: VFSNode, n: int = 32) -> bytes:
         with self._zf_lock:
