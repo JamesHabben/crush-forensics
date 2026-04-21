@@ -4,17 +4,12 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+## [0.4.1] — 2026-04-21
+
 ### Performance
 
-- **File type indexing — parallel prescan for directory sources** — the background type-indexing prescan now uses a `ThreadPoolExecutor` for plain directory sources; the number of worker threads is configurable via `Tools → Indexing Threads…` and persisted across sessions (default: `min(8, cpu_count)`)
-- **File type indexing — ZIP/TAR peek optimisation** — `ZipVFS.peek()` now reads only the requested bytes via streaming decompression instead of decompressing the entire file first; eliminates a major regression for large ZIP acquisitions
-- **Apple Unified Log — CSV output** — the `unifiedlog_iterator` converter now runs with `-f csv`; CSV output is faster to generate and faster to parse than JSONL, reducing the Python-side ingestion time for large logarchives
-- **Apple Unified Log — no timeout** — removed the hard 600-second subprocess timeout; large logarchives (1 GB+) no longer abort mid-conversion
-
-### Fixes
-
-- **ZipVFS thread safety** — `ZipVFS` now uses a single `ZipFile` handle protected by a per-instance lock; the previous thread-local handle approach opened the central directory once per thread, causing 6× slowdowns on large archives
-- **Prescan threading — correct worker count for archive sources** — ZIP and TAR sources automatically use a single worker (disk I/O serialises anyway); parallel workers are only used for plain directory sources where independent file handles make concurrency beneficial
+- **Fiel tye indexing** - Multi-Thread support for directories. Minimized the necessary unpacking of files for ZIP/Tar.
+- **Apple Unified Log** — removed the hard 600-second subprocess timeout; large logarchives (1 GB+) no longer abort mid-conversion
 
 ## [0.4.0] — 2026-04-19
 
