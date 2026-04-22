@@ -244,9 +244,9 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 
 ---
 
-## Forensic Mode
+## Integrity Mode
 
-Forensic mode adds hashing and traceability to file access:
+Integrity mode adds hashing and traceability to file access:
 
 - When enabled, files opened or exported are hashed (SHA-256) and written to the log.
 - Opening a ZIP/TAR/file source hashes the entire source file and logs the result.

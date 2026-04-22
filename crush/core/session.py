@@ -23,7 +23,7 @@ class OpenArtifact:
 class Session:
     def __init__(self, name: str = "Untitled case") -> None:
         self.name = name
-        self.forensic_mode: bool = False
+        self.integrity_mode: bool = False
         self.sources: list[VFS] = []
         self.open_artifacts: list[OpenArtifact] = []
         self._db = sqlite3.connect(":memory:")

@@ -49,16 +49,16 @@ class _LoadSourceWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, session: Session, path: str, forensic: bool) -> None:
+    def __init__(self, session: Session, path: str, integrity: bool) -> None:
         super().__init__()
         self._session = session
         self._path = path
-        self._forensic = forensic
+        self._integrity = integrity
 
     def run(self) -> None:
         try:
             vfs = self._session.add_source(self._path)
-            if self._forensic:
+            if self._integrity:
                 self._log_source_hash()
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -82,7 +82,7 @@ class _LoadSourceWorker(QObject):
                 total += len(chunk)
         digest = hasher.hexdigest()
         logging.getLogger("crush").info(
-            "FORENSIC source sha256=%s  size=%d  path=%s", digest, total, path
+            "INTEGRITY source sha256=%s  size=%d  path=%s", digest, total, path
         )
 
 
@@ -150,12 +150,12 @@ class _ExportWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, vfs: VFS, node: VFSNode, dest_dir: str, forensic: bool) -> None:
+    def __init__(self, vfs: VFS, node: VFSNode, dest_dir: str, integrity: bool) -> None:
         super().__init__()
         self._vfs = vfs
         self._node = node
         self._dest_dir = Path(dest_dir)
-        self._forensic = forensic
+        self._integrity = integrity
         self._hash_lines: list[str] = []
         self._hash_base: Path | None = None
         self._logger = logging.getLogger(__name__)
@@ -186,7 +186,7 @@ class _ExportWorker(QObject):
                 self._export_file(child, child_target)
 
     def _export_file(self, node: VFSNode, target: Path) -> None:
-        if not self._forensic:
+        if not self._integrity:
             with self._vfs.open(node) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
             return
@@ -211,10 +211,10 @@ class _ExportWorker(QObject):
             except Exception:
                 rel_path = target.name
         self._hash_lines.append(f"{digest}  {total}  {rel_path}")
-        self._logger.info("FORENSIC export sha256=%s  size=%d  path=%s", digest, total, target)
+        self._logger.info("INTEGRITY export sha256=%s  size=%d  path=%s", digest, total, target)
 
     def _write_hashes_file(self, target_root: Path) -> None:
-        if not self._forensic or not self._hash_lines:
+        if not self._integrity or not self._hash_lines:
             return
         base = self._hash_base if self._hash_base is not None else target_root.parent
         hash_path = base / "crush-export-hashes.txt"
@@ -242,7 +242,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._setup_logging()
         self._apply_saved_theme()
-        self._apply_saved_forensic_mode()
+        self._apply_saved_integrity_mode()
         self._apply_saved_prescan_workers()
 
     # ------------------------------------------------------------------
@@ -340,30 +340,30 @@ class MainWindow(QMainWindow):
         self._spinner_timer.setInterval(100)
         self._spinner_timer.timeout.connect(self._on_spinner_tick)
 
-        self._forensic_label = _ClickableStatusLabel(" \u2696 FORENSIC ")
-        self._forensic_label.setStyleSheet(
+        self._integrity_label = _ClickableStatusLabel(" \u2696 INTEGRITY ")
+        self._integrity_label.setStyleSheet(
             "color: white; background-color: #c87000; font-weight: bold;"
             " padding: 1px 4px; border-radius: 3px;"
         )
-        self._forensic_label.setToolTip("Forensic mode active \u2014 files are hashed on open")
-        self._forensic_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._forensic_label.clicked.connect(self._toggle_forensic_mode)
-        self._forensic_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._forensic_label.customContextMenuRequested.connect(self._show_forensic_menu)
-        self._forensic_label.setVisible(False)
-        self._status.addPermanentWidget(self._forensic_label)
-        self._nonforensic_label = _ClickableStatusLabel(" NON-FORENSIC ")
-        self._nonforensic_label.setStyleSheet(
+        self._integrity_label.setToolTip("Integrity mode active \u2014 files are hashed on open")
+        self._integrity_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._integrity_label.clicked.connect(self._toggle_integrity_mode)
+        self._integrity_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._integrity_label.customContextMenuRequested.connect(self._show_integrity_menu)
+        self._integrity_label.setVisible(False)
+        self._status.addPermanentWidget(self._integrity_label)
+        self._no_integrity_label = _ClickableStatusLabel(" NO INTEGRITY ")
+        self._no_integrity_label.setStyleSheet(
             "color: white; background-color: #6b6b6b; font-weight: bold;"
             " padding: 1px 4px; border-radius: 3px;"
         )
-        self._nonforensic_label.setToolTip("Forensic mode is off")
-        self._nonforensic_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._nonforensic_label.clicked.connect(self._toggle_forensic_mode)
-        self._nonforensic_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._nonforensic_label.customContextMenuRequested.connect(self._show_forensic_menu)
-        self._nonforensic_label.setVisible(True)
-        self._status.addPermanentWidget(self._nonforensic_label)
+        self._no_integrity_label.setToolTip("Integrity mode is off")
+        self._no_integrity_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._no_integrity_label.clicked.connect(self._toggle_integrity_mode)
+        self._no_integrity_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._no_integrity_label.customContextMenuRequested.connect(self._show_integrity_menu)
+        self._no_integrity_label.setVisible(True)
+        self._status.addPermanentWidget(self._no_integrity_label)
 
         self._build_menus()
 
@@ -400,10 +400,10 @@ class MainWindow(QMainWindow):
         theme_menu.addAction("Light", self._set_theme_light)
         theme_menu.addAction("Dark", self._set_theme_dark)
         tools_menu.addSeparator()
-        self._forensic_mode_action = QAction("Forensic Mode", self, checkable=True)
-        self._forensic_mode_action.setToolTip("Hash every file on open and write hash to log")
-        self._forensic_mode_action.toggled.connect(self._set_forensic_mode)
-        tools_menu.addAction(self._forensic_mode_action)
+        self._integrity_mode_action = QAction("Integrity Mode", self, checkable=True)
+        self._integrity_mode_action.setToolTip("Hash every file on open and write hash to log")
+        self._integrity_mode_action.toggled.connect(self._set_integrity_mode)
+        tools_menu.addAction(self._integrity_mode_action)
         tools_menu.addAction("Indexing Threads…", self._set_prescan_workers)
 
         help_menu = menu.addMenu("Help")
@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
         self._progress.show()
 
         self._load_thread = QThread(self)
-        self._load_worker = _LoadSourceWorker(self.session, path, self.session.forensic_mode)
+        self._load_worker = _LoadSourceWorker(self.session, path, self.session.integrity_mode)
         self._load_worker.moveToThread(self._load_thread)
         self._load_thread.started.connect(self._load_worker.run)
         self._load_worker.finished.connect(self._on_load_finished)
@@ -561,7 +561,7 @@ class MainWindow(QMainWindow):
         self._export_progress.show()
 
         self._export_thread = QThread(self)
-        self._export_worker = _ExportWorker(vfs, node, dest_dir, self.session.forensic_mode)
+        self._export_worker = _ExportWorker(vfs, node, dest_dir, self.session.integrity_mode)
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
         self._export_worker.finished.connect(self._on_export_finished)
@@ -598,7 +598,7 @@ class MainWindow(QMainWindow):
 
     def _open_node(self, node: VFSNode, vfs: VFS) -> None:
         """Called when the user double-clicks a file in the FS panel."""
-        self._hash_node_if_forensic(node, vfs)
+        self._hash_node_if_integrity(node, vfs)
         import crush.parsers  # noqa: F401 — triggers parser registration
         from crush.core.registry import ParserRegistry
 
@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
 
     def _open_node_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
         if mode == "hex":
-            self._hash_node_if_forensic(node, vfs)
+            self._hash_node_if_integrity(node, vfs)
             from crush.parsers.base import ParseResult
             hex_bytes = self._read_hex_bytes(vfs, node)
             if hex_bytes is None:
@@ -633,7 +633,7 @@ class MainWindow(QMainWindow):
             self._props_panel.update_properties(node, result.metadata)
             return
         if mode == "text":
-            self._hash_node_if_forensic(node, vfs)
+            self._hash_node_if_integrity(node, vfs)
             from crush.parsers.base import ParseResult
             raw = vfs.read(node)
             try:
@@ -646,12 +646,12 @@ class MainWindow(QMainWindow):
             self._props_panel.update_properties(node, result.metadata)
             return
         if mode == "multi_log":
-            self._hash_node_if_forensic(node, vfs)
+            self._hash_node_if_integrity(node, vfs)
             self._open_multi_log_window(node, vfs)
             self._status.showMessage(f"{node.path}  [Multi-Log Studio — loading…]")
             return
         if mode == "multi_log_add":
-            self._hash_node_if_forensic(node, vfs)
+            self._hash_node_if_integrity(node, vfs)
             viewer = self._find_multi_log_viewer()
             if viewer is not None:
                 viewer.add_source(node, vfs)
@@ -692,7 +692,7 @@ class MainWindow(QMainWindow):
             )
             return
         if mode == "protobuf":
-            self._hash_node_if_forensic(node, vfs)
+            self._hash_node_if_integrity(node, vfs)
             from crush.parsers.protobuf_parser import ProtobufParser
             parser = ProtobufParser()
             try:
@@ -1158,9 +1158,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_logger"):
             self._logger.info("Always show hex tab: %s", enabled)
 
-    def _forensic_mode_description(self) -> str:
+    def _integrity_mode_description(self) -> str:
         return (
-            "Forensic mode does the following:\n"
+            "Integrity mode does the following:\n"
             "- Records SHA-256 hashes when files are opened or exported.\n"
             "- Hashes ZIP/TAR/file sources on open (folders are not hashed).\n"
             "- Writes those hashes to the log.\n"
@@ -1168,43 +1168,43 @@ class MainWindow(QMainWindow):
             "- You can turn it off for faster opening of large ZIP/TAR sources and faster browsing."
         )
 
-    def _show_forensic_menu(self, pos: object) -> None:
+    def _show_integrity_menu(self, pos: object) -> None:
         sender = self.sender()
         if sender is None or not hasattr(sender, "mapToGlobal"):
             return
         menu = QMenu(self)
-        toggle_action = menu.addAction("Toggle Forensic Mode")
-        info_action = menu.addAction("What is Forensic Mode?")
+        toggle_action = menu.addAction("Toggle Integrity Mode")
+        info_action = menu.addAction("What is Integrity Mode?")
         action = menu.exec(sender.mapToGlobal(pos))  # type: ignore[arg-type]
         if action == toggle_action:
-            self._toggle_forensic_mode()
+            self._toggle_integrity_mode()
         elif action == info_action:
-            QMessageBox.information(self, "Forensic Mode", self._forensic_mode_description())
+            QMessageBox.information(self, "Integrity Mode", self._integrity_mode_description())
 
-    def _toggle_forensic_mode(self) -> None:
-        self._forensic_mode_action.setChecked(not self._forensic_mode_action.isChecked())
+    def _toggle_integrity_mode(self) -> None:
+        self._integrity_mode_action.setChecked(not self._integrity_mode_action.isChecked())
 
-    def _set_forensic_mode(self, enabled: bool) -> None:
-        self.session.forensic_mode = enabled
-        self._forensic_label.setVisible(enabled)
-        self._nonforensic_label.setVisible(not enabled)
-        self._settings.setValue("forensic_mode", enabled)
+    def _set_integrity_mode(self, enabled: bool) -> None:
+        self.session.integrity_mode = enabled
+        self._integrity_label.setVisible(enabled)
+        self._no_integrity_label.setVisible(not enabled)
+        self._settings.setValue("integrity_mode", enabled)
         state = "enabled" if enabled else "disabled"
         if hasattr(self, "_logger"):
-            self._logger.info("Forensic mode %s", state)
+            self._logger.info("Integrity mode %s", state)
 
-    def _hash_node_if_forensic(self, node: VFSNode, vfs: VFS) -> None:
-        if not self.session.forensic_mode or node.is_dir:
+    def _hash_node_if_integrity(self, node: VFSNode, vfs: VFS) -> None:
+        if not self.session.integrity_mode or node.is_dir:
             return
         import hashlib
         try:
             data = vfs.read(node)
             digest = hashlib.sha256(data).hexdigest()
             self._logger.info(
-                "FORENSIC sha256=%s  size=%d  path=%s", digest, len(data), node.path
+                "INTEGRITY sha256=%s  size=%d  path=%s", digest, len(data), node.path
             )
         except Exception as exc:
-            self._logger.warning("FORENSIC hash failed for %s: %s", node.path, exc)
+            self._logger.warning("INTEGRITY hash failed for %s: %s", node.path, exc)
 
     def _read_hex_bytes(self, vfs: VFS, node: VFSNode) -> bytes | None:
         max_bytes = 1024 * 256
@@ -1265,10 +1265,10 @@ class MainWindow(QMainWindow):
         else:
             self._set_theme_light()
 
-    def _apply_saved_forensic_mode(self) -> None:
-        enabled = self._settings.value("forensic_mode", False, type=bool)
-        # setChecked triggers the toggled signal which calls _set_forensic_mode
-        self._forensic_mode_action.setChecked(enabled)
+    def _apply_saved_integrity_mode(self) -> None:
+        enabled = self._settings.value("integrity_mode", False, type=bool)
+        # setChecked triggers the toggled signal which calls _set_integrity_mode
+        self._integrity_mode_action.setChecked(enabled)
 
     def _apply_saved_prescan_workers(self) -> None:
         import os as _os
