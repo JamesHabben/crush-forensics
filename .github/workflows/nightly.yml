@@ -91,9 +91,10 @@ jobs:
           ASSET="unifiedlog_iterator-v${UL_VERSION}-aarch64-apple-darwin.tar.gz"
           URL="https://github.com/mandiant/macos-UnifiedLogs/releases/download/v${UL_VERSION}/${ASSET}"
           mkdir -p crush/bin/unifiedlog_iterator
+          mkdir -p /tmp/ul-extract
           curl -fsSL "$URL" -o /tmp/ul.tar.gz
-          tar -xzf /tmp/ul.tar.gz -C /tmp
-          find /tmp -name 'unifiedlog_iterator' -type f \
+          tar -xzf /tmp/ul.tar.gz -C /tmp/ul-extract
+          find /tmp/ul-extract -name 'unifiedlog_iterator' -type f \
             | head -1 \
             | xargs -I{} cp {} crush/bin/unifiedlog_iterator/unifiedlog_iterator-aarch64-apple-darwin
           chmod +x crush/bin/unifiedlog_iterator/unifiedlog_iterator-aarch64-apple-darwin
