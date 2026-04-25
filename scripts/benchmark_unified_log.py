@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 - now Marco Neumann (kalink0)
-"""Benchmark the current single-process unified log conversion.
-
-Run against a real logarchive or iOS FFS diagnostics directory before and
-after implementing parallel conversion to get a meaningful comparison.
+"""Benchmark unified log conversion — single-process vs parallel.
 
 Usage:
-    # Standalone .logarchive
-    python scripts/benchmark_unified_log.py /path/to/foo.logarchive
+    # Baseline (single process)
+    python scripts/benchmark_unified_log.py /path/to/diagnostics --workers 1
 
-    # iOS full filesystem — point at the diagnostics/ directory
-    python scripts/benchmark_unified_log.py /path/to/ffs/private/var/db/diagnostics
+    # Parallel (auto-detect CPU count)
+    python scripts/benchmark_unified_log.py /path/to/diagnostics
+
+    # Parallel with explicit worker count
+    python scripts/benchmark_unified_log.py /path/to/diagnostics --workers 4
 
 Output example:
-    Mode       : logarchive
-    Path       : /path/to/foo.logarchive
+    Mode       : iOS FFS diagnostics
+    Path       : /path/to/diagnostics
     Size       : 1.24 GB
     Tracev3    : 47 files in Persist/
+    Workers    : 8
     Entries    : 3,842,100
-    Duration   : 612.4 s
-    Throughput : 6,274 entries/s
+    Duration   : 89.3 s
+    Throughput : 43,023 entries/s
 """
 from __future__ import annotations
 
@@ -49,11 +50,19 @@ def _count_tracev3(path: Path) -> int:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
+    import argparse
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("path", help="Path to .logarchive or iOS diagnostics directory")
+    ap.add_argument(
+        "--workers", type=int, default=None, metavar="N",
+        help="Parallel workers (default: cpu_count; use 1 for single-process baseline)",
+    )
+    args = ap.parse_args()
 
-    target = Path(sys.argv[1]).expanduser().resolve()
+    target = Path(args.path).expanduser().resolve()
     if not target.exists():
         print(f"Error: {target} does not exist")
         sys.exit(1)
@@ -71,7 +80,6 @@ def main() -> None:
 
     vfs = DirectoryVFS(target.parent)
 
-    # Locate the target node in the VFS
     node = None
     for child in vfs.root().children:
         if child.name == target.name:
@@ -81,28 +89,41 @@ def main() -> None:
         print(f"Error: could not locate {target.name} in VFS")
         sys.exit(1)
 
+    import os
     converter = UnifiedLogConverter()
+
+    physical_cores = max(1, (os.cpu_count() or 1) // 2)
 
     if is_logarchive:
         size = _dir_size(target)
         tracev3 = _count_tracev3(target)
+        effective_workers = args.workers if args.workers is not None else physical_cores
+        effective_workers = min(effective_workers, tracev3) if tracev3 else 1
+        workers_label = str(effective_workers) + (" (baseline)" if effective_workers == 1 else " (parallel)")
         print("\nMode       : logarchive")
         print(f"Path       : {target}")
         print(f"Size       : {_fmt_bytes(size)}")
         print(f"Tracev3    : {tracev3} files in Persist/")
+        print(f"Workers    : {workers_label}")
         print("Running conversion … (this may take several minutes)\n")
         t0 = time.perf_counter()
-        entry_count = sum(1 for _ in converter.stream_entries(node, vfs))
+        entry_count = sum(1 for _ in converter.stream_entries(node, vfs, n_workers=args.workers))
     elif is_ios_diagnostics_node(node):
         size = _dir_size(target)
         tracev3 = _count_tracev3(target)
+        effective_workers = args.workers if args.workers is not None else physical_cores
+        effective_workers = min(effective_workers, tracev3) if tracev3 else 1
+        workers_label = str(effective_workers) + (" (baseline)" if effective_workers == 1 else " (parallel)")
         print("\nMode       : iOS FFS diagnostics")
         print(f"Path       : {target}")
         print(f"Size       : {_fmt_bytes(size)}")
         print(f"Tracev3    : {tracev3} files in Persist/")
+        print(f"Workers    : {workers_label}")
         print("Running conversion … (this may take several minutes)\n")
         t0 = time.perf_counter()
-        entry_count = sum(1 for _ in converter.stream_entries_from_diagnostics(node, vfs))
+        entry_count = sum(
+            1 for _ in converter.stream_entries_from_diagnostics(node, vfs, n_workers=args.workers)
+        )
     else:
         print(
             f"Error: {target.name} is neither a .logarchive nor a recognised "

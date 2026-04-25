@@ -40,13 +40,13 @@ sender      ← last path component of "senderImagePath"
 """
 from __future__ import annotations
 
+import concurrent.futures
 import csv
 import json
 import logging
 import os
 import platform
 import re
-
 import shutil
 import subprocess
 import sys
@@ -142,6 +142,7 @@ def _parse_ul_timestamp(s: str) -> datetime | None:
     if s.endswith("Z"):
         s = s[:-1] + "+0000"
     s = re.sub(r"(\.\d{6})\d+", r"\1", s)          # ns → µs
+    s = re.sub(r"\s+([+-]\d)", r"\1", s)             # space before tz: "... .µs +0000" → "...+0000"
     s = re.sub(r"([+-]\d{2}):(\d{2})$", r"\1\2", s)  # +HH:MM → +HHMM
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f%z",
@@ -156,6 +157,7 @@ def _parse_ul_timestamp(s: str) -> datetime | None:
             return dt
         except ValueError:
             continue
+    _log.debug("[UnifiedLog] Unrecognised timestamp format: %r", s)
     return None
 
 
@@ -690,7 +692,7 @@ def _entry_from_mandiant_csv(row: dict[str, str]) -> dict[str, Any]:
 
 def _stream_mandiant_csv(path: Path) -> Generator[dict[str, Any], None, None]:
     """Yield standard entry dicts from a Mandiant-format CSV output file."""
-    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+    with open(path, encoding="utf-8-sig", errors="replace", newline="") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
             try:
@@ -780,6 +782,27 @@ def build_logarchive_from_acquisition(
     return tmp_root
 
 
+def _log_stderr(stderr_bytes: bytes) -> None:
+    """Log warnings/errors from unifiedlog_iterator stderr (deduplicated)."""
+    raw = stderr_bytes.decode("utf-8", errors="replace").strip()
+    if not raw:
+        return
+    lines = [_ANSI_RE.sub("", ln) for ln in raw.splitlines()]
+    warn_count = sum(1 for ln in lines if "[WARN]" in ln)
+    err_count  = sum(1 for ln in lines if "[ERROR]" in ln)
+    if warn_count or err_count:
+        _log.info("[UnifiedLog] converter: %d warnings, %d errors", warn_count, err_count)
+    seen: set[str] = set()
+    for ln in lines:
+        ln = ln.strip()
+        key = ln[20:] if len(ln) > 20 else ln
+        if key not in seen and ("[WARN]" in ln or "[ERROR]" in ln):
+            _log.info("[UnifiedLog] %s", ln)
+            seen.add(key)
+            if len(seen) >= 5:
+                break
+
+
 class UnifiedLogConverter:
     """Convert binary ``.tracev3`` / ``.logarchive`` to standard entry dicts.
 
@@ -791,25 +814,53 @@ class UnifiedLogConverter:
     """
 
     def __init__(self) -> None:
-        self._proc: "subprocess.Popen[bytes] | None" = None
+        self._procs: list["subprocess.Popen[bytes]"] = []
         self._cancelled = False
 
     def cancel(self) -> None:
-        """Signal cancellation and kill the running subprocess if any."""
+        """Signal cancellation and kill all running subprocesses."""
         self._cancelled = True
-        if self._proc is not None:
+        for proc in list(self._procs):
             try:
-                self._proc.kill()
+                proc.kill()
             except OSError:
                 pass
 
     def _run_binary(self, cmd: list[str]) -> tuple[int, bytes]:
-        """Run cmd, return (returncode, stderr_bytes). Supports cancel()."""
-        self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        _, stderr_bytes = self._proc.communicate()
-        returncode = self._proc.returncode
-        self._proc = None
-        return returncode, stderr_bytes
+        """Run one command, return (returncode, stderr_bytes). Supports cancel()."""
+        proc: subprocess.Popen[bytes] = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+        )
+        self._procs.append(proc)
+        try:
+            _, stderr_bytes = proc.communicate()
+        finally:
+            try:
+                self._procs.remove(proc)
+            except ValueError:
+                pass
+        return proc.returncode, stderr_bytes
+
+    def _run_binaries_parallel(self, cmds: list[list[str]]) -> list[tuple[int, bytes]]:
+        """Launch all *cmds* concurrently and return (returncode, stderr) per cmd."""
+        procs: list[subprocess.Popen[bytes]] = []
+        for cmd in cmds:
+            if self._cancelled:
+                break
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            procs.append(proc)
+            self._procs = procs  # update after each launch so cancel() sees them
+
+        def _wait(p: "subprocess.Popen[bytes]") -> tuple[int, bytes]:
+            _, stderr = p.communicate()
+            return p.returncode, stderr
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(procs)) as ex:
+                results = list(ex.map(_wait, procs))
+        finally:
+            self._procs = []
+        return results
 
     def _select_binary(self) -> Path:
         """Return the path to the platform-appropriate binary.
@@ -840,15 +891,174 @@ class UnifiedLogConverter:
             )
         return path
 
+    def _stream_logarchive_from_path(
+        self,
+        bin_path: Path,
+        logarchive_path: Path,
+        tmp_root: Path,
+        n_workers: int | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Yield entries from an already-extracted logarchive directory.
+
+        Splits ``Persist/*.tracev3`` across *n_workers* parallel processes
+        (default: ``os.cpu_count()``).  Falls back to a single process when
+        there is only one tracev3 file or *n_workers* is 1.
+        """
+        persist_dir = logarchive_path / "Persist"
+        tracev3_files = sorted(persist_dir.glob("*.tracev3")) if persist_dir.is_dir() else []
+
+        # Diagnostic: log what directories are present in the logarchive
+        present = [d.name for d in logarchive_path.iterdir() if d.is_dir()] if logarchive_path.is_dir() else []
+        ts_dir = logarchive_path / "timesync"
+        ts_file_count = len(list(ts_dir.iterdir())) if ts_dir.is_dir() else 0
+        _log.info(
+            "[UnifiedLog] logarchive dirs present: %s  (%d tracev3 files, %d timesync files)",
+            present, len(tracev3_files), ts_file_count,
+        )
+        if "timesync" not in present:
+            _log.warning(
+                "[UnifiedLog] timesync/ NOT present in extracted logarchive at %s — "
+                "unifiedlog_iterator will output boot-relative timestamps (shown as '—'). "
+                "Check that the acquisition includes /private/var/db/diagnostics/timesync/",
+                logarchive_path,
+            )
+        elif ts_file_count == 0:
+            _log.warning(
+                "[UnifiedLog] timesync/ is empty — "
+                "unifiedlog_iterator will output boot-relative timestamps (shown as '—'). "
+                "The acquisition may not have captured /private/var/db/diagnostics/timesync/*",
+            )
+
+        # Default to physical cores — hyperthreading gives little benefit for
+        # I/O-bound binary parsing and causes uuidtext read contention.
+        cpu = os.cpu_count() or 1
+        physical = max(1, cpu // 2)
+        workers = min(
+            len(tracev3_files) if tracev3_files else 1,
+            n_workers if n_workers is not None else physical,
+        )
+
+        if workers <= 1 or len(tracev3_files) <= 1:
+            out_file = tmp_root / "output.csv"
+            _log.info("[UnifiedLog] Single process: -m log-archive -i %s", logarchive_path)
+            returncode, stderr_bytes = self._run_binary(
+                [str(bin_path), "-m", "log-archive",
+                 "-i", str(logarchive_path), "-o", str(out_file), "-f", "csv"]
+            )
+            if self._cancelled:
+                return
+            _log_stderr(stderr_bytes)
+            if returncode != 0:
+                raise RuntimeError(
+                    f"unifiedlog_iterator exited with code {returncode}:\n"
+                    + stderr_bytes.decode("utf-8", errors="replace").strip()
+                )
+            if not out_file.exists():
+                raise RuntimeError("unifiedlog_iterator produced no output file.")
+            yield from _stream_mandiant_csv(out_file)
+            return
+
+        # Greedy size-based assignment: largest files first, always assign to
+        # the chunk with the smallest current total — minimises the longest chunk.
+        files_by_size = sorted(tracev3_files, key=lambda f: f.stat().st_size, reverse=True)
+        chunk_bytes: list[int] = [0] * workers
+        chunk_files: list[list[Path]] = [[] for _ in range(workers)]
+        for f in files_by_size:
+            smallest = min(range(workers), key=lambda i: chunk_bytes[i])
+            chunk_files[smallest].append(f)
+            chunk_bytes[smallest] += f.stat().st_size
+        chunks = [c for c in chunk_files if c]
+        _log.info("[UnifiedLog] Parallel: %d workers, %d tracev3 files", len(chunks), len(tracev3_files))
+
+        shared_dirs = ["Special", "timesync", "uuidtext"]
+        out_files: list[Path] = []
+        cmds: list[list[str]] = []
+
+        for i, chunk in enumerate(chunks):
+            mini = tmp_root / f"chunk_{i}"
+            mini_persist = mini / "Persist"
+            mini_persist.mkdir(parents=True)
+
+            for tv in chunk:
+                dst = mini_persist / tv.name
+                try:
+                    os.link(tv, dst)
+                except OSError:
+                    shutil.copy2(tv, dst)
+
+            for d in shared_dirs:
+                src = logarchive_path / d
+                if src.exists():
+                    dst_dir = mini / d
+                    if d == "uuidtext" and sys.platform != "win32":
+                        # uuidtext can be several GB — symlink to avoid duplication
+                        os.symlink(src, dst_dir)
+                    else:
+                        # timesync and Special are small; some binary builds do not
+                        # follow symlinks for these dirs, so copy them instead
+                        shutil.copytree(src, dst_dir, dirs_exist_ok=True)
+
+            out_file = tmp_root / f"output_{i}.csv"
+            out_files.append(out_file)
+            cmds.append([
+                str(bin_path), "-m", "log-archive",
+                "-i", str(mini), "-o", str(out_file), "-f", "csv",
+            ])
+
+        # Launch all processes upfront so they run concurrently.
+        procs: list[subprocess.Popen[bytes]] = []
+        for cmd in cmds:
+            if self._cancelled:
+                break
+            proc: subprocess.Popen[bytes] = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
+            procs.append(proc)
+        self._procs = procs
+
+        # Stream entries into the DB as each process finishes — no need to wait
+        # for all chunks before yielding. SQLite sorts on query so insertion
+        # order does not need to match timestamp order.
+        futures: dict[concurrent.futures.Future[tuple[bytes, int]], tuple[int, Path]] = {}
+        failed = 0
+        yielded_any = False
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(procs)) as ex:
+            for idx, (proc, out_file) in enumerate(zip(procs, out_files)):
+                def _wait(p: subprocess.Popen[bytes] = proc) -> tuple[bytes, int]:
+                    _, stderr = p.communicate()
+                    return stderr, p.returncode
+                futures[ex.submit(_wait)] = (idx, out_file)
+
+            for future in concurrent.futures.as_completed(futures):
+                if self._cancelled:
+                    break
+                idx, out_file = futures[future]
+                stderr_bytes, rc = future.result()
+                _log_stderr(stderr_bytes)
+                if rc != 0:
+                    failed += 1
+                    _log.warning("[UnifiedLog] chunk %d exited with code %d", idx, rc)
+                elif out_file.exists():
+                    yield from _stream_mandiant_csv(out_file)
+                    yielded_any = True
+
+        self._procs = []
+        if not yielded_any and not self._cancelled:
+            raise RuntimeError(f"All {len(cmds)} unifiedlog_iterator processes failed.")
+        if failed:
+            _log.warning("[UnifiedLog] %d/%d chunks failed — results may be incomplete", failed, len(cmds))
+
     def stream_entries(
         self,
         node: "VFSNode",
         vfs: "VFS",
+        n_workers: int | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Extract *node* to a temp path, run the converter, yield entry dicts.
 
         Works for both ``.logarchive`` directories and individual ``.tracev3``
-        files.  All temporary data is cleaned up in a ``finally`` block.
+        files.  Logarchive directories are processed with *n_workers* parallel
+        subprocesses (default: ``os.cpu_count()``).
 
         Raises
         ------
@@ -856,140 +1066,75 @@ class UnifiedLogConverter:
             If the binary is missing or the conversion subprocess fails.
         """
         bin_path = self._select_binary()
+        if sys.platform != "win32":
+            os.chmod(bin_path, 0o755)
 
-        tmp_in  = Path(tempfile.mkdtemp(prefix="crush-ul-in-"))
-        tmp_out = Path(tempfile.mkdtemp(prefix="crush-ul-out-"))
+        tmp_in = Path(tempfile.mkdtemp(prefix="crush-ul-in-"))
         try:
-            # --- extract input ---
-            if node.is_dir or node.name.lower().endswith(".logarchive"):
+            is_archive = node.is_dir or node.name.lower().endswith(".logarchive")
+
+            if is_archive:
                 dest = tmp_in / node.name
                 _export_dir_to_real_fs(node, vfs, dest)
-                input_path = str(dest)
+                yield from self._stream_logarchive_from_path(bin_path, dest, tmp_in, n_workers)
             else:
+                # Single .tracev3 file — no parallelism possible
                 dest = tmp_in / node.name
                 dest.write_bytes(vfs.read(node))
-                input_path = str(dest)
-
-            # make binary executable on POSIX
-            if sys.platform != "win32":
-                os.chmod(bin_path, 0o755)
-
-            # v0.5.1+ requires --mode; single .tracev3 → single-file,
-            # .logarchive directory → log-archive.
-            if node.is_dir or node.name.lower().endswith(".logarchive"):
-                mode = "log-archive"
-            else:
-                mode = "single-file"
-
-            out_file = tmp_out / "output.csv"
-
-            # --- run converter ---
-            _log.info("[UnifiedLog] Running: unifiedlog_iterator -m %s -i %s", mode, input_path)
-            returncode, stderr_bytes = self._run_binary(
-                [str(bin_path), "-m", mode, "-i", input_path, "-o", str(out_file), "-f", "csv"]
-            )
-            if self._cancelled:
-                return
-            stderr_raw = stderr_bytes.decode("utf-8", errors="replace").strip()
-            if stderr_raw:
-                stderr_lines = [_ANSI_RE.sub("", ln) for ln in stderr_raw.splitlines()]
-                warn_count = sum(1 for ln in stderr_lines if "[WARN]" in ln)
-                err_count  = sum(1 for ln in stderr_lines if "[ERROR]" in ln)
-                if warn_count or err_count:
-                    _log.info(
-                        "[UnifiedLog] converter finished: %d warnings, %d errors",
-                        warn_count, err_count,
+                out_file = tmp_in / "output.csv"
+                _log.info("[UnifiedLog] Running: unifiedlog_iterator -m single-file -i %s", dest)
+                returncode, stderr_bytes = self._run_binary(
+                    [str(bin_path), "-m", "single-file",
+                     "-i", str(dest), "-o", str(out_file), "-f", "csv"]
+                )
+                if self._cancelled:
+                    return
+                _log_stderr(stderr_bytes)
+                if returncode != 0:
+                    raise RuntimeError(
+                        f"unifiedlog_iterator exited with code {returncode}:\n"
+                        + stderr_bytes.decode("utf-8", errors="replace").strip()
                     )
-            if returncode != 0:
-                raise RuntimeError(
-                    f"unifiedlog_iterator exited with code {returncode}:\n{stderr_raw}"
-                )
-
-            # --- stream output ---
-            if not out_file.exists():
-                raise RuntimeError(
-                    "unifiedlog_iterator produced no output file. "
-                    "The input may not be a valid logarchive or tracev3."
-                )
-
-            yield from _stream_mandiant_csv(out_file)
+                if not out_file.exists():
+                    raise RuntimeError(
+                        "unifiedlog_iterator produced no output file. "
+                        "The input may not be a valid tracev3."
+                    )
+                yield from _stream_mandiant_csv(out_file)
 
         finally:
-            shutil.rmtree(tmp_in,  ignore_errors=True)
-            shutil.rmtree(tmp_out, ignore_errors=True)
+            shutil.rmtree(tmp_in, ignore_errors=True)
 
     def stream_entries_from_diagnostics(
         self,
         diag_node: "VFSNode",
         vfs: "VFS",
+        n_workers: int | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Assemble a logarchive from an iOS acquisition and yield entry dicts.
 
-        Calls ``build_logarchive_from_acquisition()`` to extract the
-        ``diagnostics/`` tree and its ``uuidtext/`` sibling into a temp
-        directory, then runs the binary with ``-m log-archive``.
-        All temporary data is cleaned up in a ``finally`` block.
+        Splits ``Persist/*.tracev3`` files across *n_workers* parallel
+        ``unifiedlog_iterator`` processes (default: ``os.cpu_count()``).
+        Each worker gets its own mini-logarchive directory with a subset of
+        tracev3 files; shared directories (``uuidtext/``, ``timesync/``,
+        ``Special/``) are symlinked (POSIX) or copied (Windows) to avoid
+        duplicating large data.  Output CSVs are merged by timestamp.
+
+        Falls back to a single process when only one tracev3 file exists or
+        when *n_workers* is explicitly set to 1.
 
         Raises
         ------
         RuntimeError
-            If the binary is missing or the conversion subprocess fails.
+            If the binary is missing or all conversion subprocesses fail.
         """
         bin_path = self._select_binary()
+        if sys.platform != "win32":
+            os.chmod(bin_path, 0o755)
 
         tmp_root = Path(tempfile.mkdtemp(prefix="crush-ul-ios-"))
-        tmp_out  = Path(tempfile.mkdtemp(prefix="crush-ul-out-"))
         try:
             logarchive_path = build_logarchive_from_acquisition(diag_node, vfs, tmp_root)
-
-            if sys.platform != "win32":
-                os.chmod(bin_path, 0o755)
-
-            out_file = tmp_out / "output.csv"
-
-            _log.info("[UnifiedLog] Running: unifiedlog_iterator -m log-archive -i %s", logarchive_path)
-            returncode, stderr_bytes = self._run_binary(
-                [
-                    str(bin_path), "-m", "log-archive",
-                    "-i", str(logarchive_path),
-                    "-o", str(out_file),
-                    "-f", "csv",
-                ]
-            )
-            if self._cancelled:
-                return
-            stderr_raw = stderr_bytes.decode("utf-8", errors="replace").strip()
-            if stderr_raw:
-                stderr_lines = [_ANSI_RE.sub("", ln) for ln in stderr_raw.splitlines()]
-                warn_count = sum(1 for ln in stderr_lines if "[WARN]" in ln)
-                err_count  = sum(1 for ln in stderr_lines if "[ERROR]" in ln)
-                if warn_count or err_count:
-                    _log.info(
-                        "[UnifiedLog] converter finished: %d warnings, %d errors",
-                        warn_count, err_count,
-                    )
-                seen: set[str] = set()
-                for clean in stderr_lines:
-                    clean = clean.strip()
-                    key = clean[20:] if len(clean) > 20 else clean
-                    if key not in seen and ("[WARN]" in clean or "[ERROR]" in clean):
-                        _log.info("[UnifiedLog] %s", clean)
-                        seen.add(key)
-                        if len(seen) >= 5:
-                            break
-            if returncode != 0:
-                raise RuntimeError(
-                    f"unifiedlog_iterator exited with code {returncode}:\n{stderr_raw}"
-                )
-
-            if not out_file.exists():
-                raise RuntimeError(
-                    "unifiedlog_iterator produced no output file. "
-                    "The input may not be a valid logarchive."
-                )
-
-            yield from _stream_mandiant_csv(out_file)
-
+            yield from self._stream_logarchive_from_path(bin_path, logarchive_path, tmp_root, n_workers)
         finally:
             shutil.rmtree(tmp_root, ignore_errors=True)
-            shutil.rmtree(tmp_out,  ignore_errors=True)
