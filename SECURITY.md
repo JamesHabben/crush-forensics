@@ -16,8 +16,6 @@ Include:
 - Steps to reproduce or a proof-of-concept
 - Affected version(s)
 
-You can expect an acknowledgement within 5 business days and a status update within 14 days.
-
 ## Scope
 
 Crush is a **read-only** forensic analysis tool. It opens and displays evidence files but never writes to the source. Relevant security concerns include:
