@@ -4,6 +4,12 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+## [0.5.0] — 2026-04-25
+
+### New Features
+
+- **macOS support** — portable builds are now available for Apple Silicon (arm64). Nightly and release builds include a `crush-macos.tar.gz` artifact alongside the existing Linux and Windows builds. Running from source on macOS has always worked; this adds an official build and support badge.
+
 ### Performance
 
 - **ZIP pre-scan** — file-type indexing now reads ZIP entries in physical storage order instead of alphabetical order, eliminating random seeks and significantly reducing scan time on large archives
@@ -12,12 +18,21 @@ All notable changes to Crush will be documented in this file.
 
 - **Multi-Log Studio column filters** — added a persistent text-input row above the log table with one field per filterable column (Level, Process, PID, Subsystem, Category, Message); typing performs a live contains-match filter, complementing the existing right-click exact-value filter
 - **Forensic Mode renamed to Integrity Mode** — the feature previously called "Forensic Mode" is now called "Integrity Mode" throughout the UI (status badge, Tools menu, tooltips, and log messages). Behaviour is unchanged; the new name better reflects that the feature is about integrity verification (hashing) rather than implying a specific legal or procedural context.
+- **Nightly build identifier** — the build stamp shown in **Help → About** now includes the short commit SHA (e.g. `20260425-nightly-a3f9c12`) so nightly builds are precisely traceable.
+- **About dialog** — added a direct link to the issue tracker; corrected CCL third-party attribution.
+- **Bug reporting** — issue tracker link added to the README, user handbook, and About dialog.
+
+### Documentation
+
+- Added `CONTRIBUTING.md` with development setup, checks, and build process.
+- Added `SECURITY.md` with vulnerability reporting instructions.
+- JSON Viewer, XML Viewer, and LevelDB Viewer added to the README feature list (these viewers were already present but not documented).
 
 ## [0.4.1] — 2026-04-21
 
 ### Performance
 
-- **Fiel tye indexing** - Multi-Thread support for directories. Minimized the necessary unpacking of files for ZIP/Tar.
+- **File type indexing** — Multi-thread support for directories. Minimized the necessary unpacking of files for ZIP/Tar.
 - **Apple Unified Log** — removed the hard 600-second subprocess timeout; large logarchives (1 GB+) no longer abort mid-conversion
 
 ## [0.4.0] — 2026-04-19

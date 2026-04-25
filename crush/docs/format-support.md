@@ -71,6 +71,15 @@ Limitations
 - Works on directories only, not single files.
 - Displays the first 2,000 records for performance.
 
+### Realm Database
+- Parses `.realm` files and opens them in the Realm Viewer.
+- Extracts: file header metadata, schema/class list, top-ref comparison across header slots, and table/column data.
+
+Limitations
+- Realm file format is undocumented; parsing is best-effort and may not cover all versions.
+- Column data decoding covers primitive types; complex or encrypted columns may show raw bytes.
+- Parse failures fall back to Hex Viewer.
+
 ### Images
 - Routes supported image formats to the Image Viewer.
 - Extracts a focused set of EXIF metadata (camera, time, GPS, dimensions).
@@ -172,10 +181,17 @@ Limitations
 - Custom format profiles: define a named-group regex (groups `timestamp`, `level`, `process`, `pid`, `message`; extras go to a side panel), a `strptime` string, an optional line-start regex for multiline events, and a level translation map. Live preview highlights each group in a distinct colour. Profiles are saved as JSON and reloaded on next start.
 - Detail panel shows the raw original line(s) and any extra fields (e.g. `subsystem`, `category`, `event_type`, `euid`, `thread_id` for Apple Unified Log entries).
 - Context menu: copy message, copy raw line, copy selection as TSV, filter by column value (pins an exact-match filter chip below the toolbar).
+- **Column filter bar** — a persistent text-input row above the log table with one field per filterable column (Level, Process, PID, Subsystem, Category, Message); typing performs a live contains-match filter complementing the right-click exact-value filter.
 
 Limitations
 - Time filtering only applies to entries with a parsed timestamp.
 - Multiline event grouping for custom formats requires an explicit line-start regex.
+
+### Realm Viewer
+- Tabbed view: **Header** (file metadata), **Schema** (class/table list), **Top Refs** (comparison across header slots), **Tables** (column data), **Hex Preview**.
+
+Limitations
+- Column header names are not always recoverable from the binary format; columns may appear as `col_0`, `col_1`, etc.
 
 ### Protobuf Viewer
 - Schema-less decode in a tree view (field numbers, wire types, values).

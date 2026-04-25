@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crush"
-version = "0.4.1"
+version = "0.5.0"
 description = "Crush — Digital Forensic Analysis Workbench"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Marco Neumann (kalink0)" }]
 keywords = ["forensics", "dfir", "ios", "android", "artifact", "analysis"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Information Technology",
     "Topic :: Security",
     "License :: OSI Approved :: Apache Software License",
@@ -44,8 +44,8 @@ dev = [
 crush = "crush.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/kalink0/crush"
-Issues = "https://github.com/kalink0/crush/issues"
+Homepage = "https://github.com/kalink0/crush-forensics"
+Issues = "https://github.com/kalink0/crush-forensics/issues"
 
 [tool.ruff]
 line-length = 100

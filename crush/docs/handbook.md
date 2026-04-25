@@ -4,7 +4,7 @@
 
 Crush is a Digital Forensic Analysis Workbench for examining iOS and Android acquisitions. It lets you open archives (ZIP, TAR), folders, and individual files, then navigate and inspect their contents using format-aware viewers — without extracting anything to disk first.
 
-Crush includes a built-in **file format database** covering forensically relevant formats across iOS and Android. For every file you select or open, Crush identifies the format by magic bytes (not by extension), then shows its name, platform, forensic relevance, and a link to the format specification — even for formats that have no dedicated viewer yet. - the database in work in progress - more info and more file formats to come.
+Crush includes a built-in **file format database** covering forensically relevant formats across iOS and Android. For every file you select or open, Crush identifies the format by magic bytes (not by extension), then shows its name, platform, forensic relevance, and a link to the format specification — even for formats that have no dedicated viewer yet. The database is a work in progress — more formats and references will be added over time.
 
 ---
 
@@ -154,6 +154,22 @@ Plays audio and video files (MP4, MOV, MP3, M4A, AAC, WAV, etc.) using the syste
 
 Displays binary and XML property lists as a collapsible tree. Supports nested structures including arrays, dictionaries, data blobs, dates, and NSKeyedArchiver objects.
 
+### JSON Viewer
+
+Displays JSON files as a collapsible, searchable tree. Arrays and objects can be expanded or collapsed individually. Copy a node value via right-click.
+
+### XML Viewer
+
+Parses XML into a collapsible tree. Android `<map>`-style preference files are flattened for easier reading. Malformed XML shows an error node rather than crashing.
+
+### PDF Viewer
+
+Extracts and displays the text content of PDF files in the Text Viewer. Scanned or protected PDFs with no extractable text show a notice.
+
+### LevelDB Viewer
+
+Opens LevelDB database directories (used by Chrome, Android apps, and iOS apps) and shows key-value records in a table. The first 2,000 records are displayed; use the search field to filter by key or value.
+
 ### ABX Viewer
 
 Decodes Android Binary XML (ABX) format used in Android system and app settings directories.
@@ -161,6 +177,24 @@ Decodes Android Binary XML (ABX) format used in Android system and app settings 
 ### SEGB / Biome Viewer
 
 Decodes Apple SEGB v1 and v2 files from the Biome framework. Shows timestamped records from app usage, screen time, Siri interaction, and location-adjacent signals.
+
+### Realm Database Viewer
+
+Opens `.realm` files in a tabbed view:
+
+| Tab | Content |
+|---|---|
+| **Header** | File metadata decoded from the Realm file header |
+| **Schema** | List of all classes/tables stored in the database |
+| **Top Refs** | Comparison of top-ref pointers across header slots (useful for detecting corruption or versioning) |
+| **Tables** | Column data for each table, displayed in the Table Viewer |
+| **Hex Preview** | Raw hex of the first bytes of the file |
+
+### Protobuf Viewer
+
+Opens via right-click → **Open as Protobuf Viewer**. Performs a schema-less wire-format decode showing field numbers, wire types, and raw values.
+
+To decode with a schema: click **Load .proto…** to load a `.proto` file, or **Load Descriptor…** for a compiled descriptor set. Field names and types are then resolved from the schema.
 
 ### Multi-Log Studio
 
@@ -178,7 +212,9 @@ A high-performance log viewer for large files and multi-source correlation. Open
 
 **Time-range filter** — appears after the first file with timestamps finishes loading. Check **Time range:** to enable the from/to pickers; **Reset** restores the full range. The **Display TZ** dropdown toggles between UTC and local time.
 
-**Column filter bar** — appears below the toolbar when a column filter is active. Each active filter is shown as a chip (e.g. `subsystem = com.apple.security`). Click a chip's **×** to remove that filter, or **Clear all** to remove all at once.
+**Column filter inputs** — a persistent row of text fields above the log table, one per filterable column (Level, Process, PID, Subsystem, Category, Message). Type in any field to live-filter the table by a contains-match on that column. Multiple fields are AND-combined.
+
+**Column filter bar** — appears below the toolbar when a right-click exact-value filter is active. Each active filter is shown as a chip (e.g. `subsystem = com.apple.security`). Click a chip's **×** to remove that filter, or **Clear all** to remove all at once.
 
 **Detail panel** — selecting a row shows the raw original line(s). If the parser extracted extra fields (e.g. `subsystem`, `category`, `event_type`, `euid`, `thread_id` from Apple Unified Log entries), they appear below a separator.
 
@@ -249,7 +285,7 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 Integrity mode adds hashing and traceability to file access:
 
 - When enabled, files opened or exported are hashed (SHA-256) and written to the log.
-- Opening a ZIP/TAR/file source hashes the entire source file and logs the result.
+- Opening a ZIP/TAR/file triggers the calculation of the hash (SHA-256) of the file.
 - Opening a folder does not hash the full directory.
 - Exports also create a `crush-export-hashes.txt` file next to the exported data.
 - The bottom-right status badge shows the current mode. Click the badge to toggle it, or right-click it for a quick menu and a short explanation.
@@ -272,3 +308,9 @@ Integrity mode adds hashing and traceability to file access:
 - **SQLite WAL files:** if a `-wal` or `-shm` companion file is present alongside a `.db`, Crush automatically includes it so you see the most recent state of the database including committed transactions not yet checkpointed into the main database file.
 - **BLOB chaining:** SQLite cells containing embedded plists, images, or other binary data can be opened directly as a new viewer tab via right-click → **Open as new tab**.
 - **Unknown files:** even if Crush cannot parse a file, the Properties panel will show the identified format name and forensic relevance based on magic bytes — so you know what you are looking at before deciding to export and open it externally.
+
+---
+
+## Bugs and feature requests
+
+Found a bug or have a suggestion? Open an issue on [GitHub](https://github.com/kalink0/crush-forensics/issues). Please include the Crush version (shown in **Help → About**), your OS, and steps to reproduce.

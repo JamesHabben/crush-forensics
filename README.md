@@ -6,6 +6,7 @@ Crush — Digital Forensic Analysis Workbench
 [![Nightly](https://github.com/kalink0/crush-forensics/actions/workflows/nightly.yml/badge.svg)](https://github.com/kalink0/crush-forensics/actions/workflows/nightly.yml)
 ![Linux](https://img.shields.io/badge/linux-supported-success)
 ![Windows](https://img.shields.io/badge/windows-supported-success)
+![macOS](https://img.shields.io/badge/macOS-built%2C%20untested-yellow)
 [![Release](https://img.shields.io/github/v/release/kalink0/crush-forensics?display_name=tag)](https://github.com/kalink0/crush-forensics/releases)
 [![License](https://img.shields.io/github/license/kalink0/crush-forensics)](https://github.com/kalink0/crush-forensics/blob/main/LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
@@ -23,9 +24,12 @@ Supported viewers (more planned):
 - SQLite / Database Viewer
 - Hex Viewer
 - Text Viewer (with syntax highlighting and encoding detection)
+- JSON Viewer (collapsible tree)
+- XML Viewer (collapsible tree)
 - Plist / BPlist Viewer
 - SEGB v1/v2 Viewer
 - ABX (Android Binary XML) Viewer
+- LevelDB Viewer (Chrome LevelDB / Android app databases)
 - Image Viewer
 - Media Viewer (audio/video)
 - Multi-Log Studio (multi-source log analysis with format auto-detection; Apple Unified Log / `.tracev3` / `.logarchive`, syslog, and more)
@@ -36,6 +40,7 @@ Supported viewers (more planned):
 ## Documentation
 
 → [User Handbook](crush/docs/handbook.md)
+→ [Format Support & Parser Limitations](crush/docs/format-support.md)
 
 ## Screenshots
 
@@ -147,3 +152,7 @@ This project builds on the great work of the DFIR community. The following third
 Apple Unified Log (`.tracev3` / `.logarchive`) parsing uses the [macos-UnifiedLogs](https://github.com/mandiant/macos-UnifiedLogs) `unifiedlog_iterator` binary by [Mandiant](https://github.com/mandiant) (Apache License 2.0). The binary is bundled automatically in portable builds. When running from source, run `scripts/download_unifiedlog_binaries.py` to download the platform binaries into `crush/bin/unifiedlog_iterator/` (they are git-ignored and never committed).
 
 Parts of this software were developed with assistance from [Claude AI / Claude Code](https://claude.ai) by Anthropic.
+
+## Bugs and feature requests
+
+Use [GitHub Issues](https://github.com/kalink0/crush-forensics/issues). Please include the Crush version (shown in **Help → About**), your OS, and steps to reproduce.

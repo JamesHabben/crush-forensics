@@ -25,6 +25,7 @@ and parse ABX, SQLite, SEGB, PLIST, hex, JSON, XML, and media files — all in o
 <p>Licensed under the <b>Apache License 2.0</b></p>
 <p><a href="https://github.com/kalink0/crush-forensics">
 github.com/kalink0/crush-forensics</a></p>
+<p><a href="https://github.com/kalink0/crush-forensics/issues">Report a bug or request a feature</a></p>
 """
 
 _ACK_BODY = """\
@@ -34,19 +35,19 @@ _ACK_BODY = """\
     <td><b>ccl_bplist</b></td>
     <td>Binary plist parser</td>
     <td class="lic">BSD 3-Clause</td>
-    <td><a href="https://github.com/cclgroupltd/ccl-bplist">CCL Solutions Group</a></td>
+    <td><a href="https://github.com/cclgroupltd/ccl-bplist">CCL Forensics</a></td>
   </tr>
   <tr class="alt">
     <td><b>ccl_segb</b></td>
     <td>SEGB (Significant Energy Bearer) parser</td>
     <td class="lic">MIT</td>
-    <td><a href="https://github.com/cclgroupltd/ccl_segb">CCL Solutions Group</a></td>
+    <td><a href="https://github.com/cclgroupltd/ccl_segb">CCL Forensics</a></td>
   </tr>
   <tr>
     <td><b>ccl_leveldb</b></td>
     <td>LevelDB / Chrome LevelDB parser</td>
     <td class="lic">MIT</td>
-    <td><a href="https://github.com/cclgroupltd/ccl-leveldb">CCL Solutions Group</a></td>
+    <td><a href="https://github.com/cclgroupltd/ccl-leveldb">CCL Forensics</a></td>
   </tr>
   <tr class="alt">
     <td><b>unifiedlog_iterator</b></td>
@@ -99,6 +100,12 @@ _ACK_BODY = """\
     <td>PDF reading and text extraction</td>
     <td class="lic">BSD 3-Clause</td>
     <td><a href="https://pypdf.readthedocs.io/">pypdf</a></td>
+  </tr>
+  <tr class="alt">
+    <td><b>grpcio-tools</b></td>
+    <td>Protobuf / .proto schema compilation (optional, used by Protobuf viewer)</td>
+    <td class="lic">Apache 2.0</td>
+    <td><a href="https://grpc.io">grpc.io</a></td>
   </tr>
 </table>
 
