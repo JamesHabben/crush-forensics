@@ -56,6 +56,7 @@ class FilesystemPanel(QWidget):
     open_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     open_external_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
+    export_logarchive_requested = Signal(object, object)  # (VFSNode, VFS)
     format_info_requested = Signal(object, object)  # (VFSNode, VFS)
     close_source_requested = Signal(object)  # (VFS)
     load_finished = Signal()
@@ -353,6 +354,7 @@ class FilesystemPanel(QWidget):
         add_multi_log_action    = None
         open_ios_diag_action    = None
         add_ios_diag_action     = None
+        export_logarchive_action = None
         _is_logarchive = node.name.lower().endswith(".logarchive")
         _is_ios_diag = False
         if node.is_dir:
@@ -361,6 +363,8 @@ class FilesystemPanel(QWidget):
         if _is_ios_diag:
             open_ios_diag_action = menu.addAction("Open as Unified Log Archive")
             add_ios_diag_action  = menu.addAction("Add to Multi-Log Studio as Unified Log Archive")
+            menu.addSeparator()
+            export_logarchive_action = menu.addAction("Export as .logarchive…")
         elif node.is_dir and not _is_logarchive:
             open_logs_folder_action = menu.addAction("Open Logs in Multi-Log Studio")
         else:
@@ -416,6 +420,8 @@ class FilesystemPanel(QWidget):
             self.format_info_requested.emit(node, vfs)
         elif action == export_action:
             self.export_requested.emit(node, vfs)
+        elif action == export_logarchive_action:
+            self.export_logarchive_requested.emit(node, vfs)
         elif action == close_source_action:
             self.close_source_requested.emit(vfs)
 

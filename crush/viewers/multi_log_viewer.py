@@ -583,9 +583,12 @@ class LogLoaderWorker(QThread):
         self._db_path     = db_path
         self._profile     = profile
         self._cancel_flag = False
+        self._converter: Any = None
 
     def cancel(self) -> None:
         self._cancel_flag = True
+        if self._converter is not None:
+            self._converter.cancel()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -661,6 +664,7 @@ class LogLoaderWorker(QThread):
             if _is_ios_diag:
                 from crush.parsers.unified_log_parser import UnifiedLogConverter
                 converter = UnifiedLogConverter()
+                self._converter = converter
                 self.status_update.emit(self._source_id, "Converting binary log — may take several minutes…")
                 gen = converter.stream_entries_from_diagnostics(self._node, self._vfs)
                 total = self._stream_to_db(con, gen, self.UL_CHUNK_SIZE)
@@ -674,6 +678,7 @@ class LogLoaderWorker(QThread):
             elif is_unified:
                 from crush.parsers.unified_log_parser import UnifiedLogConverter
                 converter = UnifiedLogConverter()
+                self._converter = converter
                 self.status_update.emit(self._source_id, "Converting binary log — may take several minutes…")
                 gen = converter.stream_entries(self._node, self._vfs)
                 total = self._stream_to_db(con, gen, self.UL_CHUNK_SIZE)
@@ -1224,7 +1229,9 @@ class MultiLogViewer(QWidget):
         for w in self._workers.values():
             if w.isRunning():
                 w.cancel()
-                w.wait()
+        for w in self._workers.values():
+            if w.isRunning():
+                w.wait(10_000)
         self._db.close()
         super().closeEvent(event)
 

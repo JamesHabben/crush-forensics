@@ -221,6 +221,33 @@ class _ExportWorker(QObject):
         hash_path.write_text("\n".join(self._hash_lines) + "\n", encoding="utf-8")
 
 
+class _ExportLogarchiveWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, vfs: VFS, node: VFSNode, dest_path: str) -> None:
+        super().__init__()
+        self._vfs = vfs
+        self._node = node
+        self._dest_path = Path(dest_path)
+        self._logger = logging.getLogger(__name__)
+
+    def run(self) -> None:
+        try:
+            from crush.parsers.unified_log_parser import build_logarchive_from_acquisition
+            with tempfile.TemporaryDirectory(prefix="crush_logarchive_") as tmp:
+                tmp_path = Path(tmp) / "build"
+                tmp_path.mkdir()
+                build_logarchive_from_acquisition(self._node, self._vfs, tmp_path)
+                if self._dest_path.exists():
+                    shutil.rmtree(self._dest_path)
+                shutil.copytree(str(tmp_path), str(self._dest_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(str(self._dest_path))
+
+
 def _safe_name(name: str) -> str:
     cleaned = name.replace("/", "_").replace("\\", "_").strip()
     if cleaned in {"", ".", ".."}:
@@ -271,6 +298,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.open_requested.connect(self._open_node_mode)
         self._fs_panel.open_external_requested.connect(self._open_external_mode)
         self._fs_panel.export_requested.connect(self._export_node)
+        self._fs_panel.export_logarchive_requested.connect(self._export_logarchive_node)
         self._fs_panel.close_source_requested.connect(self._close_source)
         self._fs_panel.background_status.connect(self._on_background_status)
         self._fs_panel.format_info_requested.connect(self._show_format_info)
@@ -594,6 +622,70 @@ class MainWindow(QMainWindow):
             self._export_progress.close()
         self._status.showMessage(f"Export failed: {message}")
         self._logger.error("Export failed: %s", message)
+        QMessageBox.critical(self, "Export failed", message)
+
+    def _export_logarchive_node(self, node: VFSNode, vfs: VFS) -> None:
+        dest_dir = QFileDialog.getExistingDirectory(self, "Save .logarchive to folder")
+        if not dest_dir:
+            return
+
+        if self._thread_is_running(getattr(self, "_logarchive_thread", None)):
+            QMessageBox.information(self, "Export", "An export is already running.")
+            return
+
+        archive_name = node.name if node.name.endswith(".logarchive") else f"{node.name}.logarchive"
+        dest_path = Path(dest_dir) / archive_name
+        if dest_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Overwrite?",
+                f"{dest_path} already exists. Overwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self._status.showMessage("Building .logarchive…")
+        self._logger.info("Export logarchive: %s -> %s", node.path, dest_path)
+        self._logarchive_progress = QProgressDialog("Building .logarchive…", None, 0, 0, self)
+        self._logarchive_progress.setWindowTitle("Export .logarchive")
+        self._logarchive_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self._logarchive_progress.setCancelButton(None)
+        self._logarchive_progress.setMinimumDuration(0)
+        self._logarchive_progress.show()
+
+        self._logarchive_thread = QThread(self)
+        self._logarchive_worker = _ExportLogarchiveWorker(vfs, node, str(dest_path))
+        self._logarchive_worker.moveToThread(self._logarchive_thread)
+        self._logarchive_thread.started.connect(self._logarchive_worker.run)
+        self._logarchive_worker.finished.connect(self._on_logarchive_finished)
+        self._logarchive_worker.failed.connect(self._on_logarchive_failed)
+        self._logarchive_worker.finished.connect(self._logarchive_thread.quit)
+        self._logarchive_worker.failed.connect(self._logarchive_thread.quit)
+        self._logarchive_thread.finished.connect(self._logarchive_worker.deleteLater)
+        self._logarchive_thread.start()
+
+    def _on_logarchive_finished(self, dest: str) -> None:
+        if hasattr(self, "_logarchive_progress"):
+            self._logarchive_progress.close()
+        self._status.showMessage(f"Saved: {dest}")
+        self._logger.info("Logarchive exported to: %s", dest)
+        choice = QMessageBox.question(
+            self,
+            "Export complete",
+            f".logarchive saved:\n{dest}\n\nOpen location?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(dest).parent)))
+
+    def _on_logarchive_failed(self, message: str) -> None:
+        if hasattr(self, "_logarchive_progress"):
+            self._logarchive_progress.close()
+        self._status.showMessage(f"Export failed: {message}")
+        self._logger.error("Logarchive export failed: %s", message)
         QMessageBox.critical(self, "Export failed", message)
 
     def _open_node(self, node: VFSNode, vfs: VFS) -> None:

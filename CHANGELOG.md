@@ -4,6 +4,14 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased - Only in Nightly Build]
 
+### New Features
+
+- **Export as .logarchive** — iOS diagnostics nodes (`diagnostics/`) now have an "Export as .logarchive…" right-click action. Crush assembles the logarchive (diagnostics tree + uuidtext sibling) in a temporary directory and copies the result to a user-chosen location, producing a standard `.logarchive` folder that can be opened in other tools.
+
+### Bug Fixes
+
+- **Multi-Log Studio hang on close during unified log conversion** — closing the Multi-Log Studio window while Apple Unified Log data was still being converted caused the whole application to freeze until the conversion finished (potentially many minutes). The underlying `unifiedlog_iterator` subprocess is now killed immediately when the window is closed, and the worker thread exits within milliseconds.
+
 ## [0.5.0] — 2026-04-25
 
 ### New Features

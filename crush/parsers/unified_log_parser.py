@@ -790,6 +790,27 @@ class UnifiedLogConverter:
     See ``crush/bin/unifiedlog_iterator/README.md`` for download instructions.
     """
 
+    def __init__(self) -> None:
+        self._proc: "subprocess.Popen[bytes] | None" = None
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Signal cancellation and kill the running subprocess if any."""
+        self._cancelled = True
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except OSError:
+                pass
+
+    def _run_binary(self, cmd: list[str]) -> tuple[int, bytes]:
+        """Run cmd, return (returncode, stderr_bytes). Supports cancel()."""
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        _, stderr_bytes = self._proc.communicate()
+        returncode = self._proc.returncode
+        self._proc = None
+        return returncode, stderr_bytes
+
     def _select_binary(self) -> Path:
         """Return the path to the platform-appropriate binary.
 
@@ -864,12 +885,12 @@ class UnifiedLogConverter:
 
             # --- run converter ---
             _log.info("[UnifiedLog] Running: unifiedlog_iterator -m %s -i %s", mode, input_path)
-            proc = subprocess.run(
-                [str(bin_path), "-m", mode, "-i", input_path, "-o", str(out_file), "-f", "csv"],
-                capture_output=True,
-                timeout=None,
+            returncode, stderr_bytes = self._run_binary(
+                [str(bin_path), "-m", mode, "-i", input_path, "-o", str(out_file), "-f", "csv"]
             )
-            stderr_raw = proc.stderr.decode("utf-8", errors="replace").strip()
+            if self._cancelled:
+                return
+            stderr_raw = stderr_bytes.decode("utf-8", errors="replace").strip()
             if stderr_raw:
                 stderr_lines = [_ANSI_RE.sub("", ln) for ln in stderr_raw.splitlines()]
                 warn_count = sum(1 for ln in stderr_lines if "[WARN]" in ln)
@@ -879,9 +900,9 @@ class UnifiedLogConverter:
                         "[UnifiedLog] converter finished: %d warnings, %d errors",
                         warn_count, err_count,
                     )
-            if proc.returncode != 0:
+            if returncode != 0:
                 raise RuntimeError(
-                    f"unifiedlog_iterator exited with code {proc.returncode}:\n{stderr_raw}"
+                    f"unifiedlog_iterator exited with code {returncode}:\n{stderr_raw}"
                 )
 
             # --- stream output ---
@@ -927,17 +948,17 @@ class UnifiedLogConverter:
             out_file = tmp_out / "output.csv"
 
             _log.info("[UnifiedLog] Running: unifiedlog_iterator -m log-archive -i %s", logarchive_path)
-            proc = subprocess.run(
+            returncode, stderr_bytes = self._run_binary(
                 [
                     str(bin_path), "-m", "log-archive",
                     "-i", str(logarchive_path),
                     "-o", str(out_file),
                     "-f", "csv",
-                ],
-                capture_output=True,
-                timeout=None,
+                ]
             )
-            stderr_raw = proc.stderr.decode("utf-8", errors="replace").strip()
+            if self._cancelled:
+                return
+            stderr_raw = stderr_bytes.decode("utf-8", errors="replace").strip()
             if stderr_raw:
                 stderr_lines = [_ANSI_RE.sub("", ln) for ln in stderr_raw.splitlines()]
                 warn_count = sum(1 for ln in stderr_lines if "[WARN]" in ln)
@@ -956,9 +977,9 @@ class UnifiedLogConverter:
                         seen.add(key)
                         if len(seen) >= 5:
                             break
-            if proc.returncode != 0:
+            if returncode != 0:
                 raise RuntimeError(
-                    f"unifiedlog_iterator exited with code {proc.returncode}:\n{stderr_raw}"
+                    f"unifiedlog_iterator exited with code {returncode}:\n{stderr_raw}"
                 )
 
             if not out_file.exists():
