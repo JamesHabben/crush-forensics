@@ -635,13 +635,11 @@ class LogLoaderWorker(QThread):
             if len(chunk) >= chunk_size:
                 self._insert_entries(con, chunk)
                 con.commit()
-                con.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 chunk = []
                 self.progress.emit(self._source_id, total)
         if chunk:
             self._insert_entries(con, chunk)
             con.commit()
-            con.execute("PRAGMA wal_checkpoint(PASSIVE)")
             self.progress.emit(self._source_id, total)
         return total
 
