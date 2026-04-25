@@ -84,10 +84,9 @@ def main() -> None:
     converter = UnifiedLogConverter()
 
     if is_logarchive:
-        mode = "logarchive"
         size = _dir_size(target)
         tracev3 = _count_tracev3(target)
-        print(f"\nMode       : logarchive")
+        print("\nMode       : logarchive")
         print(f"Path       : {target}")
         print(f"Size       : {_fmt_bytes(size)}")
         print(f"Tracev3    : {tracev3} files in Persist/")
@@ -95,10 +94,9 @@ def main() -> None:
         t0 = time.perf_counter()
         entry_count = sum(1 for _ in converter.stream_entries(node, vfs))
     elif is_ios_diagnostics_node(node):
-        mode = "ffs-diagnostics"
         size = _dir_size(target)
         tracev3 = _count_tracev3(target)
-        print(f"\nMode       : iOS FFS diagnostics")
+        print("\nMode       : iOS FFS diagnostics")
         print(f"Path       : {target}")
         print(f"Size       : {_fmt_bytes(size)}")
         print(f"Tracev3    : {tracev3} files in Persist/")
