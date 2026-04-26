@@ -7,7 +7,6 @@ import base64
 
 from crush.core.paste_decode import FORMATS, try_decode_input
 
-
 # ---------------------------------------------------------------------------
 # try_decode_input — Auto mode
 # ---------------------------------------------------------------------------
