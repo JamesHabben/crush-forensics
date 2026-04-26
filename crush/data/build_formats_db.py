@@ -1632,162 +1632,384 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "Opus",
         "category": "document",
         "forensic_relevance": (
-            "Low-latency audio codec used in WhatsApp, Signal, Telegram, and "
-            "WebRTC voice messages. Stored in an Ogg container."
+            "Low-latency voice and audio codec (RFC 6716) used in WebRTC, Discord, "
+            "WhatsApp, Telegram, Signal, and VoIP applications. "
+            "Opus is a codec, not a container — stored files use Ogg encapsulation "
+            "as defined in RFC 7845, with the .opus extension. "
+            "The Ogg ID header identifies the stream as Opus and contains channel count, "
+            "sample rate, and pre-skip value. "
+            "A Vorbis comment header follows with optional metadata tags. "
+            "WhatsApp voice notes use .opus extension; Telegram uses .ogg — "
+            "both are Ogg-encapsulated Opus at 16-32 kbps. "
+            "WebRTC recordings may appear as raw Opus frames without Ogg container "
+            "in browser cache or WebRTC dump files. "
+            "No native embedded timestamps — recording time inferred from filesystem "
+            "metadata, messaging app databases, or WhatsApp filename convention "
+            "(PTT-YYYYMMDD-WANNNN.opus)."
         ),
-        "platforms": ["Android", "iOS", "Windows"],
-        "parser_class": "MediaParser",
+        "platforms": ["Android", "iOS", "Windows", "Linux"],
+        "parser_class": None,
         "magic": [
             {
                 "offset": 0,
                 "value": b"\x4f\x67\x67\x53",
-                "description": "Ogg container (Opus uses Ogg as transport)",
+                "description": "OggS capture pattern (Opus uses Ogg container)",
             }
         ],
         "extensions": [".opus"],
-        "links": [("Format spec", "https://opus-codec.org/docs/")],
+        "links": [
+            (
+                "Opus codec specification (RFC 6716)",
+                "https://datatracker.ietf.org/doc/html/rfc6716",
+            ),
+            (
+                "Ogg encapsulation for Opus (RFC 7845)",
+                "https://datatracker.ietf.org/doc/html/rfc7845",
+            ),
+            (
+                "Opus FAQ (Xiph.org)",
+                "https://wiki.xiph.org/OpusFAQ",
+            ),
+        ],
         "status": "reviewed",
     },
     {
-        "name": "WMA Audio (Windows Media Audio)",
+        "name": "WMA Audio",
         "short_name": "WMA",
         "category": "document",
         "forensic_relevance": (
-            "Windows-native audio format found on Windows devices and older "
-            "smartphones. ASF container may carry DRM licensing information."
+            "Windows Media Audio — Microsoft proprietary audio format stored in the "
+            "Advanced Systems Format (ASF) container. "
+            "ASF is GUID-based: each object begins with a 16-byte GUID and size field. "
+            "The Header Object contains metadata objects: title, author, copyright, "
+            "creation date, and codec information. "
+            "Four codec variants: WMA Standard (lossy), WMA Pro (multichannel/hi-res), "
+            "WMA Lossless (bit-perfect), and WMA Voice (low-bitrate speech). "
+            "DRM-protected WMA files (.wma with Windows Media DRM) cannot be decoded "
+            "without a valid device-bound license — the license store on the original "
+            "device may be required for decryption. "
+            "Common on older Windows systems, Windows Phone devices, and Zune players. "
+            "Rare on modern mobile devices — presence may indicate Windows Phone origin "
+            "or legacy media library transfer."
         ),
         "platforms": ["Windows"],
-        "parser_class": "MediaParser",
+        "parser_class": None,
         "magic": [
             {
                 "offset": 0,
-                "value": b"\x30\x26\xb2\x75",
-                "description": "ASF header object GUID (first 4 bytes)",
+                "value": b"\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c",
+                "description": "ASF Header Object GUID",
             }
         ],
-        "extensions": [".wma"],
-        "links": [("Format spec", "https://learn.microsoft.com/en-us/windows/win32/wmformat/windows-media-format-sdk")],
-        "status": "draft",
+        "extensions": [".wma", ".asf"],
+        "links": [
+            (
+                "ASF format overview (Microsoft)",
+                "https://learn.microsoft.com/en-us/windows/win32/wmformat/overview-of-the-asf-format",
+            ),
+            (
+                "WMA format description (Library of Congress)",
+                "https://www.loc.gov/preservation/digital/formats/fdd/fdd000027.shtml",
+            ),
+            (
+                "ASF format description (Library of Congress)",
+                "https://www.loc.gov/preservation/digital/formats/fdd/fdd000067.shtml",
+            ),
+            (
+                "Windows Media Audio overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/Windows_Media_Audio",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "AMR Audio",
         "short_name": "AMR",
         "category": "document",
         "forensic_relevance": (
-            "Adaptive Multi-Rate audio used for call recordings and voice memos "
-            "on Android and older iOS devices. Common in telecommunication evidence."
-        ),
-        "platforms": ["Android", "iOS"],
-        "parser_class": None,
-        "magic": [
-            {
-                "offset": 0,
-                "value": b"\x23\x21\x41\x4d\x52",
-                "description": "AMR-NB file header",
-            }
-        ],
-        "extensions": [".amr"],
-        "links": [("Format spec", "https://www.ietf.org/rfc/rfc3267.txt")],
-        "status": "draft",
-    },
-    {
-        "name": "MessagePack",
-        "short_name": "msgpack",
-        "category": "serialization",
-        "forensic_relevance": (
-            "Compact binary serialization used by some messaging and social apps "
-            "for caching and inter-process communication."
-        ),
-        "platforms": ["iOS", "macOS", "Android"],
-        "parser_class": None,
-        "magic": [],
-        "extensions": [".msgpack", ".mp"],
-        "links": [("Format spec", "https://msgpack.org/index.html")],
-        "status": "draft",
-    },
-    {
-        "name": "NSKeyedArchiver Archive",
-        "short_name": "NSKeyedArchiver",
-        "category": "serialization",
-        "forensic_relevance": (
-            "Apple's object graph serialization format used by Messages, Notes, "
-            "Health, Contacts, Calendar, Photos, and most third-party iOS/macOS apps "
-            "to persist complex data objects. Stored as a binary plist whose root dict "
-            "contains '$archiver': 'NSKeyedArchiver' and '$objects' array. "
-            "Recovering the object graph can reveal message history, contact data, "
-            "health records, and app-specific user content."
-        ),
-        "platforms": ["iOS", "macOS"],
-        "parser_class": None,
-        "magic": [
-            {
-                "offset": 0,
-                "value": b"\x62\x70\x6c\x69\x73\x74",
-                "description": "Binary plist container — NSKeyedArchiver identified by $archiver key inside",
-            }
-        ],
-        "extensions": [".plist", ".archive", ".nskeyedarchiver"],
-        "links": [
-            ("Developer docs", "https://developer.apple.com/documentation/foundation/nskeyedarchiver"),
-            ("Blog", "https://www.hexordia.com/blog/khatri-tool-deserialize-nskey"),
-        ],
-        "status": "draft",
-    },
-    {
-        "name": "Android OAT / ART Compiled Code",
-        "short_name": "OAT",
-        "category": "execution",
-        "forensic_relevance": (
-            "ART-compiled versions of DEX files. Presence indicates the app "
-            "was installed and executed on the device."
+            "Adaptive Multi-Rate speech codec standardised by 3GPP for GSM/UMTS networks. "
+            "Two variants: AMR-NB (Narrowband, 4.75-12.2 kbps, 8 kHz sampling) and "
+            "AMR-WB (Wideband/HD Voice, 6.6-23.85 kbps, 16 kHz, also known as G.722.2). "
+            "Identified by ASCII magic: '#!AMR\\n' (NB) or '#!AMR-WB\\n' (WB). "
+            "Used as the default voice recording format on older Android devices, "
+            "in MMS attachments, and embedded in 3GP containers. "
+            "AMR codec artefacts survive transcoding to WAV/PCM — "
+            "quantization patterns in the waveform can identify mobile phone origin "
+            "and detect splicing forgeries even after decompression. "
+            "No native embedded timestamps — recording time inferred from filesystem "
+            "metadata or messaging app databases. "
+            "Replaced by AAC and Opus on modern devices but common in older acquisitions."
         ),
         "platforms": ["Android"],
         "parser_class": None,
         "magic": [
             {
                 "offset": 0,
-                "value": b"\x6f\x61\x74\x0a",
-                "description": "OAT magic",
+                "value": b"\x23\x21\x41\x4d\x52\x0a",
+                "description": "AMR-NB file magic ('#!AMR\\n')",
+            },
+            {
+                "offset": 0,
+                "value": b"\x23\x21\x41\x4d\x52\x2d\x57\x42\x0a",
+                "description": "AMR-WB file magic ('#!AMR-WB\\n')",
+            },
+        ],
+        "extensions": [".amr", ".awb"],
+        "links": [
+            (
+                "AMR codec specification (3GPP TS 26.071)",
+                "https://www.3gpp.org/ftp/Specs/archive/26_series/26.071/",
+            ),
+            (
+                "Adaptive Multi-Rate audio codec (Wikipedia)",
+                "https://en.wikipedia.org/wiki/Adaptive_Multi-Rate_audio_codec",
+            ),
+            (
+                "Identification of AMR decompressed audio for forensics (ScienceDirect)",
+                "https://www.sciencedirect.com/science/article/abs/pii/S1051200414003200",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
+        "name": "MessagePack",
+        "short_name": "MsgPack",
+        "category": "serialization",
+        "forensic_relevance": (
+            "Compact binary serialization format used as a JSON alternative in "
+            "mobile apps, game clients, Redis, and network protocols. "
+            "Self-describing at the type level (integers, strings, arrays, maps, binary, "
+            "extensions) but field names are only present if the application includes them — "
+            "without the originating schema, interpretation requires reverse engineering. "
+            "No magic bytes — identification relies on file extension, database context, "
+            "or heuristic parsing (first byte encodes type and length). "
+            "The Timestamp extension type (-1) can encode nanosecond-precision timestamps — "
+            "forensically relevant if used by the application. "
+            "Forensically found in: app caches, network capture payloads, "
+            "Redis RDB snapshots, and some iOS/Android app data directories. "
+            "The msgpack Python library or MsgPack Explorer can decode raw files "
+            "without schema knowledge."
+        ),
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
+        "parser_class": None,
+        "magic": [],
+        "extensions": [".msgpack", ".mp"],
+        "links": [
+            (
+                "MessagePack format specification",
+                "https://github.com/msgpack/msgpack/blob/master/spec.md",
+            ),
+            (
+                "MessagePack overview (msgpack.org)",
+                "https://msgpack.org/",
+            ),
+            (
+                "MessagePack overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/MessagePack",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
+        "name": "NSKeyedArchiver",
+        "short_name": "NSKeyedArchiver",
+        "category": "serialization",
+        "forensic_relevance": (
+            "Apple's object graph serialization format, stored as a binary plist (bplist00) "
+            "with a specific internal structure. "
+            "Identified by the root dictionary keys: '$archiver' = 'NSKeyedArchiver', "
+            "'$top' (entry point), '$objects' (object table array), and '$version'. "
+            "Objects are referenced by UID pointers into the $objects table — "
+            "circular references and complex graphs are supported. "
+            "Used pervasively in iOS and macOS for: app state restoration, "
+            "UserDefaults (complex object values), CoreData metadata, "
+            "clipboard payloads, Siri intent donations (INInteraction), "
+            "Biome store entries, and many app-specific data files. "
+            "Custom file extensions are common (.sfl, .db, .archive) — "
+            "a bplist header does not rule out NSKeyedArchiver encoding. "
+            "Parsing requires a two-step process: first parse the bplist structure, "
+            "then resolve UID references to reconstruct the object graph. "
+            "Tools: ccl_bplist (Python, deserialise_NsKeyedArchiver), "
+            "bpylist, plutil -p (macOS), and Mushy."
+        ),
+        "platforms": ["iOS", "macOS"],
+        "parser_class": "BplistParser",
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x62\x70\x6c\x69\x73\x74\x30\x30",
+                "description": "Binary plist header ('bplist00') — NSKeyedArchiver identified by internal keys",
             }
         ],
-        "extensions": [".oat", ".odex", ".vdex"],
-        "links": [("AOSP source", "https://source.android.com/docs/core/runtime")],
-        "status": "draft",
+        "extensions": [".plist", ".sfl", ".archive"],
+        "links": [
+            (
+                "NSKeyedArchiver forensics — what are they and how to use them (CCL)",
+                "https://digitalinvestigation.wordpress.com/2012/04/04/geek-post-nskeyedarchiver-files-what-are-they-and-how-can-i-use-them/",
+            ),
+            (
+                "Manual analysis of NSKeyedArchiver plist files (Sarah Edwards / mac4n6)",
+                "http://www.mac4n6.com/blog/2016/1/1/manual-analysis-of-nskeyedarchiver-formatted-plist-files-a-review-of-the-new-os-x-1011-recent-items",
+            ),
+            (
+                "ccl_bplist — Python parser with NSKeyedArchiver support (CCL)",
+                "https://github.com/cclgroupltd/ccl-bplist",
+            ),
+            (
+                "iOS Biome AppIntent files — NSKeyedArchiver in practice (Blue Crew Forensics)",
+                "https://bluecrewforensics.com/2022/03/07/ios-app-intents/",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
+        "name": "Android OAT/ART",
+        "short_name": "OAT/ART",
+        "category": "execution",
+        "forensic_relevance": (
+            "Android Runtime (ART) ahead-of-time compiled code artifacts introduced "
+            "with Android 5.0 (Lollipop). Three file types form a triplet per app: "
+            ".odex/.oat (ELF binary with AOT-compiled native code from dex2oat), "
+            ".vdex (verified DEX bytecode — contains a copy of the original DEX "
+            "since Android 8.0), and .art (optional ART heap image for fast startup). "
+            "Presence of an .odex/.oat file for an app confirms the app was installed "
+            "and optimized on the device — stronger execution evidence than APK alone. "
+            "Prior to Android 8.0, the OAT file itself contained an embedded DEX copy — "
+            "useful for recovering app code when the original APK is absent. "
+            "Stored under /data/app/<package>/oat/<arch>/ for user apps "
+            "and /data/dalvik-cache/ for system apps. "
+            "The ELF build ID and dex2oat compilation timestamp indicate "
+            "when the app was last installed or optimized."
+        ),
+        "platforms": ["Android"],
+        "parser_class": None,
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x7f\x45\x4c\x46",
+                "description": "ELF magic — OAT/ODEX files are ELF binaries",
+            }
+        ],
+        "extensions": [".oat", ".odex", ".vdex", ".art"],
+        "links": [
+            (
+                "ART configuration and file types (Android AOSP)",
+                "https://source.android.com/docs/core/runtime/configure",
+            ),
+            (
+                "Android OAT/VDEX/DEX/ART formats (LIEF documentation)",
+                "https://lief.re/doc/latest/tutorials/10_android_formats.html",
+            ),
+            (
+                "Android compilation process — APK, DEX, OAT, VDEX, ART explained",
+                "https://github.com/connglli/blog-notes/issues/35",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "PDF Document",
         "short_name": "PDF",
         "category": "document",
         "forensic_relevance": (
-            "Documents, receipts, tickets, and exported reports stored in apps "
-            "or transmitted via messaging. May contain metadata, author, and dates."
+            "Portable Document Format — used pervasively for official documents, "
+            "reports, forms, contracts, and communications. "
+            "Two metadata layers: DocInfo dictionary (Author, Title, Creator, Producer, "
+            "CreationDate, ModDate in D:YYYYMMDDHHmmSSOHH'mm' format including timezone) "
+            "and XMP stream (richer, XML-based, with InstanceID, DocumentID, history). "
+            "Creator identifies the authoring application (Word, LibreOffice, InDesign); "
+            "Producer identifies the PDF engine (Acrobat, Ghostscript, pdfTeX) — "
+            "mismatch between claimed document origin and Creator/Producer is a key "
+            "fraud indicator (e.g. Creator: Canva on a bank statement). "
+            "Incremental updates append new cross-reference tables (xref) without "
+            "overwriting — each save event is preserved and recoverable. "
+            "xref count > 1 indicates the document was saved multiple times; "
+            "this structural record is harder to falsify than metadata fields. "
+            "Earlier content versions (pre-redaction text, prior dates) may be "
+            "recoverable from superseded objects in the same file. "
+            "Can embed files, JavaScript (malware vector), digital signatures, "
+            "and hidden layers (Optional Content Groups). "
+            "Absent metadata on institutional documents is itself a fraud indicator."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": "PDFParser",
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
+        "parser_class": "PdfParser",
         "magic": [
             {
                 "offset": 0,
-                "value": b"\x25\x50\x44\x46",
-                "description": "PDF header",
+                "value": b"\x25\x50\x44\x46\x2d",
+                "description": "PDF header ('%PDF-')",
             }
         ],
         "extensions": [".pdf"],
-        "links": [("Format spec", "https://opensource.adobe.com/dc-acrobat-sdk-docs/standards/pdfstandards/pdf/PDF32000_2008.pdf")],
-        "status": "draft",
+        "links": [
+            (
+                "PDF format specification (ISO 32000, Adobe)",
+                "https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf",
+            ),
+            (
+                "PDF metadata fields — complete forensic reference (HTPBE)",
+                "https://htpbe.tech/blog/pdf-metadata-fields-complete-reference",
+            ),
+            (
+                "PDF forensics and XMP metadata streams (Meridian Discovery)",
+                "https://www.meridiandiscovery.com/articles/pdf-forensic-analysis-xmp-metadata/",
+            ),
+            (
+                "PDF forensics and the metadata conundrum (PDF Association)",
+                "https://pdfa.org/presentation/pdf-forensics-and-the-metadata-conundrum/",
+            ),
+            (
+                "ExifTool — PDF metadata extraction",
+                "https://exiftool.org/",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
-        "name": "Property List",
-        "short_name": "plist",
-        "category": "configuration",
+        "name": "Property List (XML plist)",
+        "short_name": "XML plist",
+        "category": "serialization",
         "forensic_relevance": (
-            "Human-readable XML plist. Used for app preferences, "
-            "configuration files, and Info.plist manifests."
+            "Human-readable Apple property list format using XML serialization. "
+            "Used for app preferences, configuration files, system settings, "
+            "and iTunes/Xcode metadata. "
+            "Info.plist in every iOS/macOS app bundle declares: bundle identifier "
+            "(CFBundleIdentifier), version (CFBundleShortVersionString/CFBundleVersion), "
+            "minimum OS version, URL schemes (LSApplicationQueriesSchemes), "
+            "privacy usage descriptions (NSCamera/NSLocation/NSMicrophoneUsageDescription), "
+            "background modes (UIBackgroundModes), and required device capabilities — "
+            "key fields for app profiling and capability assessment. "
+            "Dates are stored as ISO 8601 strings. "
+            "Functionally equivalent to binary plist (bplist) — plutil converts between formats. "
+            "Identified by XML declaration and Apple plist DOCTYPE. "
+            "Some plists use JSON format in rare cases. "
+            "Hardcoded API keys or credentials in Info.plist are a common "
+            "security finding in app analysis."
         ),
         "platforms": ["iOS", "macOS"],
         "parser_class": "PlistParser",
-        "magic": [],
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x3c\x3f\x78\x6d\x6c",
+                "description": "XML declaration ('<?xml')",
+            }
+        ],
         "extensions": [".plist"],
-        "links": [("Developer docs", "https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFPropertyLists/")],
+        "links": [
+            (
+                "Apple property list format overview (Apple developer docs)",
+                "https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html",
+            ),
+            (
+                "Property list (Wikipedia — covers XML, binary, JSON variants)",
+                "https://en.wikipedia.org/wiki/Property_list",
+            ),
+            (
+                "iOS plist forensics guide (mac4n6 / Sarah Edwards)",
+                "https://www.mac4n6.com/blog/tag/plist",
+            ),
+        ],
         "status": "reviewed",
     },
     {
@@ -1795,23 +2017,67 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "protobuf",
         "category": "serialization",
         "forensic_relevance": (
-            "Binary serialization format used by Google apps, Chrome, WhatsApp, "
-            "Signal, and many others. Requires .proto schema to decode field names."
+            "Google's binary serialization format used by Android system services, "
+            "Chrome/Edge/Brave (Network Action Predictor, Local State), "
+            "Google apps (Gmail, Maps, Drive, Photos), Jetpack DataStore "
+            "(Android SharedPreferences replacement), and gRPC network protocols. "
+            "No magic bytes — identification relies on file extension (.pb, .proto), "
+            "database BLOB column context (common in Chrome SQLite databases), "
+            "or heuristic detection of wire-format tag/length patterns. "
+            "Not self-describing: without the .proto schema file, fields are visible "
+            "only as field numbers and wire types (varint, length-delimited, "
+            "fixed32, fixed64) — semantic meaning requires schema recovery. "
+            "For open-source apps (Chrome, Chromium), schemas are often findable "
+            "in the project source code. "
+            "Partial blackbox decoding possible with Protoscope, pbtk, or CyberChef. "
+            "Nested messages, repeated fields, and oneof unions are common structures."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
         "parser_class": "ProtobufParser",
         "magic": [],
         "extensions": [".pb", ".proto"],
-        "links": [("Format Documentation", "https://protobuf.dev/programming-guides/encoding/")],
+        "links": [
+            (
+                "Protocol Buffers encoding specification (Google)",
+                "https://protobuf.dev/programming-guides/encoding/",
+            ),
+            (
+                "Protocol Buffers overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/Protocol_Buffers",
+            ),
+            (
+                "Web browser protobuf artifacts — Chrome/Edge forensics (IBM X-Force)",
+                "https://www.ibm.com/think/x-force/web-browser-artifacts-using-googles-data-interchange-format",
+            ),
+            (
+                "Protocol Buffers in mobile forensics (Springer — Mobile Forensics Handbook)",
+                "https://link.springer.com/chapter/10.1007/978-3-030-98467-0_9",
+            ),
+        ],
         "status": "reviewed",
     },
     {
         "name": "Windows Registry Hive",
-        "short_name": "Registry",
+        "short_name": "Registry Hive",
         "category": "database",
         "forensic_relevance": (
-            "Windows system and user configuration database. Contains installed "
-            "software, user activity, network history, and USB device records."
+            "Windows hierarchical configuration database stored as binary hive files. "
+            "Key forensic hives: "
+            "SYSTEM (C:\\Windows\\System32\\config\\SYSTEM) — boot config, services, "
+            "USB device history (USBSTOR), network interfaces, ShimCache, timezone; "
+            "SOFTWARE — installed programs, Windows version, run keys, scheduled tasks; "
+            "SAM — local account metadata, login counts, last login timestamps; "
+            "NTUSER.DAT (%USERPROFILE%) — UserAssist (GUI execution with run counts "
+            "and timestamps, ROT-13 encoded), RecentDocs MRU, TypedPaths, ShellBags, "
+            "OpenSaveMRU, persistence run keys; "
+            "UsrClass.dat — ShellBags for non-desktop folders, MUICache; "
+            "Amcache.hve (C:\\Windows\\AppCompat\\Programs\\) — SHA-1 hashes and "
+            "timestamps of executed programs. "
+            "Each key has a LastWriteTime (Windows FILETIME: 100-nanosecond intervals "
+            "since 1601-01-01 UTC). "
+            "Transaction logs (.LOG1/.LOG2) contain uncommitted changes not yet written "
+            "to the primary hive — must be merged for complete analysis. "
+            "Deleted keys may survive in hive slack space."
         ),
         "platforms": ["Windows"],
         "parser_class": None,
@@ -1819,47 +2085,107 @@ FORMATS: list[dict[str, Any]] = [
             {
                 "offset": 0,
                 "value": b"\x72\x65\x67\x66",
-                "description": "Registry hive signature",
+                "description": "Registry hive signature ('regf')",
             }
         ],
-        "extensions": [".dat", ".hiv"],
-        "links": [("Format spec", "https://github.com/msuhanov/regf/blob/master/Windows%20registry%20file%20format%20specification.md")],
-        "status": "draft",
+        "extensions": [".dat", ".hve", ".log1", ".log2"],
+        "links": [
+            (
+                "Windows Registry hive format specification (Maxim Suhanov)",
+                "https://github.com/msuhanov/regf/blob/master/Windows%20registry%20file%20format%20specification.md",
+            ),
+            (
+                "Windows Registry forensics — artifacts and analysis (ElcomSoft)",
+                "https://blog.elcomsoft.com/2026/02/investigating-windows-registry/",
+            ),
+            (
+                "Windows Registry (ForensicsWiki)",
+                "https://forensics.wiki/windows_registry/",
+            ),
+            (
+                "Registry Explorer and RECmd (Eric Zimmerman tools)",
+                "https://ericzimmerman.github.io/#!index.md",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "Apple SEGB (Biome store)",
         "short_name": "SEGB",
         "category": "log",
         "forensic_relevance": (
-            "Apple Biome framework data stores. Contains app usage, screen time, "
-            "location, health, and Siri interaction history. SEGB was first seen with iOS 13"
+            "Apple's Segmented Binary format — the on-disk storage container for iOS "
+            "and macOS Biome data, which replaced much of KnowledgeC from iOS 16 onwards. "
+            "Two versions: SEGB v1 (iOS 15-16, 56-byte header ending with 'SEGB' in ASCII, "
+            "32-byte record headers with two Mac Absolute Time timestamps) and "
+            "SEGB v2 (iOS 17+, 32-byte header, entries + trailer section). "
+            "Each record payload is a protobuf — requiring schema knowledge for full decoding. "
+            "130+ Biome streams cover: app focus/usage (replaces KnowledgeC), "
+            "app installs, Safari history, Siri/AppIntent interactions (may contain "
+            "deleted iMessages and Snapchat activity), CarPlay connections, "
+            "notifications, location events, and screen activity. "
+            "Located at /private/var/mobile/Library/Biome/streams/ and "
+            "/private/var/db/biome/streams/ — each stream has 'local/' (device) "
+            "and 'remote/' (iCloud-synced from other devices) subdirectories. "
+            "Tombstone/ folder contains expired/deleted records — partially recoverable. "
+            "Filenames are Mac Absolute Time floats (insert decimal 6 places from end). "
+            "Data survives app deletion and may outlast primary databases."
         ),
         "platforms": ["iOS", "macOS"],
         "parser_class": "SegbParser",
         "magic": [
             {
-                "offset": 0,
-                "value": b"\x53\x45\x47\x42",
-                "description": "SEGB v2 Biome store header (magic at start)",
-            },
-            {
-                # SEGB v1: 56-byte header, magic in last 4 bytes at offset 52 (0x34)
                 "offset": 52,
                 "value": b"\x53\x45\x47\x42",
-                "description": "SEGB v1 Biome store header (magic at offset 0x34)",
-            },
+                "description": "SEGB v1 signature at offset 52 (within 56-byte header)",
+            }
         ],
-        "extensions": [".segb", ".segb1", ".segb2", ".biome"],
-        "links": [("3rd Party Parser Source code", "https://github.com/cclgroupltd/ccl-segb")],
+        "extensions": [],
+        "links": [
+            (
+                "ccl_segb — CCL parser for SEGB v1 and v2",
+                "https://github.com/cclgroupltd/ccl-segb",
+            ),
+            (
+                "iOS 16 Biome breakdown Part 1 — SEGB format (D20 Forensics)",
+                "https://blog.d204n6.com/2022/09/ios-16-now-you-c-it-now-you-dont.html",
+            ),
+            (
+                "SEGB v2 — iOS 17 format changes (Cellebrite)",
+                "https://cellebrite.com/en/blog/understanding-and-decoding-the-newest-ios-segb-format/",
+            ),
+            (
+                "iOS Biome AppIntent files — deleted iMessages in SEGB (Blue Crew Forensics)",
+                "https://bluecrewforensics.com/2022/03/07/ios-app-intents/",
+            ),
+            (
+                "Biome data as KnowledgeC successor (Magnet Forensics)",
+                "https://www.magnetforensics.com/blog/bringing-it-back-with-biome-data/",
+            ),
+        ],
         "status": "reviewed",
     },
     {
         "name": "Android Sparse Image",
-        "short_name": "sparse img",
-        "category": "disk_image",
+        "short_name": "simg",
+        "category": "archive",
         "forensic_relevance": (
-            "Compressed Android filesystem image used for system partitions. "
-            "Must be converted with simg2img before mounting."
+            "Android's space-efficient flash image format that replaces empty and "
+            "repetitive blocks with metadata chunks, reducing image size for "
+            "transmission and fastboot flashing. "
+            "Used in factory images (Google, Samsung, OEM), OTA update packages, "
+            "and custom ROM distributions. "
+            "28-byte header (magic 0xED26FF3A) specifies block size (typically 4096 bytes), "
+            "total output blocks, and chunk count. "
+            "Three chunk types: RAW (data), DONT_CARE (empty/unwritten blocks), "
+            "and FILL (repeated 4-byte pattern). "
+            "Must be converted to raw before mounting or forensic analysis — "
+            "simg2img (AOSP/anestisb port) converts to raw ext4/f2fs. "
+            "Large images are sometimes split into multiple sparse chunks "
+            "that must be reassembled before conversion. "
+            "Forensically relevant as the delivery container for Android system "
+            "partitions (system.img, vendor.img, product.img) — "
+            "useful for comparing suspect device partitions against factory baselines."
         ),
         "platforms": ["Android"],
         "parser_class": None,
@@ -1867,54 +2193,123 @@ FORMATS: list[dict[str, Any]] = [
             {
                 "offset": 0,
                 "value": b"\x3a\xff\x26\xed",
-                "description": "Android sparse image magic",
+                "description": "Android sparse image magic (0xED26FF3A little-endian)",
             }
         ],
-        "extensions": [".img", ".sparse"],
-        "links": [("AOSP source", "https://android.googlesource.com/platform/system/core/+/refs/heads/main/libsparse/sparse_format.h")],
-        "status": "draft",
+        "extensions": [".img", ".simg"],
+        "links": [
+            (
+                "Android sparse image format (libsparse — AOSP source)",
+                "https://android.googlesource.com/platform/system/core/+/refs/heads/master/libsparse/",
+            ),
+            (
+                "Android sparse image format explained (2net.co.uk)",
+                "https://2net.co.uk/tutorial/android-sparse-image-format",
+            ),
+            (
+                "Formal sparse format specification (Kaitai Struct)",
+                "https://formats.kaitai.io/android_sparse/",
+            ),
+            (
+                "simg2img — standalone converter (anestisb/android-simg2img)",
+                "https://github.com/anestisb/android-simg2img",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "SQLite Database",
         "short_name": "SQLite",
         "category": "database",
         "forensic_relevance": (
-            "Widely used embedded database in browsers, mobile apps, and OS artifacts "
-            "such as messages, call logs, browser history, and app data."
+            "The dominant embedded database on iOS, Android, macOS, and Windows. "
+            "Used by virtually every app for messages, call logs, contacts, browser "
+            "history, location data, and app state. "
+            "Identified by a 16-byte magic string ('SQLite format 3\\000') at offset 0. "
+            "100-byte file header contains: page size, write version (rollback=1, WAL=2), "
+            "encoding, and change counter. "
+            "Key forensic recovery mechanisms: "
+            "(1) Freelist — deleted pages retained in a free-page list; records survive "
+            "until overwritten by new insertions. "
+            "(2) Page slack space — deleted records within active pages may survive "
+            "partially below the live cell pointer array. "
+            "(3) WAL (Write-Ahead Log) — in WAL mode, the -wal file contains uncommitted "
+            "and recently checkpointed pages; must be analysed alongside the main DB. "
+            "WAL slack: after checkpoint, old pages remain in the WAL until overwritten "
+            "from the start — prior database states are recoverable. "
+            "CRITICAL: opening a WAL-mode database with a standard SQLite driver "
+            "triggers a checkpoint, irreversibly committing and clearing the WAL — "
+            "use read-only forensic tools or low-level parsing only. "
+            "sqlite_sequence table gaps reveal deleted AUTOINCREMENT rows."
         ),
-        "platforms": ["Android", "iOS", "macOS", "Windows"],
-        "parser_class": "SQLiteParser",
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
+        "parser_class": "SqliteParser",
         "magic": [
             {
                 "offset": 0,
                 "value": b"\x53\x51\x4c\x69\x74\x65\x20\x66\x6f\x72\x6d\x61\x74\x20\x33\x00",
-                "description": "SQLite database header",
+                "description": "SQLite magic string ('SQLite format 3\\x00')",
             }
         ],
         "extensions": [".db", ".sqlite", ".sqlite3", ".db3"],
-        "links": [("Format spec", "https://www.sqlite.org/fileformat.html")],
+        "links": [
+            (
+                "SQLite file format specification",
+                "https://www.sqlite.org/fileformat.html",
+            ),
+            (
+                "SQLite forensics — freelist, WAL, and unallocated space (Belkasoft)",
+                "https://belkasoft.com/sqlite-analysis",
+            ),
+            (
+                "Forensic analysis of SQLite WAL files (Sanderson Forensics)",
+                "https://sqliteforensictoolkit.com/forensic-examination-of-sqlite-write-ahead-log-wal-files/",
+            ),
+            (
+                "Making the Invisible Visible — recovering deleted SQLite records (FQLite)",
+                "https://github.com/pawlaszczyk/fqlite",
+            ),
+            (
+                "SQLite deleted record recovery techniques — survey (ScienceDirect 2025)",
+                "https://www.sciencedirect.com/science/article/abs/pii/S2666281725001714",
+            ),
+        ],
         "status": "reviewed",
     },
     {
-        "name": "SQLite WAL (Write-Ahead Log)",
+        "name": "SQLite WAL",
         "short_name": "SQLite WAL",
         "category": "database",
         "forensic_relevance": (
-            "Write-ahead log companion to a SQLite database. Contains committed "
-            "transactions not yet checkpointed into the main .db file. "
-            "Opening alongside the .db gives the most current view of the database."
+            "Write-Ahead Log companion file for SQLite databases in WAL journal mode. "
+            "Contains uncommitted database pages and, after checkpoint, WAL slack — "
+            "old page versions that persist until overwritten from the start of the file. "
+            "Must be analysed alongside the parent .db file using the same schema. "
+            "CRITICAL: opening the parent database with a standard SQLite driver "
+            "triggers a checkpoint, committing and clearing the WAL — "
+            "use read-only forensic tools only. "
+            "See SQLite Database entry for full forensic context."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
         "parser_class": None,
         "magic": [
             {
                 "offset": 0,
-                "value": b"\x37\x7f\x06",
-                "description": "SQLite WAL magic",
+                "value": b"\x37\x7f\x06\x82",
+                "description": "SQLite WAL magic (big-endian)",
             }
         ],
-        "extensions": [".db-wal", ".sqlite-wal", ".sqlite3-wal", ".db3-wal"],
-        "links": [("Format spec", "https://www.sqlite.org/walformat.html")],
+        "extensions": ["-wal"],
+        "links": [
+            (
+                "SQLite WAL format specification",
+                "https://www.sqlite.org/walformat.html",
+            ),
+            (
+                "Forensic analysis of SQLite WAL files (Sanderson Forensics)",
+                "https://sqliteforensictoolkit.com/forensic-examination-of-sqlite-write-ahead-log-wal-files/",
+            ),
+        ],
         "status": "reviewed",
     },
     {
@@ -1922,71 +2317,141 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "TAR",
         "category": "archive",
         "forensic_relevance": (
-            "TODO"
+            "Unix standard archive format packaging files and directory trees with "
+            "full metadata preservation. TAR itself provides no compression — "
+            "commonly combined with gzip (.tar.gz/.tgz), bzip2 (.tar.bz2), or "
+            "xz (.tar.xz). "
+            "Structure: each file entry has a 512-byte header containing filename, "
+            "permissions, UID/GID (as octal ASCII), file size, and mtime "
+            "(Unix epoch seconds as octal ASCII). "
+            "Three major variants: V7 (no magic), USTAR/POSIX ('ustar\\0' at offset 257 "
+            "— adds uname/gname and longer paths), GNU tar ('ustar  \\0' with two spaces), "
+            "and PAX/POSIX.1-2001 (USTAR + extended header records for sub-second "
+            "timestamps, unlimited path lengths, and UTF-8 encoding). "
+            "Forensically relevant as: container for Android OTA payload.bin, "
+            "iOS/macOS app packages (.ipa are ZIP, but some backup formats use TAR), "
+            "Linux backup archives, Docker image layers, and forensic tool outputs. "
+            "TAR has no deletion mechanism — updated files are appended as new entries; "
+            "superseded versions of the same file remain in the archive. "
+            "mtime in headers may reveal original file timestamps from the source system."
         ),
-        "platforms": ["Android", "Linux"],
+        "platforms": ["Android", "Linux", "macOS", "iOS"],
         "parser_class": None,
         "magic": [
             {
                 "offset": 257,
                 "value": b"\x75\x73\x74\x61\x72",
-                "description": "POSIX TAR indicator at offset 257",
+                "description": "USTAR/GNU magic ('ustar') at offset 257 in first header block",
             }
         ],
-        "extensions": [".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"],
-        "links": [("Format spec", "https://www.gnu.org/software/tar/manual/html_node/Standard.html")],
-        "status": "draft",
+        "extensions": [".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz"],
+        "links": [
+            (
+                "TAR format specification (GNU tar manual)",
+                "https://www.gnu.org/software/tar/manual/html_node/Standard.html",
+            ),
+            (
+                "TAR archive format overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/Tar_(computing)",
+            ),
+            (
+                "TAR format internals and variants explained",
+                "https://mort.coffee/home/tar/",
+            ),
+        ],
+        "status": "reviewed",
     },
     {
         "name": "Apple Unified Log (tracev3)",
         "short_name": "tracev3",
         "category": "log",
         "forensic_relevance": (
-            "Binary log file used by Apple's Unified Logging system since iOS 10 / macOS Sierra. "
-            "Replaces ASL and syslog as the primary system log store on all modern Apple platforms. "
-            "Each file covers one boot session and records subsystem, category, process, PID, "
-            "thread ID, activity ID, log level, and the event message with nanosecond timestamps. "
-            "Key forensic value: app launches and terminations, network connections, "
-            "lock/unlock and screen events, Siri activations, crash precursors, "
-            "userActionEvent entries (explicit user interactions), lossEvent entries "
-            "(indicates gaps in the log due to buffer overflow), and signpost intervals "
-            "(performance markers that reveal feature usage). "
-            "Private message_entries fields may contain data redacted in live-system logs "
-            "but preserved in the binary acquisition. "
-            "Full string resolution requires the uuidtext/ catalog and DSC (Dyld Shared Cache); "
-            "without them message text falls back to raw format-string fragments."
+            "Binary log chunk format used by Apple's Unified Logging System. "
+            "Individual .tracev3 files are stored under "
+            "/private/var/db/diagnostics/ in Persist/, Special/, Signpost/, "
+            "and HighVolume/ subdirectories. "
+            "Each file contains compressed, timestamped log entries referencing "
+            "format strings via uuidtext/ catalogs and the Dyld Shared Cache (DSC). "
+            "Cannot be parsed in isolation — requires companion uuidtext/, timesync/, "
+            "and DSC directories for full string resolution and timestamp anchoring. "
+            "Identified by the magic bytes 0x0C 0x10 0x00 0x00 at offset 0. "
+            "In crush, the logarchive viewer assembles these files automatically "
+            "from iOS full-filesystem acquisitions into a parseable bundle. "
+            "See the Apple Unified Log Archive (logarchive) entry for full "
+            "forensic context and artifact categories."
         ),
         "platforms": ["iOS", "macOS"],
         "parser_class": "UnifiedLogConverter",
         "magic": [
             {
                 "offset": 0,
-                "value": b"\x30\x74\x72\x33",
-                "description": "tracev3 header magic ('0tr3')",
+                "value": b"\x0c\x10\x00\x00",
+                "description": "tracev3 file magic",
             }
         ],
         "extensions": [".tracev3"],
         "links": [
-            ("Apple OSLog documentation", "https://developer.apple.com/documentation/oslog"),
-            ("Mandiant macos-UnifiedLogs (converter)", "https://github.com/mandiant/macos-UnifiedLogs"),
-            ("iOS Unified Logs research", "https://www.ios-unifiedlogs.com/"),
-            ("Sarah Edward's research (mac4n6)", "https://www.mac4n6.com/blog/2016/11/13/new-macos-sierra-log-format-and-how-to-access-it"),
+            (
+                "Apple Unified Logging formats — tracev3 internals (libyal)",
+                "https://github.com/libyal/dtformats/blob/main/documentation/Apple%20Unified%20Logging%20and%20Activity%20Tracing%20formats.asciidoc",
+            ),
+            (
+                "Mandiant macos-UnifiedLogs parser",
+                "https://github.com/mandiant/macos-UnifiedLogs",
+            ),
+            (
+                "iOS Unified Logs research (ios-unifiedlogs.com)",
+                "https://www.ios-unifiedlogs.com/",
+            ),
         ],
         "status": "reviewed",
     },
     {
         "name": "XML Document",
         "short_name": "XML",
-        "category": "configuration",
+        "category": "serialization",
         "forensic_relevance": (
-            "Configuration files, Android manifests, iOS backup manifests, "
-            "app data exports, and structured log formats."
+            "Human-readable markup format used pervasively for configuration, "
+            "data exchange, and structured documents. "
+            "Key forensic XML files on Android: "
+            "AndroidManifest.xml (decoded from APK via apktool/jadx) — declares "
+            "package name, version, permissions, exported components, intent filters, "
+            "and allowBackup flag; critical for app capability assessment and malware analysis. "
+            "packages.xml (/data/system/) — lists all installed packages with granted "
+            "permissions, installer source (com.android.vending = Play Store vs sideloaded), "
+            "and UID assignments. "
+            "runtime-permissions.xml and roles.xml — dangerous permissions granted at runtime "
+            "and default app assignments (Android 10+). "
+            "SharedPreferences files (/data/data/<package>/shared_prefs/*.xml) — "
+            "app configuration and user state, sometimes containing credentials or tokens. "
+            "On iOS/macOS: XML plists (see Property List entry). "
+            "In Office documents: OOXML internals (.docx/.xlsx/.pptx are ZIP+XML). "
+            "No meaningful magic beyond the XML declaration '<?xml' at offset 0."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
         "parser_class": "XmlParser",
-        "magic": [],
-        "extensions": [".xml", ".xhtml", ".svg", ".kml"],
-        "links": [("Format spec", "https://www.w3.org/TR/xml/")],
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x3c\x3f\x78\x6d\x6c",
+                "description": "XML declaration ('<?xml')",
+            }
+        ],
+        "extensions": [".xml"],
+        "links": [
+            (
+                "XML specification (W3C)",
+                "https://www.w3.org/TR/xml/",
+            ),
+            (
+                "AndroidManifest.xml forensics — permissions and components",
+                "https://greaterinternetfreedom.org/course/mobile-forensic-analysis-a-case-study-walkthrough-part-03-application-analysis-a-static-approach/",
+            ),
+            (
+                "Android roles and permissions XML files (D20 Forensics)",
+                "https://blog.d204n6.com/2021/01/android-roles-and-permissions-android.html",
+            ),
+        ],
         "status": "reviewed",
     },
     {
@@ -1994,21 +2459,328 @@ FORMATS: list[dict[str, Any]] = [
         "short_name": "ZIP",
         "category": "archive",
         "forensic_relevance": (
-            "General-purpose archive. iOS IPA app packages, Android APKs, "
-            "Office documents (DOCX/XLSX), and many other compound formats are ZIPs."
+            "Ubiquitous archive format and basis for many higher-level formats: "
+            "APK (Android apps), IPA (iOS apps), DOCX/XLSX/PPTX (Office Open XML), "
+            "JAR (Java), and many others are ZIP archives with specific internal structures. "
+            "Dual-directory structure: Local File Headers precede each entry's data, "
+            "Central Directory at end-of-file is the authoritative index — "
+            "discrepancies between them can indicate tampering, polyglot files, or malware. "
+            "EOCD (End of Central Directory) comment field may contain hidden data, "
+            "tracker IDs, or malware markers — scan the last 64KB for the EOCD magic. "
+            "Timestamps use DOS date/time format: 2-second precision, local time, "
+            "no timezone information — unreliable for precise forensic timeline. "
+            "APK-specific: APK Signing Block v2+ inserts between the last Local File Header "
+            "and Central Directory — presence indicates modern Android signing. "
+            "ZIP structure variation (creator OS, compressor version, extra fields) "
+            "can fingerprint the tool or OS used to create the archive. "
+            "Encryption: ZipCrypto (legacy, weak — known-plaintext attack possible) "
+            "or WinZip AES-256 (strong). "
+            "Standard ZIP limited to 4GB — ZIP64 extension required for larger archives."
         ),
-        "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
+        "parser_class": "ZipParser",
         "magic": [
             {
                 "offset": 0,
                 "value": b"\x50\x4b\x03\x04",
-                "description": "ZIP local file header signature",
+                "description": "ZIP Local File Header signature ('PK\\x03\\x04')",
             }
         ],
-        "extensions": [".zip", ".ipa", ".apk", ".docx", ".xlsx", ".pptx", ".jar"],
-        "links": [("Format spec", "https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT")],
-        "status": "draft",
+        "extensions": [".zip", ".apk", ".ipa", ".jar", ".docx", ".xlsx", ".pptx"],
+        "links": [
+            (
+                "ZIP format specification (PKWARE APPNOTE)",
+                "https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT",
+            ),
+            (
+                "ZIP format overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/ZIP_(file_format)",
+            ),
+            (
+                "ZIP fingerprinting for provenance analysis (ScienceDirect)",
+                "https://www.sciencedirect.com/science/article/abs/pii/S266628172100189X",
+            ),
+            (
+                "APK is no longer a standard ZIP — APK Signing Block (Fortinet)",
+                "https://www.fortinet.com/blog/threat-research/an-android-package-is-no-longer-a-zip",
+            ),
+            (
+                "ForensicsWiki — ZIP format",
+                "https://forensics.wiki/zip/",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
+        "name": "Apple Keychain",
+        "short_name": "Keychain",
+        "category": "database",
+        "forensic_relevance": (
+            "Apple's password management system storing credentials, private keys, "
+            "certificates, Wi-Fi passwords, payment data, and secure notes. "
+            "On iOS, implemented as a single SQLite database at "
+            "/private/var/Keychains/keychain-2.db — the file is unencrypted "
+            "but individual records have their acct, data, and svce fields "
+            "encrypted with AES-256-GCM using per-row keys protected by the Secure Enclave. "
+            "Records contain: account name (acct), service (svce), server, "
+            "access group (agrp — identifies the owning app), protection class, "
+            "and the encrypted secret (data). "
+            "On macOS: Login Keychain (~/Library/Keychains/login.keychain-db), "
+            "System Keychain (/Library/Keychains/), and "
+            "Local Items/iCloud Keychain (keychain-2.db + user.kb keybag). "
+            "If iCloud Keychain sync is enabled, keychain-2.db may contain "
+            "credentials from all the user's Apple devices. "
+            "Decryption on 64-bit devices requires either a jailbroken device, "
+            "a known passcode, or specialized forensic tools (Elcomsoft EIFT, GrayKey). "
+            "32-bit devices (pre-iPhone 6) allow offline decryption with extracted class keys."
+        ),
+        "platforms": ["iOS", "macOS"],
+        "parser_class": "SqliteParser",
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x53\x51\x4c\x69\x74\x65\x20\x66\x6f\x72\x6d\x61\x74\x20\x33\x00",
+                "description": "SQLite magic — keychain-2.db is a standard SQLite database",
+            }
+        ],
+        "extensions": [".db", ".keychain-db", ".keychain"],
+        "links": [
+            (
+                "Apple keychain data protection (Apple Security Guide)",
+                "https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web",
+            ),
+            (
+                "Extracting and decrypting iOS Keychain (ElcomSoft / DFIR Review)",
+                "https://dfir.pubpub.org/pub/gqqxl93l",
+            ),
+            (
+                "Deep dive into Apple Keychain decryption (Passware)",
+                "https://blog.passware.com/a-deep-dive-into-apple-keychain-decryption/",
+            ),
+        ],
+        "status": "reviewed",
+    },
+
+    {
+        "name": "Android Keystore",
+        "short_name": "Keystore",
+        "category": "database",
+        "forensic_relevance": (
+            "Android's credential and key storage system. Two distinct layers: "
+            "(1) App-level keystore files — BKS (Bouncy Castle KeyStore) or PKCS#12/PFX "
+            "files bundled in APKs for certificate pinning and SSL. "
+            "BKS files contain certificates, private keys, and trust anchors; "
+            "their passwords are frequently hardcoded in app code. "
+            "(2) System Keystore — hardware-backed key storage via the Keymaster/StrongBox "
+            "TEE (Trusted Execution Environment), not directly accessible as a file. "
+            "App keystore files (.bks, .keystore, .jks, .p12, .pfx) are "
+            "found bundled in APK assets/ or res/raw/ directories. "
+            "BKS files identified by proprietary Bouncy Castle magic; "
+            "JKS by 0xFEEDFEED; PKCS#12 by 0x30 (ASN.1 SEQUENCE). "
+            "JKS format is weakly protected and passwords are brute-forceable. "
+            "Hardcoded keystore passwords in decompiled DEX are a common "
+            "finding in mobile app security assessments."
+        ),
+        "platforms": ["Android"],
+        "parser_class": None,
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\xfe\xed\xfe\xed",
+                "description": "JKS (Java KeyStore) magic",
+            },
+            {
+                "offset": 0,
+                "value": b"\x30",
+                "description": "PKCS#12/PFX — ASN.1 SEQUENCE tag",
+            },
+        ],
+        "extensions": [".keystore", ".jks", ".bks", ".p12", ".pfx"],
+        "links": [
+            (
+                "Android Keystore system (Android developer docs)",
+                "https://developer.android.com/privacy-and-security/keystore",
+            ),
+            (
+                "PKCS#12 format overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/PKCS_12",
+            ),
+            (
+                "Insecurity of Android keystores — brute-force of JKS (NDSS 2018)",
+                "https://www.ndss-symposium.org/wp-content/uploads/2018/02/ndss2018_02B-1_Focardi_paper.pdf",
+            ),
+        ],
+        "status": "reviewed",
+    },
+
+    {
+        "name": "iOS Backup (iTunes/Finder)",
+        "short_name": "iOS Backup",
+        "category": "archive",
+        "forensic_relevance": (
+            "Local iOS device backup created by iTunes (Windows/older macOS) or "
+            "Finder (macOS 10.15+). Stored at: "
+            "Windows: %APPDATA%\\Apple Computer\\MobileSync\\Backup\\{UDID}\\ "
+            "macOS: ~/Library/Application Support/MobileSync/Backup/{UDID}\\ "
+            "Structure: 256 subdirectories (00-ff) containing files named by "
+            "SHA-1 hash of domain+'-'+relativePath — no file extensions, no original filenames. "
+            "Four key metadata files: "
+            "Info.plist (device info, installed apps, last backup date, iTunes version), "
+            "Manifest.plist (backup keybag, encryption flag, WasPasscodeSet, app list), "
+            "Status.plist (backup state, creation start date), "
+            "Manifest.db (SQLite index mapping fileIDs to domain/relativePath/metadata). "
+            "Unencrypted backups: all files directly accessible. "
+            "Encrypted backups: Manifest.db is AES-encrypted using ManifestKey "
+            "from Manifest.plist; individual files re-encrypted with backup class keys. "
+            "Encryption password required for decryption — not tied to device passcode. "
+            "Keychain data (keychain-backup.plist) only present in encrypted backups. "
+            "Manifest.plist's WasPasscodeSet and RestoreApplications may reveal "
+            "jailbreak history even after device restoration."
+        ),
+        "platforms": ["iOS"],
+        "parser_class": None,
+        "magic": [],
+        "extensions": [],
+        "links": [
+            (
+                "iOS backup format internals (The iPhone Wiki)",
+                "https://www.theiphonewiki.com/wiki/ITunes_Backup",
+            ),
+            (
+                "Forensic analysis of iTunes backups (Farley Forensics)",
+                "https://farleyforensics.com/2019/04/14/forensic-analysis-of-itunes-backups/",
+            ),
+            (
+                "iPhone backup forensics 101 (Kinga Kieczkowska / OBTS v7)",
+                "https://kieczkowska.wordpress.com/2025/04/29/iphone-backup-forensics-101/",
+            ),
+            (
+                "iOS backup encryption and data protection (Medium / VulBusters)",
+                "https://medium.com/@vulbusters/ios-data-protection-on-backup-6f53d588c830",
+            ),
+        ],
+        "status": "reviewed",
+    },
+
+    {
+        "name": "Windows Prefetch",
+        "short_name": "Prefetch",
+        "category": "log",
+        "forensic_relevance": (
+            "Windows execution evidence artifacts created when an application is run "
+            "for the first time from a specific path. "
+            "Stored under C:\\Windows\\Prefetch\\ as {EXECUTABLE}-{HASH}.pf, "
+            "where HASH is derived from the executable's full path and command line. "
+            "Enabled by default on Windows workstations; disabled on Windows Server. "
+            "Each .pf file contains: executable name, run count, "
+            "up to 8 last execution timestamps (Windows 8+ — earlier versions store 1), "
+            "list of files and directories accessed in the first 10 seconds of execution, "
+            "and volume serial number and creation timestamp. "
+            "Note: actual execution time is approximately 10 seconds before the .pf "
+            "file's last modification timestamp. "
+            "Forensically: proves execution even if the original binary was deleted, "
+            "reveals path from which malware was executed, "
+            "detects anti-forensic tools (CCleaner, SDelete prefetch entries). "
+            "Multiple .pf files for the same executable indicate execution from "
+            "different paths. "
+            "Post-Windows 8.1: files use MAM compression requiring specialized parsing. "
+            "Format reversed by Joachim Metz (libscca); no official public specification."
+        ),
+        "platforms": ["Windows"],
+        "parser_class": None,
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x11\x00\x00\x00\x53\x43\x43\x41",
+                "description": "Prefetch v17 header (Windows XP/2003)",
+            },
+            {
+                "offset": 0,
+                "value": b"\x17\x00\x00\x00\x53\x43\x43\x41",
+                "description": "Prefetch v23 header (Windows Vista/7)",
+            },
+            {
+                "offset": 0,
+                "value": b"\x1a\x00\x00\x00\x53\x43\x43\x41",
+                "description": "Prefetch v26 header (Windows 8.1)",
+            },
+            {
+                "offset": 0,
+                "value": b"\x1e\x00\x00\x00\x53\x43\x43\x41",
+                "description": "Prefetch v30 header (Windows 10)",
+            },
+        ],
+        "extensions": [".pf"],
+        "links": [
+            (
+                "Windows Prefetch File format spec (libscca — Joachim Metz)",
+                "https://github.com/libyal/libscca/blob/main/documentation/Windows%20Prefetch%20File%20(PF)%20format.asciidoc",
+            ),
+            (
+                "Prefetch forensics — execution evidence (Magnet Forensics)",
+                "https://www.magnetforensics.com/blog/forensic-analysis-of-prefetch-files-in-windows/",
+            ),
+            (
+                "PECmd — Prefetch parser (Eric Zimmerman)",
+                "https://ericzimmerman.github.io/#!index.md",
+            ),
+            (
+                "ForensicsWiki — Prefetch",
+                "https://forensics.wiki/prefetch/",
+            ),
+        ],
+        "status": "reviewed",
+    },
+
+    {
+        "name": "Gzip Compressed Data",
+        "short_name": "gzip",
+        "category": "archive",
+        "forensic_relevance": (
+            "Single-file lossless compression format using DEFLATE (RFC 1951), "
+            "defined in RFC 1952. Identified by magic bytes 0x1F 0x8B at offset 0. "
+            "10-byte header contains: compression method (CM=8 for DEFLATE), "
+            "flags (FNAME, FCOMMENT, FEXTRA, FHCRC), "
+            "mtime (4-byte Unix timestamp of original file — forensically significant, "
+            "may reveal when the source file was last modified), "
+            "OS byte (identifies the OS that created the file: 0=FAT, 3=Unix, 7=Mac, 11=NTFS), "
+            "and optional original filename (FNAME flag). "
+            "8-byte footer: CRC-32 of uncompressed data and original file size. "
+            "Forensically common as: Android OTA payload.bin wrapper, "
+            "Linux log rotation (.gz), iOS/macOS system files, "
+            "network traffic content encoding, and database backups. "
+            "Multiple gzip members can be concatenated in a single .gz file. "
+            "OS byte and mtime can reveal the origin platform and source file age."
+        ),
+        "platforms": ["Android", "Linux", "iOS", "macOS", "Windows"],
+        "parser_class": None,
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x1f\x8b",
+                "description": "Gzip magic number (ID1=0x1F, ID2=0x8B)",
+            }
+        ],
+        "extensions": [".gz", ".tgz"],
+        "links": [
+            (
+                "GZIP file format specification (RFC 1952)",
+                "https://www.rfc-editor.org/rfc/rfc1952",
+            ),
+            (
+                "Gzip format overview (Wikipedia)",
+                "https://en.wikipedia.org/wiki/Gzip",
+            ),
+            (
+                "Gzip format (Library of Congress)",
+                "https://www.loc.gov/preservation/digital/formats/fdd/fdd000599.shtml",
+            ),
+            (
+                "Gzip (ForensicsWiki)",
+                "https://forensics.wiki/gzip/",
+            ),
+        ],
+        "status": "reviewed",
     },
 ]
 
