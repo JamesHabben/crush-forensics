@@ -19,6 +19,7 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **Theme moved to View menu** — the Theme submenu (System default / Light / Dark) has been moved from **Tools** to **View**, where display-related settings belong.
 - **Refinement of File Format Database entires** - all entries were double checked, the descriptions refined and relevant URLs added.
 
 ## [0.5.0] — 2026-04-25
