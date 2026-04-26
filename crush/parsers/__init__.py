@@ -19,6 +19,7 @@ from crush.parsers.json_parser import JsonParser
 from crush.parsers.pdf_parser import PDFParser
 from crush.parsers.hex_fallback import HexFallbackParser
 from crush.parsers.log_parser import LogParser  # noqa: F401 — explicit-only, not auto-registered
+from crush.parsers.protobuf_parser import ProtobufParser
 
 ParserRegistry.register(SQLiteParser())
 ParserRegistry.register(XmlParser())
@@ -31,4 +32,5 @@ ParserRegistry.register(ImageParser())
 ParserRegistry.register(MediaParser())
 ParserRegistry.register(JsonParser())
 ParserRegistry.register(PDFParser())
+ParserRegistry.register(ProtobufParser())  # explicit-only (can_parse=False), registered for DISPLAY_NAME lookup
 ParserRegistry.register(HexFallbackParser())  # Must be last

@@ -13,6 +13,7 @@ All notable changes to Crush will be documented in this file.
 
 ### Bug Fixes
 
+- **Paste & Decode: Protobuf option silently fell back to auto-detect** — the Protobuf parser was not registered in the parser registry, so selecting "Protobuf (schema-less)" in the Paste & Decode dialog had no effect and auto-detection was used instead. The parser is now registered (explicit-only: it never wins in auto-detection but is reachable by name).
 - **Multi-Log Studio hang on close during unified log conversion** — closing the Multi-Log Studio window while Apple Unified Log data was still being converted caused the whole application to freeze until the conversion finished (potentially many minutes). The underlying `unifiedlog_iterator` subprocess is now killed immediately when the window is closed, and the worker thread exits within milliseconds.
 - **Apple Unified Log timestamps missing in Multi-Log Studio** — when loading an iOS full-filesystem acquisition directly, all log entries showed "—" in the Timestamp column. The root cause was that `unifiedlog_iterator` does not follow symbolic links for `timesync/` directories; the parallel mini-archive setup now copies `timesync/` and `Special/` into each chunk instead of symlinking them. Additionally, the CSV timestamp format emitted by the binary (`2024-01-15 10:23:45.123456789 +0000`, with a space before the timezone offset) was not handled by the timestamp parser; this is now fixed.
 

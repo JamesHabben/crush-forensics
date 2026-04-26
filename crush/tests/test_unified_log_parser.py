@@ -48,6 +48,14 @@ class TestParseUlTimestamp:
         assert dt is not None
         assert dt.year == 2024
 
+    def test_csv_format_space_before_tz(self) -> None:
+        # unifiedlog_iterator CSV output: space before timezone offset
+        dt = _parse_ul_timestamp("2024-01-15 10:23:45.123456789 +0000")
+        assert dt is not None
+        assert dt.year == 2024
+        assert dt.month == 1
+        assert dt.day == 15
+
 
 # ---------------------------------------------------------------------------
 # Level normalisation
