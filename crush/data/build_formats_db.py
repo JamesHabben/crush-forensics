@@ -2243,7 +2243,7 @@ FORMATS: list[dict[str, Any]] = [
             "sqlite_sequence table gaps reveal deleted AUTOINCREMENT rows."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
-        "parser_class": "SqliteParser",
+        "parser_class": "SQLiteParser",
         "magic": [
             {
                 "offset": 0,
@@ -2535,7 +2535,7 @@ FORMATS: list[dict[str, Any]] = [
             "32-bit devices (pre-iPhone 6) allow offline decryption with extracted class keys."
         ),
         "platforms": ["iOS", "macOS"],
-        "parser_class": "SqliteParser",
+        "parser_class": "SQLiteParser",
         "magic": [
             {
                 "offset": 0,
