@@ -55,6 +55,7 @@ target-version = "py311"
 python_version = "3.11"
 strict = true
 exclude = [
+    "build/.*",
     "crush/third_party/.*",
 ]
 

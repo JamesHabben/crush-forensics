@@ -21,6 +21,8 @@ from crush.parsers.hex_fallback import HexFallbackParser
 from crush.parsers.log_parser import LogParser  # noqa: F401 — explicit-only, not auto-registered
 from crush.parsers.protobuf_parser import ProtobufParser
 
+__all__ = ["ParserRegistry"]
+
 ParserRegistry.register(SQLiteParser())
 ParserRegistry.register(XmlParser())
 ParserRegistry.register(PlistParser())
