@@ -422,6 +422,8 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Close all tabs", self._close_all_tabs)
 
         tools_menu = menu.addMenu("Tools")
+        tools_menu.addAction("Paste & Decode…", self._paste_decode)
+        tools_menu.addSeparator()
         tools_menu.addAction("Export log…", self._export_log)
         theme_menu = tools_menu.addMenu("Theme")
         theme_menu.addAction("System default", self._set_theme_system)
@@ -859,6 +861,48 @@ class MainWindow(QMainWindow):
             self._open_external_with_app(path)
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _paste_decode(self) -> None:
+        from crush.ui.paste_decode_dialog import PasteDecodeDialog
+        dlg = PasteDecodeDialog(self)
+        dlg.open_requested.connect(self._open_bytes_with_format)
+        dlg.exec()
+
+    def _open_bytes_with_format(self, data: bytes, filename_hint: str, parser_display_name: object) -> None:
+        """Open *data* in the appropriate viewer, honouring an explicit format choice."""
+        import crush.parsers  # noqa: F401 — ensures all parsers are registered
+        from crush.core.registry import ParserRegistry
+        from crush.core.vfs import BytesVFS
+
+        if parser_display_name == "__hex__":
+            from crush.viewers.hex_viewer import HexViewer
+            viewer = HexViewer(data, self)
+            self._viewer_tabs.addTab(viewer, "hex")
+            self._viewer_tabs.setCurrentIndex(self._viewer_tabs.count() - 1)
+            return
+
+        vfs = BytesVFS(data, name=filename_hint)
+        node = vfs.root()
+
+        if parser_display_name is None:
+            parser = ParserRegistry.best(node, vfs)
+        else:
+            parser = next(
+                (p for p in ParserRegistry._parsers if p.DISPLAY_NAME == parser_display_name),
+                None,
+            ) or ParserRegistry.best(node, vfs)
+
+        if parser is None:
+            QMessageBox.warning(self, "No parser found", f"No parser could handle this data as {filename_hint!r}.")
+            return
+        try:
+            result = parser.parse(node, vfs)
+            self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata)
+            self._status.showMessage(f"Opened pasted data  [{parser.DISPLAY_NAME}]")
+        except Exception as exc:
+            self._status.showMessage(f"Parse error: {exc}")
+            QMessageBox.warning(self, "Parse error", str(exc))
 
     def _open_bytes_as_artifact(self, data: bytes, name: str) -> None:
         """Open in-memory bytes (e.g. a BLOB cell) as a new tab using the best parser."""

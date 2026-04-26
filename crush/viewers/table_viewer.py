@@ -7,6 +7,7 @@ from typing import Any
 
 import csv
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
@@ -36,6 +37,47 @@ from crush.core.formatters import (
     try_xml_text,
 )
 
+# ---------------------------------------------------------------------------
+# Timestamp column decoding
+# ---------------------------------------------------------------------------
+
+# (internal_key, menu_label, header_suffix)
+_TS_FORMATS: list[tuple[str, str, str]] = [
+    ("unix_s",  "Unix — seconds since 1970-01-01",           "unix s"),
+    ("unix_ms", "Unix — milliseconds since 1970-01-01",       "unix ms"),
+    ("unix_us", "Unix — microseconds since 1970-01-01",       "unix µs"),
+    ("mac_abs", "Mac Absolute Time — seconds since 2001-01-01", "mac abs"),
+    ("win_ft",  "Windows FILETIME — 100 ns since 1601-01-01",  "win ft"),
+    ("chrome",  "Chrome / WebKit — µs since 1601-01-01",       "webkit"),
+]
+
+_MAC_EPOCH_OFFSET = 978_307_200     # seconds from Unix epoch to 2001-01-01
+_WIN_EPOCH_OFFSET = 11_644_473_600  # seconds from 1601-01-01 to Unix epoch
+
+
+def _decode_ts(value: int | float, fmt: str) -> str | None:
+    """Convert a raw integer/float to a UTC timestamp string using *fmt*."""
+    try:
+        v = float(value)
+        if fmt == "unix_s":
+            unix = v
+        elif fmt == "unix_ms":
+            unix = v / 1_000.0
+        elif fmt == "unix_us":
+            unix = v / 1_000_000.0
+        elif fmt == "mac_abs":
+            unix = v + _MAC_EPOCH_OFFSET
+        elif fmt == "win_ft":
+            unix = v / 10_000_000.0 - _WIN_EPOCH_OFFSET
+        elif fmt == "chrome":
+            unix = v / 1_000_000.0 - _WIN_EPOCH_OFFSET
+        else:
+            return None
+        dt = datetime.fromtimestamp(unix, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+    except (OSError, OverflowError, ValueError, TypeError):
+        return None
+
 
 class TableViewer(QWidget):
     """Viewer for SQLite databases.
@@ -53,6 +95,7 @@ class TableViewer(QWidget):
     def __init__(self, data: dict[str, Any], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
+        self._col_ts_formats: dict[int, str] = {}
         db_path_value = data.get("__db_path") if isinstance(data, dict) else None
         if isinstance(db_path_value, str) and db_path_value:
             candidate = Path(db_path_value)
@@ -146,6 +189,8 @@ class TableViewer(QWidget):
         self._table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table_view.customContextMenuRequested.connect(self._on_context_menu)
         self._table_view.horizontalHeader().setStretchLastSection(True)
+        self._table_view.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table_view.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         self._table_view.verticalHeader().setDefaultSectionSize(22)
         layout.addWidget(self._table_view)
 
@@ -158,6 +203,7 @@ class TableViewer(QWidget):
         if table is None:
             return
 
+        self._col_ts_formats.clear()
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
@@ -289,6 +335,7 @@ class TableViewer(QWidget):
         self._load_table_from_query(data)
 
     def _load_table_from_query(self, table: dict[str, Any]) -> None:
+        self._col_ts_formats.clear()
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
@@ -412,6 +459,69 @@ class TableViewer(QWidget):
                     index.column(), Qt.Orientation.Horizontal
                 ) or "blob"
                 self.open_bytes_requested.emit(data_to_open, str(col_header))
+
+    def _on_header_context_menu(self, pos: object) -> None:
+        header = self._table_view.horizontalHeader()
+        col = header.logicalIndexAt(pos)
+        if col <= 0:  # column 0 is "Row" — skip
+            return
+
+        menu = QMenu(self)
+        ts_submenu = menu.addMenu("Decode column as timestamp")
+        fmt_actions: dict[object, str] = {}
+        active = self._col_ts_formats.get(col)
+        for key, label, _ in _TS_FORMATS:
+            act = ts_submenu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(active == key)
+            fmt_actions[act] = key
+
+        menu.addSeparator()
+        clear_act = menu.addAction("Clear timestamp format")
+        clear_act.setEnabled(col in self._col_ts_formats)
+
+        chosen = menu.exec(header.mapToGlobal(pos))
+        if chosen in fmt_actions:
+            self._col_ts_formats[col] = fmt_actions[chosen]
+            self._apply_col_ts_format(col)
+        elif chosen == clear_act:
+            self._col_ts_formats.pop(col, None)
+            self._revert_col_ts_format(col)
+
+    def _apply_col_ts_format(self, col: int) -> None:
+        fmt = self._col_ts_formats.get(col)
+        if fmt is None:
+            return
+        for row in range(self._source_model.rowCount()):
+            item = self._source_model.item(row, col)
+            if item is None:
+                continue
+            raw = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(raw, (int, float)):
+                continue
+            decoded = _decode_ts(raw, fmt)
+            if decoded is not None:
+                item.setText(decoded)
+        h_item = self._source_model.horizontalHeaderItem(col)
+        if h_item is not None:
+            base = h_item.data(Qt.ItemDataRole.UserRole) or h_item.text()
+            h_item.setData(base, Qt.ItemDataRole.UserRole)
+            suffix = next(s for k, _, s in _TS_FORMATS if k == fmt)
+            h_item.setText(f"{base} [{suffix}]")
+
+    def _revert_col_ts_format(self, col: int) -> None:
+        for row in range(self._source_model.rowCount()):
+            item = self._source_model.item(row, col)
+            if item is None:
+                continue
+            raw = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(raw, (int, float)):
+                item.setText(str(raw))
+        h_item = self._source_model.horizontalHeaderItem(col)
+        if h_item is not None:
+            base = h_item.data(Qt.ItemDataRole.UserRole)
+            if base:
+                h_item.setText(str(base))
 
     def _copy_rows(self, rows: list[int]) -> None:
         lines: list[str] = []

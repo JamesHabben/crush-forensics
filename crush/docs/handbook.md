@@ -107,6 +107,19 @@ Shows a table selector at the top. For databases opened from a live path, a **Su
 
 **Row limit notice:** if a table has more rows than the display limit, a notice appears in the row count. Use a SQL query with `LIMIT` / `WHERE` to load a specific subset.
 
+**Timestamp column decoding:** right-click any column header to decode integer/real values as timestamps. Choose a format from the **Decode column as timestamp** submenu:
+
+| Format | Epoch | Unit |
+|---|---|---|
+| Unix — seconds | 1970-01-01 | s |
+| Unix — milliseconds | 1970-01-01 | ms |
+| Unix — microseconds | 1970-01-01 | µs |
+| Mac Absolute Time | 2001-01-01 | s |
+| Windows FILETIME | 1601-01-01 | 100 ns |
+| Chrome / WebKit | 1601-01-01 | µs |
+
+Values are displayed as `YYYY-MM-DD HH:MM:SS UTC`. The column header shows the active format as a suffix (e.g. `created_at [unix ms]`). Sorting remains chronologically correct. Select **Clear timestamp format** to revert to the raw values.
+
 **Cell inspection:** right-click any cell for options including:
 - **Inspect Cell…** — preview the raw value, attempt base64/plist/XML decode
 - **Open in Hex** — view cell bytes as hex
@@ -284,6 +297,35 @@ The right panel updates whenever you select or open a file. It shows:
 ## Exporting Files
 
 Right-click any file or folder in the Filesystem panel and choose **Export…**. For folders, the entire subtree is exported preserving the directory structure.
+
+---
+
+## Paste & Decode
+
+**Tools → Paste & Decode…** lets you paste raw binary data — copied from a hex editor, a SQLite BLOB cell, a network capture, or any other source — and open it directly in a Crush viewer without saving it to disk first.
+
+1. Paste hex, base64, or plain text into the input area.
+2. Set **Input encoding** to **Auto** (default) or force a specific encoding if auto-detection picks the wrong one.
+3. Choose the target format from **Open as**:
+
+| Open as | Notes |
+|---|---|
+| Auto-detect | Crush identifies the format by magic bytes |
+| Binary plist (bplist) | Force the Property List viewer |
+| XML / Text plist | Force the Property List viewer (XML form) |
+| JSON | Force the JSON viewer |
+| XML | Force the XML viewer |
+| SQLite database | Force the SQLite / table viewer |
+| Realm database | Force the Realm Database viewer |
+| Android Binary XML (ABX) | Force the ABX viewer |
+| SEGB / Biome | Force the SEGB viewer |
+| Protobuf (schema-less) | Force the Protobuf wire decoder |
+| Hex view (raw bytes) | Always open as raw hex, regardless of content |
+
+4. The status line shows the decoded byte count as you type — if it stays grey, the input could not be decoded with the current encoding setting.
+5. Click **Open** to open the data in a new viewer tab.
+
+> **Tip:** Use this to inspect a BLOB that is not a supported type for automatic chaining — for example, paste a hex dump of a custom binary format and open it as raw hex to examine its structure.
 
 ---
 
