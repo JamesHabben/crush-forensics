@@ -22,6 +22,17 @@ All notable changes to Crush will be documented in this file.
 - **Theme moved to View menu** — the Theme submenu (System default / Light / Dark) has been moved from **Tools** to **View**, where display-related settings belong.
 - **Refinement of File Format Database entires** - all entries were double checked, the descriptions refined and relevant URLs added.
 
+### Testing
+
+- **Forensic integrity test suite** — added `crush/tests/test_forensic.py` with 14 tests that verify the tool is safe to run on real evidence. Tests are grouped into five categories and each carries a human-readable description of the forensic property it checks:
+  - *Source Immutability* — DirectoryVFS, ZipVFS, and TarVFS must leave every source file or archive byte-identical after a full read.
+  - *No Side Effects* — SQLiteParser must not create WAL, journal, or any other sibling file next to the evidence.
+  - *Read-only Media* — all three VFS types and SQLiteParser must work correctly when the evidence file and its directory are `chmod 0o444 / 0o555`, simulating write-protected forensic media.
+  - *Known-output Verification* — four committed reference artifacts (SQLite, binary plist, ZIP, TAR) must always parse to their exact pre-computed values.
+  - *Reproducibility* — parsing the same artifact twice must produce structurally identical results.
+- **Reference corpus with checksum guard** — `crush/tests/fixtures/` contains four committed binary test-evidence files (`minimal.sqlite`, `minimal_binary.plist`, `minimal.zip`, `minimal.tar.gz`) with a `checksums.json` of their SHA-256 digests. `conftest.py` verifies every checksum before the first test runs and aborts the session with a clear `TAMPERED` message if any file has changed.
+- **Forensic audit report** — every test run automatically generates `reports/forensic_audit.html`: a self-contained, printable HTML document structured by forensic category with intro text per section and a Reference Corpus table showing file names, SHA-256 hashes, and sizes. In CI the report is uploaded as the `forensic-test-report` artifact (90-day retention).
+
 ## [0.5.0] — 2026-04-25
 
 ### New Features

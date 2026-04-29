@@ -47,4 +47,16 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m pytest -q
+          mkdir -p reports
+          python -m pytest -q \
+            --junit-xml=reports/junit.xml \
+            --html=reports/test_report.html \
+            --self-contained-html
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forensic-test-report
+          path: reports/
+          retention-days: 90
