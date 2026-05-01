@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -47,6 +48,10 @@ from crush.core.formatters import (
     try_base64_text,
     try_plist_text,
     try_xml_text,
+)
+from crush.core.sqlite_wal import (
+    build_page_table_map,
+    parse_table_leaf_page,
 )
 from crush.core.ts_decode import TS_FORMATS as _TS_FORMATS
 from crush.core.ts_decode import decode_ts as _decode_ts
@@ -217,6 +222,7 @@ class TableViewer(QWidget):
         self._wal_label = "WAL Frames (generated)"
         self._wal_frames_cache: list[dict] | None = None
         self._wal_page_size: int = 0
+        self._page_table_map: dict[int, str] = {}  # page_num → table_name
         self._build_ui()
         if data:
             table_names = [k for k in data.keys() if not k.startswith("__")]
@@ -267,6 +273,11 @@ class TableViewer(QWidget):
 
         self._row_count_label = QLabel("")
         toolbar_layout.addWidget(self._row_count_label)
+
+        self._wal_toggle = QCheckBox("Show WAL history")
+        self._wal_toggle.setVisible(False)
+        self._wal_toggle.stateChanged.connect(self._on_wal_toggle)
+        toolbar_layout.addWidget(self._wal_toggle)
 
         toolbar_layout.addStretch()
 
@@ -355,6 +366,7 @@ class TableViewer(QWidget):
             self._load_db_info()
             return
         if table_name == self._wal_label:
+            self._wal_toggle.setVisible(False)
             self._load_wal_frames()
             return
         table = self._data.get(table_name)
@@ -377,19 +389,30 @@ class TableViewer(QWidget):
                 self._sql_status.setText(str(exc))
                 return
 
+        # Show WAL toggle only for real tables that have WAL data
+        has_wal = bool(self._page_table_map) and any(
+            v == table_name for v in self._page_table_map.values()
+        )
+        self._wal_toggle.setVisible(has_wal)
+
         self._col_ts_formats.clear()
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
         self._source_model.clear()
-        self._source_model.setHorizontalHeaderLabels(["Row"] + columns)
+        show_wal = has_wal and self._wal_toggle.isChecked()
+        headers = ["Row"] + columns + (["WAL Source"] if show_wal else [])
+        self._source_model.setHorizontalHeaderLabels(headers)
 
-        for row_index, row_data in enumerate(rows, start=1):
-            items = []
+        def _append_row(row_data: list[Any], source_label: str | None = None,
+                        row_color: object = None) -> None:
+            row_index = self._source_model.rowCount() + 1
             row_item = QStandardItem(str(row_index))
             row_item.setEditable(False)
             row_item.setData(row_index, Qt.ItemDataRole.UserRole)
-            items.append(row_item)
+            if row_color:
+                row_item.setForeground(row_color)
+            items = [row_item]
             for val in row_data:
                 if val is None:
                     cell = QStandardItem("")
@@ -401,6 +424,8 @@ class TableViewer(QWidget):
                     cell.setData(blob, Qt.ItemDataRole.UserRole)
                 else:
                     cell = QStandardItem(str(val))
+                    if row_color:
+                        cell.setForeground(row_color)
                 if isinstance(val, (int, float)):
                     try:
                         cell.setData(val, Qt.ItemDataRole.UserRole)
@@ -408,16 +433,90 @@ class TableViewer(QWidget):
                         pass
                 cell.setEditable(False)
                 items.append(cell)
+            if show_wal:
+                src = QStandardItem(source_label or "current")
+                src.setEditable(False)
+                if row_color:
+                    src.setForeground(row_color)
+                items.append(src)
             self._source_model.appendRow(items)
+
+        for row_data in rows:
+            _append_row(row_data)
+
+        wal_row_count = 0
+        if show_wal:
+            wal_row_count = self._inject_wal_rows(table_name, columns, _append_row)
 
         self._table_view.resizeColumnsToContents()
         table_meta = self._data.get(table_name, {}) if isinstance(self._data, dict) else {}
         was_truncated = isinstance(table_meta, dict) and table_meta.get("truncated", False)
-        row_word = "row" if len(rows) == 1 else "rows"
-        if was_truncated:
-            self._row_count_label.setText(f"(first {len(rows):,} {row_word} — use SQL to load more)")
-        else:
-            self._row_count_label.setText(f"({len(rows):,} {row_word})")
+        total = len(rows)
+        row_word = "row" if total == 1 else "rows"
+        label = f"(first {total:,} {row_word} — use SQL to load more)" if was_truncated \
+            else f"({total:,} {row_word})"
+        if wal_row_count:
+            label += f"  +{wal_row_count} from WAL"
+        self._row_count_label.setText(label)
+
+    def _inject_wal_rows(
+        self,
+        table_name: str,
+        columns: list[str],
+        append_row: object,
+    ) -> int:
+        """Parse non-Active WAL frames for *table_name* and inject their rows.
+
+        Returns the number of rows injected.
+        """
+        frames = self._get_wal_frames()
+        if not frames or self._db_path is None or self._wal_page_size == 0:
+            return 0
+
+        _status_color: dict[str, object] = {
+            "Superseded":  QColor("#cc8800"),
+            "Uncommitted": QColor("#4488ff"),
+            "WAL slack":   Qt.GlobalColor.darkGray,
+        }
+
+        try:
+            wal_data = Path(str(self._db_path) + "-wal").read_bytes()
+        except OSError:
+            return 0
+
+        injected = 0
+        for f in frames:
+            if f["status"] == "Active":
+                continue
+            if self._page_table_map.get(f["page"]) != table_name:
+                continue
+
+            page_start = f["offset"] + 24
+            page_bytes = wal_data[page_start: page_start + self._wal_page_size]
+            parsed = parse_table_leaf_page(page_bytes)
+            if not parsed:
+                continue
+
+            color = _status_color.get(f["status"])
+            label = f"WAL {f['status']} (frame {f['frame']})"
+            n_cols = len(columns)
+            for _rowid, values in parsed:
+                padded: list[Any] = (values + [None] * n_cols)[:n_cols]
+                append_row(padded, label, color)  # type: ignore[operator]
+                injected += 1
+
+        return injected
+
+    def _on_wal_toggle(self, _state: int) -> None:
+        """Re-load the current table when the WAL history toggle changes."""
+        current = self._table_combo.currentText()
+        if current and current not in (
+            self._summary_label,
+            self._db_structure_label,
+            self._db_info_label,
+            self._wal_label,
+        ):
+            self._load_table(current)
 
     def _load_summary(self) -> None:
         """Show tables and views with row counts; label includes full schema object counts."""
@@ -615,6 +714,15 @@ class TableViewer(QWidget):
                 f["status"] = "Superseded"
 
         self._wal_frames_cache = raw
+
+        # Build page→table map (best-effort; silently ignore errors)
+        conn = self._ensure_db()
+        if conn is not None:
+            try:
+                self._page_table_map = build_page_table_map(conn, data, page_size)
+            except Exception:
+                self._page_table_map = {}
+
         return raw
 
     def _load_wal_frames(self) -> None:
@@ -622,7 +730,7 @@ class TableViewer(QWidget):
         frames = self._get_wal_frames()
         self._source_model.clear()
         self._source_model.setHorizontalHeaderLabels(
-            ["Frame", "Page", "Transaction", "Status", "Offset (B)"]
+            ["Frame", "Page", "Transaction", "Status", "Table", "Offset (B)"]
         )
         if not frames:
             item = QStandardItem("No WAL file found or format not recognised")
@@ -639,22 +747,24 @@ class TableViewer(QWidget):
 
         for f in frames:
             color = _status_color.get(f["status"])
+            table_name = self._page_table_map.get(f["page"], "—")
 
-            def _item(text: str, sort_val: object = None) -> QStandardItem:
+            def _item(text: str, sort_val: object = None, _c: object = color) -> QStandardItem:
                 it = QStandardItem(text)
                 it.setEditable(False)
                 if sort_val is not None:
                     it.setData(sort_val, Qt.ItemDataRole.UserRole)
-                if color is not None:
-                    it.setForeground(color)
+                if _c is not None:
+                    it.setForeground(_c)
                 return it
 
             self._source_model.appendRow([
-                _item(str(f["frame"]),              f["frame"]),
-                _item(str(f["page"]),               f["page"]),
-                _item(str(f["tx"]) if f["tx"] else "—", f["tx"] or 0),
+                _item(str(f["frame"]),                   f["frame"]),
+                _item(str(f["page"]),                    f["page"]),
+                _item(str(f["tx"]) if f["tx"] else "—",  f["tx"] or 0),
                 _item(f["status"]),
-                _item(str(f["offset"]),             f["offset"]),
+                _item(table_name),
+                _item(str(f["offset"]),                  f["offset"]),
             ])
 
         self._table_view.resizeColumnsToContents()
@@ -683,7 +793,7 @@ class TableViewer(QWidget):
 
         frame_num = _user(0)
         page_num  = _user(1)
-        offset    = _user(4)
+        offset    = _user(5)
         if offset is None:
             return
 
