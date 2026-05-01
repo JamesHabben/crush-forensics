@@ -19,6 +19,20 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **SQLite WAL forensic analysis:**
+  - *WAL Frames (generated)* — new combo entry appears whenever a `-wal` companion is present. Shows a full frame inventory (Frame / Page / Transaction / Status / Offset) with every frame classified as **Active**, **Superseded**, **Uncommitted**, or **WAL slack** (salt-mismatch frames from a previous WAL cycle, per Sanderson's terminology). Superseded and uncommitted frames are colour-coded amber and blue respectively so the examiner immediately sees whether overwritten or in-flight data exists.
+  - *DB Info WAL summary* — when a WAL is present, six WAL metrics (file size, total frames, active / superseded / uncommitted / WAL-slack counts) are prepended to the DB Info view above the PRAGMA list, with amber/blue highlights on non-zero forensic counts.
+  - *Raw page access* — double-clicking any WAL frame row extracts the raw page bytes (frame offset + 24 to skip the frame header) and opens them in the hex viewer, labelled `WAL frame N — page M`.
+  - *WAL discovery for single-file open* — when a `.db` file is opened directly (not from inside a ZIP or folder), the parser now also checks the real filesystem for a `-wal` / `-shm` companion next to the file. Previously `FileVFS` scoped to the single file only, so companions were silently skipped.
+  - *Parser read-only connection* — the SQLite parser now opens its internal connection with `mode=ro` (URI flag), preventing the automatic WAL checkpoint that previously destroyed the WAL companion before the viewer could read it.
+- **SQLite / Table viewer — schema and settings inspection:**
+  - *Summary view* now shows tables and views with row counts; the status label reports the full schema object count (tables, views, indexes, triggers) at a glance.
+  - *DB Structure (generated)* — new combo entry listing all schema objects (tables, views, indexes, triggers) with structural details: column list for tables, CREATE SQL for views, `ON table (columns)` for indexes, and the first line of CREATE TRIGGER for triggers.
+  - *DB Info (generated)* — new combo entry showing 28 PRAGMA settings in a three-column layout (Setting / Value / Description), styled after the DB Browser for SQLite "Edit Pragma" view. Enum values are decoded to their named constant (e.g. `2 — FULL` for auto_vacuum), booleans show as `1 — ON` / `0 — OFF`. The integrity_check hint pre-fills the SQL bar for on-demand use.
+  - *Views in the selector* — database views are added to the combo box (below a separator) and are fully browsable like tables.
+  - *SQL bar enhancements* — `PRAGMA` statements are now accepted alongside `SELECT`/`WITH`. Status feedback appears below the input field in red on error and default color on success. Selected text only: if a query fragment is highlighted, F5 / Run executes only that selection, enabling step-by-step debugging of complex queries.
+  - *SQL syntax highlighting* — keywords, strings/identifiers, numbers, and comments are highlighted; colors adapt to light and dark palette.
+  - *Resizable panes* — a splitter between the SQL bar and the results table lets the examiner maximise the data area.
 - **Theme moved to View menu** — the Theme submenu (System default / Light / Dark) has been moved from **Tools** to **View**, where display-related settings belong.
 - **Refinement of File Format Database entires** - all entries were double checked, the descriptions refined and relevant URLs added.
 
@@ -30,6 +44,7 @@ All notable changes to Crush will be documented in this file.
   - *Read-only Media* — all three VFS types and SQLiteParser must work correctly when the evidence file and its directory are `chmod 0o444 / 0o555`, simulating write-protected forensic media.
   - *Known-output Verification* — four committed reference artifacts (SQLite, binary plist, ZIP, TAR) must always parse to their exact pre-computed values.
   - *Reproducibility* — parsing the same artifact twice must produce structurally identical results.
+- **WAL preservation test** — `test_sqlite_parser_preserves_wal_companion` verifies that parsing a WAL-mode database leaves the `-wal` companion byte-identical in the temporary working copy. The test simulates a live acquisition: a writer commits data to the WAL while a reader holds an open transaction (preventing auto-checkpoint), and the parser is run in that window. This test would have caught the read-write connection bug that silently checkpointed the WAL before the viewer could read it.
 - **Reference corpus with checksum guard** — `crush/tests/fixtures/` contains four committed binary test-evidence files (`minimal.sqlite`, `minimal_binary.plist`, `minimal.zip`, `minimal.tar.gz`) with a `checksums.json` of their SHA-256 digests. `conftest.py` verifies every checksum before the first test runs and aborts the session with a clear `TAMPERED` message if any file has changed.
 - **Forensic audit report** — every test run automatically generates `reports/forensic_audit.html`: a self-contained, printable HTML document structured by forensic category with intro text per section and a Reference Corpus table showing file names, SHA-256 hashes, and sizes. In CI the report is uploaded as the `forensic-test-report` artifact (90-day retention).
 
