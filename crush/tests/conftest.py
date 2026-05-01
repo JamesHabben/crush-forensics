@@ -197,7 +197,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int | pytest.ExitC
     output_path = Path(str(session.config.rootdir)) / "reports" / "forensic_audit.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(_render_report(), encoding="utf-8")
-    print(f"\n  Forensic audit report → {output_path}")
+    print(f"\n  Forensic audit report -> {output_path}")
 
     # Write a Markdown summary to the GitHub Actions job summary page when running in CI
     gha_summary = os.environ.get("GITHUB_STEP_SUMMARY")
