@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode, find_sibling
@@ -42,9 +43,22 @@ class SQLiteParser(AbstractParser):
                     _logger.debug("Copied companion file: %s", sibling.name)
                 except Exception as exc:
                     _logger.debug("Could not copy companion %s: %s", sibling.name, exc)
+            else:
+                # FileVFS: node.path is an absolute filesystem path — check for the
+                # companion directly on disk (find_sibling only searches the VFS tree)
+                fs_companion = Path(node.path + suffix)
+                if fs_companion.is_file():
+                    try:
+                        sib_path = tmp_path + suffix
+                        with open(sib_path, "wb") as f:
+                            f.write(fs_companion.read_bytes())
+                        companions.append(fs_companion.name)
+                        _logger.debug("Loaded filesystem companion: %s", fs_companion.name)
+                    except Exception as exc:
+                        _logger.debug("Could not load filesystem companion %s: %s", fs_companion.name, exc)
 
         try:
-            conn = sqlite3.connect(tmp_path)
+            conn = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 

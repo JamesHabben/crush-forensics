@@ -7,12 +7,25 @@ from typing import Any
 
 import csv
 import sqlite3
+import struct
+from collections import Counter
 from pathlib import Path
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QContextMenuEvent, QKeySequence, QStandardItem, QStandardItemModel
+from PySide6.QtCore import QRegularExpression, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QFont,
+    QKeyEvent,
+    QKeySequence,
+    QStandardItem,
+    QStandardItemModel,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +36,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QPlainTextEdit,
+    QSplitter,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -35,8 +49,147 @@ from crush.core.formatters import (
     try_plist_text,
     try_xml_text,
 )
+from crush.core.sqlite_wal import (
+    build_page_table_map,
+    parse_table_leaf_page,
+)
 from crush.core.ts_decode import TS_FORMATS as _TS_FORMATS
 from crush.core.ts_decode import decode_ts as _decode_ts
+
+
+class _SqlHighlighter(QSyntaxHighlighter):
+    _KEYWORDS = (
+        "SELECT FROM WHERE INSERT UPDATE DELETE CREATE DROP TABLE VIEW INDEX TRIGGER "
+        "JOIN LEFT RIGHT INNER OUTER CROSS ON AS AND OR NOT IN IS NULL LIKE GLOB "
+        "LIMIT OFFSET ORDER BY GROUP HAVING DISTINCT UNION ALL WITH PRAGMA BETWEEN "
+        "CASE WHEN THEN ELSE END EXISTS PRIMARY KEY FOREIGN REFERENCES UNIQUE "
+        "INTO VALUES SET BEGIN COMMIT ROLLBACK REPLACE UPSERT RETURNING "
+        "COUNT SUM AVG MIN MAX COALESCE IFNULL NULLIF CAST TYPEOF LENGTH "
+        "SUBSTR TRIM UPPER LOWER DATE TIME DATETIME STRFTIME"
+    ).split()
+
+    def __init__(self, document: object) -> None:
+        super().__init__(document)
+        is_dark = QApplication.palette().window().color().lightness() < 128
+
+        def fmt(color: str, bold: bool = False, italic: bool = False) -> QTextCharFormat:
+            f = QTextCharFormat()
+            f.setForeground(QColor(color))
+            if bold:
+                f.setFontWeight(QFont.Weight.Bold)
+            if italic:
+                f.setFontItalic(True)
+            return f
+
+        if is_dark:
+            kw  = fmt("#569cd6", bold=True)
+            str_ = fmt("#ce9178")
+            num  = fmt("#b5cea8")
+            cmt  = fmt("#6a9955", italic=True)
+        else:
+            kw  = fmt("#0000cc", bold=True)
+            str_ = fmt("#a31515")
+            num  = fmt("#098658")
+            cmt  = fmt("#008000", italic=True)
+
+        ci = QRegularExpression.PatternOption.CaseInsensitiveOption
+        kw_rx = r"\b(?:" + "|".join(self._KEYWORDS) + r")\b"
+        self._rules: list[tuple[QRegularExpression, QTextCharFormat]] = [
+            (QRegularExpression(kw_rx, ci),         kw),
+            (QRegularExpression(r"'(?:[^'\\]|\\.)*'"),  str_),
+            (QRegularExpression(r'"(?:[^"\\]|\\.)*"'),  str_),
+            (QRegularExpression(r"\[([^\]]*)\]"),        str_),
+            (QRegularExpression(r"\b\d+\.?\d*\b"),       num),
+            (QRegularExpression(r"--[^\n]*"),            cmt),
+        ]
+
+    def highlightBlock(self, text: str) -> None:
+        for rx, fmt in self._rules:
+            it = rx.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+
+class _SqlEditor(QPlainTextEdit):
+    """Plain-text SQL editor that emits run_requested on F5."""
+
+    run_requested = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_F5:
+            self.run_requested.emit()
+        else:
+            super().keyPressEvent(event)
+
+
+_WAL_MAGIC = (0x377F0682, 0x377F0683)
+
+# (pragma, display label, kind, enum_map | None, description)
+# kind values: "int" | "bool" | "enum" | "str"
+_PRAGMA_CATALOG: list[tuple[str, str, str, dict[int, str] | None, str]] = [
+    # File format
+    ("application_id",     "Application ID",           "int",  None,
+     "32-bit magic number identifying the application that created this database"),
+    ("user_version",       "User version",             "int",  None,
+     "Application-defined schema version number"),
+    ("schema_version",     "Schema version",           "int",  None,
+     "Internal counter incremented on every schema change"),
+    ("data_version",       "Data version",             "int",  None,
+     "Increments on any write; compare across connections to detect changes"),
+    ("encoding",           "Encoding",                 "str",  None,
+     "Text encoding for all string data in this database"),
+    ("page_size",          "Page size (B)",            "int",  None,
+     "Size of each B-tree page; fixed at database creation time"),
+    ("page_count",         "Page count",               "int",  None,
+     "Total allocated pages; multiply by page_size to get expected file size"),
+    ("freelist_count",     "Free pages",               "int",  None,
+     "Unallocated pages that may contain deleted data — forensically significant"),
+    ("max_page_count",     "Max page count",           "int",  None,
+     "Upper limit on database size in pages (0 = default limit)"),
+    # Journal / safety
+    ("journal_mode",       "Journal mode",             "str",  None,
+     "Rollback journal strategy (delete / wal / truncate / persist / memory / off)"),
+    ("journal_size_limit", "Journal size limit (B)",   "int",  None,
+     "Maximum journal file size in bytes; -1 = unlimited"),
+    ("synchronous",        "Synchronous",              "enum",
+     {0: "OFF", 1: "NORMAL", 2: "FULL", 3: "EXTRA"},
+     "How aggressively SQLite flushes writes to disk"),
+    ("locking_mode",       "Locking mode",             "str",  None,
+     "File locking strategy (NORMAL or EXCLUSIVE)"),
+    ("wal_autocheckpoint", "WAL autocheckpoint (pages)", "int", None,
+     "Pages accumulated in WAL file before automatic checkpoint is triggered"),
+    # Vacuum / storage
+    ("auto_vacuum",        "Auto vacuum",              "enum",
+     {0: "NONE", 1: "FULL", 2: "INCREMENTAL"},
+     "Automatic reclamation of free pages after DELETE"),
+    ("secure_delete",      "Secure delete",            "enum",
+     {0: "OFF", 1: "ON", 2: "FAST"},
+     "Overwrite deleted content with zeros before freeing pages"),
+    ("temp_store",         "Temp store",               "enum",
+     {0: "DEFAULT", 1: "FILE", 2: "MEMORY"},
+     "Storage location for temporary tables and indexes"),
+    ("mmap_size",          "Memory-mapped I/O (B)",    "int",  None,
+     "Maximum bytes used for memory-mapped I/O (0 = disabled)"),
+    # Schema / safety flags
+    ("foreign_keys",          "Foreign keys",          "bool", None,
+     "Whether foreign key constraints are enforced"),
+    ("recursive_triggers",    "Recursive triggers",    "bool", None,
+     "Allow trigger bodies to fire additional triggers"),
+    ("automatic_index",       "Automatic index",       "bool", None,
+     "Query planner may create transient covering indexes"),
+    ("trusted_schema",        "Trusted schema",        "bool", None,
+     "Allow SQL functions in schema objects (security-relevant setting)"),
+    ("read_uncommitted",      "Read uncommitted",      "bool", None,
+     "Read without waiting for shared-cache write locks"),
+    ("defer_foreign_keys",    "Defer foreign keys",    "bool", None,
+     "Delay FK enforcement until end of outermost transaction"),
+    ("query_only",            "Query only",            "bool", None,
+     "Prevents any data modification in this connection"),
+    # Cache (included for completeness)
+    ("cache_size",            "Cache size (pages)",    "int",  None,
+     "Pages kept in the in-memory page cache; negative value = KiB"),
+]
 
 
 class TableViewer(QWidget):
@@ -64,13 +217,36 @@ class TableViewer(QWidget):
             self._db_path = None
         self._db_conn: sqlite3.Connection | None = None
         self._summary_label = "Summary (generated)"
+        self._db_structure_label = "DB Structure (generated)"
+        self._db_info_label = "DB Info (generated)"
+        self._wal_label = "WAL Frames (generated)"
+        self._wal_frames_cache: list[dict] | None = None
+        self._wal_page_size: int = 0
+        self._page_table_map: dict[int, str] = {}  # page_num → table_name
         self._build_ui()
         if data:
             table_names = [k for k in data.keys() if not k.startswith("__")]
             if self._db_path:
                 self._table_combo.clear()
                 self._table_combo.addItem(self._summary_label)
+                self._table_combo.addItem(self._db_structure_label)
+                self._table_combo.addItem(self._db_info_label)
+                if self._db_path and Path(str(self._db_path) + "-wal").exists():
+                    self._table_combo.addItem(self._wal_label)
                 self._table_combo.addItems(table_names)
+                conn = self._ensure_db()
+                if conn:
+                    try:
+                        view_names = [
+                            r[0] for r in conn.execute(
+                                "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+                            ).fetchall()
+                        ]
+                        if view_names:
+                            self._table_combo.insertSeparator(self._table_combo.count())
+                            self._table_combo.addItems(view_names)
+                    except Exception:
+                        pass
                 self._load_summary()
             else:
                 if table_names:
@@ -98,6 +274,11 @@ class TableViewer(QWidget):
         self._row_count_label = QLabel("")
         toolbar_layout.addWidget(self._row_count_label)
 
+        self._wal_toggle = QCheckBox("Show WAL history")
+        self._wal_toggle.setVisible(False)
+        self._wal_toggle.stateChanged.connect(self._on_wal_toggle)
+        toolbar_layout.addWidget(self._wal_toggle)
+
         toolbar_layout.addStretch()
 
         search_label = QLabel("Search:")
@@ -112,15 +293,24 @@ class TableViewer(QWidget):
 
         layout.addWidget(toolbar)
 
-        # SQL row
+        # SQL section: input row + status row below
         sql_bar = QWidget()
-        sql_layout = QHBoxLayout(sql_bar)
-        sql_layout.setContentsMargins(8, 4, 8, 4)
+        sql_outer = QVBoxLayout(sql_bar)
+        sql_outer.setContentsMargins(8, 4, 8, 2)
+        sql_outer.setSpacing(2)
+
+        sql_row = QWidget()
+        sql_layout = QHBoxLayout(sql_row)
+        sql_layout.setContentsMargins(0, 0, 0, 0)
         sql_layout.setSpacing(8)
         sql_layout.addWidget(QLabel("SQL:"))
-        self._sql_input = QPlainTextEdit()
+        self._sql_input = _SqlEditor()
+        self._sql_input.run_requested.connect(self._run_sql)
         self._sql_input.setPlaceholderText("SELECT * FROM table LIMIT 100;")
-        self._sql_input.setFixedHeight(50)
+        line_h = self._sql_input.fontMetrics().lineSpacing()
+        self._sql_input.setMinimumHeight(line_h * 3)
+        self._sql_input.setFixedHeight(line_h * 6 + 8)
+        self._sql_highlighter = _SqlHighlighter(self._sql_input.document())
         sql_layout.addWidget(self._sql_input, stretch=1)
         self._run_sql_btn = QPushButton("Run")
         self._run_sql_btn.clicked.connect(self._run_sql)
@@ -128,9 +318,11 @@ class TableViewer(QWidget):
         self._export_btn = QPushButton("Export CSV…")
         self._export_btn.clicked.connect(self._export_csv)
         sql_layout.addWidget(self._export_btn)
+        sql_outer.addWidget(sql_row)
+
         self._sql_status = QLabel("")
-        sql_layout.addWidget(self._sql_status)
-        layout.addWidget(sql_bar)
+        self._sql_status.setContentsMargins(4, 0, 0, 2)
+        sql_outer.addWidget(self._sql_status)
 
         # Table view
         self._source_model = QStandardItemModel()
@@ -152,30 +344,75 @@ class TableViewer(QWidget):
         self._table_view.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table_view.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         self._table_view.verticalHeader().setDefaultSectionSize(22)
-        layout.addWidget(self._table_view)
+        self._table_view.doubleClicked.connect(self._on_table_double_clicked)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(sql_bar)
+        splitter.addWidget(self._table_view)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([140, 500])
+        layout.addWidget(splitter, stretch=1)
 
     def _load_table(self, table_name: str) -> None:
         """Populate the model with the selected table's data."""
         if table_name == self._summary_label:
             self._load_summary()
             return
+        if table_name == self._db_structure_label:
+            self._load_db_structure()
+            return
+        if table_name == self._db_info_label:
+            self._load_db_info()
+            return
+        if table_name == self._wal_label:
+            self._wal_toggle.setVisible(False)
+            self._load_wal_frames()
+            return
         table = self._data.get(table_name)
         if table is None:
-            return
+            # Not pre-loaded (e.g. a view) — query live from the DB
+            conn = self._ensure_db()
+            if conn is None:
+                return
+            try:
+                cur = conn.execute(f"SELECT * FROM [{table_name}] LIMIT 10001")  # noqa: S608
+                raw_rows = cur.fetchall()
+                was_truncated = len(raw_rows) > 10_000
+                table = {
+                    "columns": [d[0] for d in cur.description or []],
+                    "rows": [list(r) for r in raw_rows[:10_000]],
+                    "truncated": was_truncated,
+                }
+            except Exception as exc:
+                self._sql_status.setStyleSheet("color: red;")
+                self._sql_status.setText(str(exc))
+                return
+
+        # Show WAL toggle only for real tables that have WAL data
+        has_wal = bool(self._page_table_map) and any(
+            v == table_name for v in self._page_table_map.values()
+        )
+        self._wal_toggle.setVisible(has_wal)
 
         self._col_ts_formats.clear()
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
         self._source_model.clear()
-        self._source_model.setHorizontalHeaderLabels(["Row"] + columns)
+        show_wal = has_wal and self._wal_toggle.isChecked()
+        headers = ["Row"] + columns + (["WAL Source"] if show_wal else [])
+        self._source_model.setHorizontalHeaderLabels(headers)
 
-        for row_index, row_data in enumerate(rows, start=1):
-            items = []
+        def _append_row(row_data: list[Any], source_label: str | None = None,
+                        row_color: object = None) -> None:
+            row_index = self._source_model.rowCount() + 1
             row_item = QStandardItem(str(row_index))
             row_item.setEditable(False)
             row_item.setData(row_index, Qt.ItemDataRole.UserRole)
-            items.append(row_item)
+            if row_color:
+                row_item.setForeground(row_color)
+            items = [row_item]
             for val in row_data:
                 if val is None:
                     cell = QStandardItem("")
@@ -187,6 +424,8 @@ class TableViewer(QWidget):
                     cell.setData(blob, Qt.ItemDataRole.UserRole)
                 else:
                     cell = QStandardItem(str(val))
+                    if row_color:
+                        cell.setForeground(row_color)
                 if isinstance(val, (int, float)):
                     try:
                         cell.setData(val, Qt.ItemDataRole.UserRole)
@@ -194,55 +433,484 @@ class TableViewer(QWidget):
                         pass
                 cell.setEditable(False)
                 items.append(cell)
+            if show_wal:
+                src = QStandardItem(source_label or "current")
+                src.setEditable(False)
+                if row_color:
+                    src.setForeground(row_color)
+                items.append(src)
             self._source_model.appendRow(items)
+
+        for row_data in rows:
+            _append_row(row_data)
+
+        wal_row_count = 0
+        if show_wal:
+            wal_row_count = self._inject_wal_rows(table_name, columns, _append_row)
 
         self._table_view.resizeColumnsToContents()
         table_meta = self._data.get(table_name, {}) if isinstance(self._data, dict) else {}
         was_truncated = isinstance(table_meta, dict) and table_meta.get("truncated", False)
-        row_word = "row" if len(rows) == 1 else "rows"
-        if was_truncated:
-            self._row_count_label.setText(f"(first {len(rows):,} {row_word} — use SQL to load more)")
-        else:
-            self._row_count_label.setText(f"({len(rows):,} {row_word})")
+        total = len(rows)
+        row_word = "row" if total == 1 else "rows"
+        label = f"(first {total:,} {row_word} — use SQL to load more)" if was_truncated \
+            else f"({total:,} {row_word})"
+        if wal_row_count:
+            label += f"  +{wal_row_count} from WAL"
+        self._row_count_label.setText(label)
+
+    def _inject_wal_rows(
+        self,
+        table_name: str,
+        columns: list[str],
+        append_row: object,
+    ) -> int:
+        """Parse non-Active WAL frames for *table_name* and inject their rows.
+
+        Returns the number of rows injected.
+        """
+        frames = self._get_wal_frames()
+        if not frames or self._db_path is None or self._wal_page_size == 0:
+            return 0
+
+        _status_color: dict[str, object] = {
+            "Superseded":  QColor("#cc8800"),
+            "Uncommitted": QColor("#4488ff"),
+            "WAL slack":   Qt.GlobalColor.darkGray,
+        }
+
+        try:
+            wal_data = Path(str(self._db_path) + "-wal").read_bytes()
+        except OSError:
+            return 0
+
+        injected = 0
+        for f in frames:
+            if f["status"] == "Active":
+                continue
+            if self._page_table_map.get(f["page"]) != table_name:
+                continue
+
+            page_start = f["offset"] + 24
+            page_bytes = wal_data[page_start: page_start + self._wal_page_size]
+            parsed = parse_table_leaf_page(page_bytes)
+            if not parsed:
+                continue
+
+            color = _status_color.get(f["status"])
+            label = f"WAL {f['status']} (frame {f['frame']})"
+            n_cols = len(columns)
+            for _rowid, values in parsed:
+                padded: list[Any] = (values + [None] * n_cols)[:n_cols]
+                append_row(padded, label, color)  # type: ignore[operator]
+                injected += 1
+
+        return injected
+
+    def _on_wal_toggle(self, _state: int) -> None:
+        """Re-load the current table when the WAL history toggle changes."""
+        current = self._table_combo.currentText()
+        if current and current not in (
+            self._summary_label,
+            self._db_structure_label,
+            self._db_info_label,
+            self._wal_label,
+        ):
+            self._load_table(current)
 
     def _load_summary(self) -> None:
-        """Show table list + row counts for SQLite databases."""
+        """Show tables and views with row counts; label includes full schema object counts."""
         conn = self._ensure_db()
         if conn is None:
             return
         cursor = conn.cursor()
         try:
-            tables = [
-                r[0]
-                for r in cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            rows_tv = cursor.execute(
+                "SELECT name, type FROM sqlite_master "
+                "WHERE type IN ('table', 'view') ORDER BY type, name"
+            ).fetchall()
+            counts = dict(
+                cursor.execute(
+                    "SELECT type, COUNT(*) FROM sqlite_master "
+                    "WHERE type IN ('table', 'view', 'index', 'trigger') GROUP BY type"
                 ).fetchall()
-            ]
+            )
         except Exception as exc:
+            self._sql_status.setStyleSheet("color: red;")
             self._sql_status.setText(str(exc))
             return
 
         self._source_model.clear()
-        self._source_model.setHorizontalHeaderLabels(["Table (generated)", "Rows"])
-        self._sql_status.setText("Counting rows…")
-        for table in tables:
+        self._source_model.setHorizontalHeaderLabels(["Name (generated)", "Type", "Rows"])
+        self._sql_status.setStyleSheet("")
+
+        for name, obj_type in rows_tv:
             try:
-                count = cursor.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]  # noqa: S608
+                count = cursor.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]  # noqa: S608
             except Exception:
                 count = "?"
-            name_item = QStandardItem(table)
+            name_item = QStandardItem(name)
             name_item.setEditable(False)
-            count_item = QStandardItem(str(count))
+            type_item = QStandardItem(obj_type)
+            type_item.setEditable(False)
+            row_word = "row" if count == 1 else "rows"
+            count_text = f"{count:,} {row_word}" if isinstance(count, int) else "?"
+            count_item = QStandardItem(count_text)
             count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             count_item.setEditable(False)
             if isinstance(count, int):
                 count_item.setData(count, Qt.ItemDataRole.UserRole)
-            self._source_model.appendRow([name_item, count_item])
+            self._source_model.appendRow([name_item, type_item, count_item])
 
         self._table_view.resizeColumnsToContents()
-        word = "table" if len(tables) == 1 else "tables"
-        self._row_count_label.setText(f"({len(tables):,} {word})")
-        self._sql_status.setText(f"{len(tables):,} {word}")
+
+        def _c(key: str) -> int:
+            return counts.get(key, 0)
+
+        parts = [
+            f"{_c('table')} table{'s' if _c('table') != 1 else ''}",
+            f"{_c('view')} view{'s' if _c('view') != 1 else ''}",
+            f"{_c('index')} index{'es' if _c('index') != 1 else ''}",
+            f"{_c('trigger')} trigger{'s' if _c('trigger') != 1 else ''}",
+        ]
+        summary = ", ".join(parts)
+        self._row_count_label.setText(f"({summary})")
+        self._sql_status.setText(summary)
+
+    def _load_db_structure(self) -> None:
+        """Show all schema objects (tables, views, indexes, triggers) with structural info."""
+        conn = self._ensure_db()
+        if conn is None:
+            return
+        cursor = conn.cursor()
+        try:
+            objects = cursor.execute(
+                "SELECT name, type, tbl_name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'view', 'index', 'trigger') ORDER BY type, name"
+            ).fetchall()
+        except Exception as exc:
+            self._sql_status.setStyleSheet("color: red;")
+            self._sql_status.setText(str(exc))
+            return
+
+        self._source_model.clear()
+        self._source_model.setHorizontalHeaderLabels(["Name (generated)", "Type", "Info"])
+        self._sql_status.setStyleSheet("")
+
+        for name, obj_type, tbl_name, sql in objects:
+            name_item = QStandardItem(name)
+            name_item.setEditable(False)
+            type_item = QStandardItem(obj_type)
+            type_item.setEditable(False)
+
+            if obj_type == "table":
+                try:
+                    cols = cursor.execute(f"PRAGMA table_info([{name}])").fetchall()
+                    col_names = ", ".join(r[1] for r in cols)
+                    info_text = f"({col_names})"
+                except Exception:
+                    info_text = ""
+            elif obj_type == "view":
+                info_text = (sql or "").replace("\n", " ").strip()
+            elif obj_type == "index":
+                try:
+                    idx_rows = cursor.execute(f"PRAGMA index_info([{name}])").fetchall()
+                    cols = ", ".join(r[2] for r in idx_rows if r[2]) or "(expression)"
+                    info_text = f"ON {tbl_name} ({cols})"
+                except Exception:
+                    info_text = f"ON {tbl_name}"
+            elif obj_type == "trigger":
+                first_line = (sql or "").split("\n")[0].strip()
+                info_text = first_line if first_line else f"ON {tbl_name}"
+            else:
+                info_text = ""
+
+            info_item = QStandardItem(info_text)
+            info_item.setEditable(False)
+            self._source_model.appendRow([name_item, type_item, info_item])
+
+        self._table_view.resizeColumnsToContents()
+        total = self._source_model.rowCount()
+        word = "object" if total == 1 else "objects"
+        self._row_count_label.setText(f"({total} schema {word})")
+        self._sql_status.setText("")
+
+    def _get_wal_frames(self) -> list[dict] | None:
+        """Parse WAL file and return classified frame list (cached)."""
+        if self._wal_frames_cache is not None:
+            return self._wal_frames_cache
+        if self._db_path is None:
+            return None
+        wal_path = Path(str(self._db_path) + "-wal")
+        if not wal_path.exists():
+            return None
+        try:
+            data = wal_path.read_bytes()
+        except OSError:
+            return None
+        if len(data) < 32:
+            return None
+
+        magic = struct.unpack_from(">I", data, 0)[0]
+        if magic not in _WAL_MAGIC:
+            return None
+
+        page_size = struct.unpack_from(">I", data, 8)[0]
+        self._wal_page_size = page_size
+        salt1     = struct.unpack_from(">I", data, 16)[0]
+        salt2     = struct.unpack_from(">I", data, 20)[0]
+
+        frame_size = 24 + page_size
+        offset = 32
+        raw: list[dict] = []
+
+        while offset + frame_size <= len(data):
+            page_num = struct.unpack_from(">I", data, offset)[0]
+            db_size  = struct.unpack_from(">I", data, offset + 4)[0]
+            f_salt1  = struct.unpack_from(">I", data, offset + 8)[0]
+            f_salt2  = struct.unpack_from(">I", data, offset + 12)[0]
+            raw.append({
+                "frame":     len(raw) + 1,
+                "page":      page_num,
+                "db_size":   db_size,
+                "is_commit": db_size > 0,
+                "salt_ok":   f_salt1 == salt1 and f_salt2 == salt2,
+                "offset":    offset,
+                "tx":        None,
+                "status":    "",
+            })
+            offset += frame_size
+
+        # Assign transaction numbers to salt-valid frames
+        tx = 0
+        for f in raw:
+            if not f["salt_ok"]:
+                continue
+            f["tx"] = tx + 1
+            if f["is_commit"]:
+                tx += 1
+
+        # Find last committed frame index (salt-valid + is_commit)
+        last_commit_idx = -1
+        for i, f in enumerate(raw):
+            if f["salt_ok"] and f["is_commit"]:
+                last_commit_idx = i
+
+        # For committed range: track last occurrence of each page → active
+        page_latest: dict[int, int] = {}
+        for i, f in enumerate(raw):
+            if f["salt_ok"] and i <= last_commit_idx:
+                page_latest[f["page"]] = i
+
+        # Classify
+        for i, f in enumerate(raw):
+            if not f["salt_ok"]:
+                f["status"] = "WAL slack"
+            elif i > last_commit_idx:
+                f["status"] = "Uncommitted"
+            elif page_latest.get(f["page"]) == i:
+                f["status"] = "Active"
+            else:
+                f["status"] = "Superseded"
+
+        self._wal_frames_cache = raw
+
+        # Build page→table map (best-effort; silently ignore errors)
+        conn = self._ensure_db()
+        if conn is not None:
+            try:
+                self._page_table_map = build_page_table_map(conn, data, page_size)
+            except Exception:
+                self._page_table_map = {}
+
+        return raw
+
+    def _load_wal_frames(self) -> None:
+        """Show full WAL frame inventory."""
+        frames = self._get_wal_frames()
+        self._source_model.clear()
+        self._source_model.setHorizontalHeaderLabels(
+            ["Frame", "Page", "Transaction", "Status", "Table", "Offset (B)"]
+        )
+        if not frames:
+            item = QStandardItem("No WAL file found or format not recognised")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        _status_color: dict[str, object] = {
+            "Superseded":  QColor("#cc8800"),
+            "Uncommitted": QColor("#4488ff"),
+            "WAL slack":   Qt.GlobalColor.darkGray,
+        }
+
+        for f in frames:
+            color = _status_color.get(f["status"])
+            table_name = self._page_table_map.get(f["page"], "—")
+
+            def _item(text: str, sort_val: object = None, _c: object = color) -> QStandardItem:
+                it = QStandardItem(text)
+                it.setEditable(False)
+                if sort_val is not None:
+                    it.setData(sort_val, Qt.ItemDataRole.UserRole)
+                if _c is not None:
+                    it.setForeground(_c)
+                return it
+
+            self._source_model.appendRow([
+                _item(str(f["frame"]),                   f["frame"]),
+                _item(str(f["page"]),                    f["page"]),
+                _item(str(f["tx"]) if f["tx"] else "—",  f["tx"] or 0),
+                _item(f["status"]),
+                _item(table_name),
+                _item(str(f["offset"]),                  f["offset"]),
+            ])
+
+        self._table_view.resizeColumnsToContents()
+
+
+        counts = Counter(f["status"] for f in frames)
+        parts = [f"{len(frames)} total"]
+        for status in ("Active", "Superseded", "Uncommitted", "WAL slack"):
+            n = counts.get(status, 0)
+            if n:
+                parts.append(f"{n} {status.lower()}")
+        self._row_count_label.setText(f"({', '.join(parts)})")
+        self._sql_status.setText("Double-click a row to open the raw page in the hex viewer")
+
+    def _on_table_double_clicked(self, index: object) -> None:
+        """Double-click handler: open WAL frame page bytes in the hex viewer."""
+        if self._table_combo.currentText() != self._wal_label:
+            return
+        if self._db_path is None or self._wal_page_size == 0:
+            return
+
+        row = self._proxy_model.mapToSource(self._proxy_model.index(index.row(), 0)).row()  # type: ignore[union-attr]
+
+        def _user(col: int) -> object:
+            return self._source_model.item(row, col).data(Qt.ItemDataRole.UserRole)
+
+        frame_num = _user(0)
+        page_num  = _user(1)
+        offset    = _user(5)
+        if offset is None:
+            return
+
+        wal_path = Path(str(self._db_path) + "-wal")
+        try:
+            wal_data = wal_path.read_bytes()
+            page_start = int(offset) + 24  # skip 24-byte frame header
+            page_bytes = wal_data[page_start : page_start + self._wal_page_size]
+        except OSError:
+            return
+
+        if page_bytes:
+            self.open_bytes_requested.emit(
+                page_bytes,
+                f"WAL frame {frame_num} — page {page_num}",
+            )
+
+    def _load_db_info(self) -> None:
+        """Show all PRAGMA settings with decoded enum values and descriptions."""
+        conn = self._ensure_db()
+        if conn is None:
+            return
+        cursor = conn.cursor()
+        self._source_model.clear()
+        self._source_model.setHorizontalHeaderLabels(["Setting (generated)", "Value", "Description"])
+
+        # WAL summary block (if present)
+        frames = self._get_wal_frames()
+        if frames is not None:
+
+            counts = Counter(f["status"] for f in frames)
+
+            def _wal_row(label: str, value: str, desc: str, color: object = None) -> None:
+                s = QStandardItem(label)
+                s.setEditable(False)
+                v = QStandardItem(value)
+                v.setEditable(False)
+                d = QStandardItem(desc)
+                d.setForeground(Qt.GlobalColor.gray)
+                d.setEditable(False)
+                if color is not None:
+                    for item in (s, v):
+                        item.setForeground(color)
+                self._source_model.appendRow([s, v, d])
+
+            wal_path = Path(str(self._db_path) + "-wal")
+            wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+            _wal_row("WAL file size (B)",    f"{wal_size:,}",                  "Size of the -wal companion file on disk")
+            _wal_row("WAL total frames",     str(len(frames)),                 "Total frames found in WAL file")
+            _wal_row("WAL active frames",    str(counts.get("Active", 0)),     "Frames currently read by SQLite (newest per page)")
+            n_sup = counts.get("Superseded", 0)
+            _wal_row("WAL superseded frames", str(n_sup),
+                     "Older versions of pages — may contain overwritten or deleted data",
+                     QColor("#cc8800") if n_sup else None)
+            n_unc = counts.get("Uncommitted", 0)
+            _wal_row("WAL uncommitted frames", str(n_unc),
+                     "Frames beyond the last commit marker — captured mid-transaction",
+                     QColor("#4488ff") if n_unc else None)
+            n_slack = counts.get("WAL slack", 0)
+            _wal_row("WAL slack frames",     str(n_slack),
+                     "Salt-mismatch frames from a previous WAL cycle — reused WAL space",
+                     Qt.GlobalColor.darkGray if n_slack else None)
+
+            # Visual separator
+            sep = QStandardItem("─" * 30)
+            sep.setForeground(Qt.GlobalColor.gray)
+            sep.setEditable(False)
+            self._source_model.appendRow([sep, QStandardItem(""), QStandardItem("")])
+
+        for pragma, label, ptype, enum_map, description in _PRAGMA_CATALOG:
+            try:
+                row = cursor.execute(f"PRAGMA {pragma}").fetchone()
+                raw = row[0] if row else None
+            except Exception:
+                raw = None
+
+            if raw is None:
+                display = "—"
+            elif ptype == "bool":
+                try:
+                    iv = int(raw)
+                    display = f"{iv} — {'ON' if iv else 'OFF'}"
+                except (ValueError, TypeError):
+                    display = str(raw)
+            elif ptype == "enum" and enum_map:
+                try:
+                    iv = int(raw)
+                    label_str = enum_map.get(iv, str(iv))
+                    display = f"{iv} — {label_str}"
+                except (ValueError, TypeError):
+                    display = str(raw)
+            else:
+                display = str(raw)
+
+            setting_item = QStandardItem(label)
+            setting_item.setEditable(False)
+            value_item = QStandardItem(display)
+            value_item.setEditable(False)
+            desc_item = QStandardItem(description)
+            desc_item.setForeground(Qt.GlobalColor.gray)
+            desc_item.setEditable(False)
+            self._source_model.appendRow([setting_item, value_item, desc_item])
+
+        hint_item = QStandardItem("Integrity check")
+        hint_item.setEditable(False)
+        hint_value = QStandardItem("→ run in SQL bar: PRAGMA integrity_check")
+        hint_value.setForeground(Qt.GlobalColor.gray)
+        hint_value.setEditable(False)
+        hint_desc = QStandardItem("Scans database for corruption (can be slow on large files)")
+        hint_desc.setForeground(Qt.GlobalColor.gray)
+        hint_desc.setEditable(False)
+        self._source_model.appendRow([hint_item, hint_value, hint_desc])
+
+        self._table_view.resizeColumnsToContents()
+        self._row_count_label.setText(f"({len(_PRAGMA_CATALOG)} settings)")
+        self._sql_input.setPlainText("PRAGMA integrity_check;")
+        self._sql_status.setText("")
 
     def _apply_filter(self, text: str) -> None:
         self._proxy_model.setFilterFixedString(text)
@@ -268,13 +936,17 @@ class TableViewer(QWidget):
         return self._db_conn
 
     def _run_sql(self) -> None:
-        sql = self._sql_input.toPlainText().strip()
+        cursor = self._sql_input.textCursor()
+        selected = cursor.selectedText().replace(" ", "\n").strip()
+        sql = selected if selected else self._sql_input.toPlainText().strip()
         if not sql:
-            self._sql_status.setText("Enter a SELECT query")
+            self._sql_status.setStyleSheet("color: red;")
+            self._sql_status.setText("Enter a SELECT or PRAGMA query")
             return
         lowered = sql.lstrip().lower()
-        if not (lowered.startswith("select") or lowered.startswith("with")):
-            self._sql_status.setText("Only SELECT queries are allowed")
+        if not (lowered.startswith("select") or lowered.startswith("with") or lowered.startswith("pragma")):
+            self._sql_status.setStyleSheet("color: red;")
+            self._sql_status.setText("Only SELECT and PRAGMA queries are allowed")
             return
         conn = self._ensure_db()
         if conn is None:
@@ -284,10 +956,13 @@ class TableViewer(QWidget):
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description or []]
         except sqlite3.Error as exc:
+            self._sql_status.setStyleSheet("color: red;")
             self._sql_status.setText(str(exc))
             return
 
-        self._sql_status.setText(f"{len(rows):,} rows")
+        self._sql_status.setStyleSheet("")
+        word = "row" if len(rows) == 1 else "rows"
+        self._sql_status.setText(f"{len(rows):,} {word} returned")
         data = {
             "columns": columns,
             "rows": [list(row) for row in rows],

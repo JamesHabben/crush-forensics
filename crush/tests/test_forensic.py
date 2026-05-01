@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,45 @@ def test_tar_vfs_does_not_modify_archive(tar_fixture: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. No side-effect files — parsers must not create siblings next to evidence
 # ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="SQLiteParser must preserve the WAL companion intact — parsing must not checkpoint or truncate it",
+)
+def test_sqlite_parser_preserves_wal_companion(tmp_path: Path) -> None:
+    db_path = tmp_path / "wal_test.sqlite"
+
+    # Simulate an app that is running during acquisition: writer commits, then a
+    # reader holds an open transaction so SQLite cannot checkpoint on writer close.
+    writer = sqlite3.connect(str(db_path))
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("CREATE TABLE t (x TEXT)")
+    writer.execute("INSERT INTO t VALUES ('forensic_test')")
+    writer.commit()
+    reader = sqlite3.connect(str(db_path))
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM t").fetchall()
+    writer.close()  # cannot checkpoint — reader holds a snapshot
+
+    wal_path = tmp_path / "wal_test.sqlite-wal"
+    assert wal_path.exists() and wal_path.stat().st_size > 0, \
+        "Test setup failed: SQLite did not create a WAL file"
+    wal_size_before = wal_path.stat().st_size
+
+    try:
+        vfs = DirectoryVFS(tmp_path)
+        root = vfs.root()
+        node = next(c for c in root.children if c.name == "wal_test.sqlite")
+        result = SQLiteParser().parse(node, vfs)
+    finally:
+        reader.close()
+
+    tmp_wal = Path(str(result.data["__db_path"]) + "-wal")
+    assert tmp_wal.exists(), \
+        "Parser checkpointed and deleted the WAL companion — open the DB connection read-only"
+    assert tmp_wal.stat().st_size == wal_size_before, \
+        "Parser checkpointed and truncated the WAL companion — open the DB connection read-only"
+
 
 @pytest.mark.forensic(
     category="No Side Effects",

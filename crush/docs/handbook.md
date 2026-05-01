@@ -95,14 +95,71 @@ Each opened file gets its own tab. Tabs can be:
 
 ### SQLite / Database Viewer
 
-Shows a table selector at the top. For databases opened from a live path, a **Summary** view lists all tables and their row counts.
+The table dropdown at the top switches between database tables, views, and four generated analysis pages. All generated entries are labelled `(generated)` to make clear they are computed by Crush rather than read directly from the database.
+
+#### Generated views
+
+**Summary (generated)** — the default view when a database is opened. Lists every table and view with its row count. The status line shows the full schema object count (tables, views, indexes, triggers) at a glance.
+
+**DB Structure (generated)** — lists all schema objects (tables, views, indexes, triggers) with structural details:
+
+| Object type | Info column |
+|---|---|
+| Table | Column list, e.g. `(id, name, created_at)` |
+| View | Full `CREATE VIEW` SQL on one line |
+| Index | `ON table (column, …)` — shows which table and columns are indexed |
+| Trigger | First line of `CREATE TRIGGER …` |
+
+**DB Info (generated)** — shows 28 PRAGMA settings in a three-column layout (Setting / Value / Description), styled after the *Edit Pragma* view of DB Browser for SQLite. Enum values are decoded to their named constant (e.g. `2 — FULL` for `auto_vacuum`), booleans show as `1 — ON` / `0 — OFF`. When a WAL companion is present, six WAL forensic metrics appear at the top of this view before the PRAGMA list (see *WAL forensic analysis* below).
+
+**WAL Frames (generated)** — appears when a `-wal` companion file is present. Shows a full frame inventory (Frame / Page / Transaction / Status / Table / Offset) with every frame classified by forensic status:
+
+| Status | Colour | Meaning |
+|---|---|---|
+| **Active** | Default | Newest occurrence of this page within the last committed transaction — what SQLite currently reads |
+| **Superseded** | Amber | An older version of a page that was later overwritten by a newer frame; may contain previously committed data |
+| **Uncommitted** | Blue | Frames beyond the last commit marker, written during an incomplete transaction |
+| **WAL slack** | Grey | Salt-mismatch frames from a previous WAL generation cycle (Sanderson's term); these pages predate the current WAL cycle and are not read by SQLite |
+
+The **Table** column shows which database table owns each page, resolved by tracing the B-tree structure from `sqlite_master`. Double-click any frame row to open its raw page bytes in the hex viewer, labelled `WAL frame N — page M`.
+
+#### WAL forensic analysis
+
+When a `-wal` companion is present, Crush automatically reads and classifies every WAL frame. This gives the examiner three complementary views of any past database state:
+
+1. **DB Info WAL summary** — six metrics (WAL file size, total frames, active / superseded / uncommitted / WAL-slack counts) with amber and blue highlights on non-zero forensic counts.
+2. **WAL Frames inventory** — full frame list with table attribution and double-click raw page access (see above).
+3. **Show WAL history toggle** — a **Show WAL history** checkbox appears in the table toolbar whenever the currently selected table has Superseded, Uncommitted, or WAL-slack frames in the WAL. When enabled:
+   - A **WAL Source** column is added to the right of the table.
+   - Rows decoded from historical WAL frames are appended below the current data, with the WAL Source cell identifying the frame status and frame number (e.g. `WAL Superseded (frame 3)`).
+   - Row text is colour-coded: amber for Superseded, blue for Uncommitted, grey for WAL slack.
+   - The row count label shows how many additional rows were recovered, e.g. `(42 rows)  +7 from WAL`.
+
+This lets you answer questions such as: *what rows existed in this table before the last UPDATE or DELETE?* — without any specialist carving tool.
+
+> **Tip:** An empty WAL history for a table does not mean the data was never modified — it only means there are no current non-Active frames for that table's pages. For a complete picture, also check the Superseded and Uncommitted counts in DB Info.
+
+#### SQL bar
+
+The SQL bar below the toolbar accepts any `SELECT`, `WITH`, or `PRAGMA` statement.
+
+| Action | How |
+|---|---|
+| Execute query | Click **Run** or press **F5** |
+| Execute selected text only | Highlight a fragment in the SQL editor and press **F5** or click **Run** — only the selection is sent |
+| Syntax highlighting | Keywords, strings, numbers, and comments are highlighted; colours adapt to the active light/dark theme |
+| Resize SQL vs. results | Drag the splitter between the SQL editor and the results table |
+
+Status feedback appears below the input field: red on error (with the error message), default colour on success.
+
+#### Table controls
 
 | Control | Action |
 |---|---|
-| **Table** dropdown | Switch between tables |
+| **Table** dropdown | Switch between tables, views, and generated pages |
 | **Search** field | Filter visible rows — matches any column |
-| **SQL** input | Run any `SELECT` query against the database |
-| **Run** | Execute the SQL query |
+| **Show WAL history** | Reveal historical rows from WAL frames (shown only when WAL data is available for the current table) |
+| **Run / F5** | Execute the SQL query |
 | **Export CSV…** | Export the current view (filtered or query result) to a CSV file |
 
 **Row limit notice:** if a table has more rows than the display limit, a notice appears in the row count. Use a SQL query with `LIMIT` / `WHERE` to load a specific subset.
@@ -354,7 +411,7 @@ Integrity mode adds hashing and traceability to file access:
 ## Tips for Forensic Workflows
 
 - **Large archives:** Crush loads ZIP and TAR indexes immediately and reads file content on demand — you do not need to wait for a full extraction before browsing.
-- **SQLite WAL files:** if a `-wal` or `-shm` companion file is present alongside a `.db`, Crush automatically includes it so you see the most recent state of the database including committed transactions not yet checkpointed into the main database file.
+- **SQLite WAL files:** if a `-wal` or `-shm` companion file is present alongside a `.db`, Crush automatically includes it so you see the most recent state of the database. Use **WAL Frames (generated)** for a full frame inventory with forensic classification (Active / Superseded / Uncommitted / WAL slack), and enable **Show WAL history** in any table view to surface rows from historical frames — potentially recovering data from before the last UPDATE or DELETE.
 - **BLOB chaining:** SQLite cells containing embedded plists, images, or other binary data can be opened directly as a new viewer tab via right-click → **Open as new tab**.
 - **Unknown files:** even if Crush cannot parse a file, the Properties panel will show the identified format name and forensic relevance based on magic bytes — so you know what you are looking at before deciding to export and open it externally.
 
