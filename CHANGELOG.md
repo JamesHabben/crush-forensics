@@ -2,7 +2,7 @@
 
 All notable changes to Crush will be documented in this file.
 
-## [Unreleased - Only in Nightly Build]
+## [0.6.0] — 2026-05-01
 
 ### New Features
 
@@ -35,7 +35,7 @@ All notable changes to Crush will be documented in this file.
   - *SQL syntax highlighting* — keywords, strings/identifiers, numbers, and comments are highlighted; colors adapt to light and dark palette.
   - *Resizable panes* — a splitter between the SQL bar and the results table lets the examiner maximise the data area.
 - **Theme moved to View menu** — the Theme submenu (System default / Light / Dark) has been moved from **Tools** to **View**, where display-related settings belong.
-- **Refinement of File Format Database entires** - all entries were double checked, the descriptions refined and relevant URLs added.
+- **Refinement of File Format Database entries** - all entries were double checked, the descriptions refined and relevant URLs added.
 
 ### Testing
 
