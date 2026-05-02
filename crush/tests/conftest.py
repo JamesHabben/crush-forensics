@@ -113,6 +113,15 @@ def pytest_configure(config: pytest.Config) -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
+def realm_fixture(tmp_path: Path) -> Path:
+    """Writable copy of minimal.realm placed in tmp_path."""
+    src = FIXTURES_DIR / "minimal.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def sqlite_fixture(tmp_path: Path) -> Path:
     """Writable copy of minimal.sqlite placed in tmp_path."""
     src = FIXTURES_DIR / "minimal.sqlite"

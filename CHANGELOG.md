@@ -2,6 +2,26 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Realm table viewer: OverflowError when navigating integer columns** — `_read_scalar_leaf` accepted scheme=1 arrays with element widths up to 64 bytes (512-bit integers). Passing such values to Qt's `QVariant` raised `OverflowError: int too big to convert` in the terminal whenever the table was sorted or scrolled. Realm integer columns never use widths above 8 bytes; scheme=1 arrays wider than that are now rejected and the column is skipped rather than returning garbage data.
+
+### Improvements
+
+- **Realm file type label** — `.realm` files now show `Realm` as the fast type label in the VFS tree panel, consistent with how SQLite, bplist, ABX, and SEGB files are labelled. Previously, `.realm` files showed no label at all.
+
+### Testing
+
+- **Realm forensic test coverage** — five new `@pytest.mark.forensic` tests covering the same categories already used for SQLite:
+  - *Source Immutability* — `RealmParser` must leave the source file bytes unchanged after parsing.
+  - *No Side Effects* — `RealmParser` must not create any sibling files next to the evidence file.
+  - *Read-only Media* — `RealmParser` must succeed when the evidence directory is `chmod 0o555` and the file is `0o444`.
+  - *Known-output Verification* — `minimal.realm` must always parse to exactly `schema = ["metadata", "class_Evidence"]`, `Tables found = 2`.
+  - *Reproducibility* — parsing the same Realm file twice must produce structurally identical results.
+- **`minimal.realm` reference fixture** — a 112-byte synthetic Realm file is committed to `crush/tests/fixtures/` with its SHA-256 checksum in `checksums.json`. The corpus integrity guard now covers Realm alongside the existing SQLite, plist, ZIP, and TAR fixtures.
+
 ## [0.6.0] — 2026-05-01
 
 ### New Features

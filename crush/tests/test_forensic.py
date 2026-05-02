@@ -21,6 +21,7 @@ import pytest
 
 from crush.core.vfs import DirectoryVFS, TarVFS, VFSNode, ZipVFS
 from crush.parsers.plist_parser import PlistParser
+from crush.parsers.realm_parser import RealmParser
 from crush.parsers.sqlite_parser import SQLiteParser
 from crush.tests.conftest import FIXTURES_DIR
 
@@ -330,4 +331,98 @@ def test_zip_vfs_read_is_reproducible(zip_fixture: Path) -> None:
     assert nodes, "Fixture ZIP is unexpectedly empty"
     node = nodes[0]
     assert vfs.read(node) == vfs.read(node)
+
+
+# ---------------------------------------------------------------------------
+# Realm forensic tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="RealmParser read must leave source file bytes unchanged",
+)
+def test_realm_parser_does_not_modify_source(realm_fixture: Path) -> None:
+    digest_before = _sha256_file(realm_fixture)
+
+    vfs = DirectoryVFS(realm_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_fixture.name)
+    _ = RealmParser().parse(node, vfs)
+
+    assert _sha256_file(realm_fixture) == digest_before, "RealmParser modified the source file"
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="RealmParser must not create any sibling files next to the evidence",
+)
+def test_realm_parse_creates_no_sibling_files(realm_fixture: Path) -> None:
+    files_before = set(realm_fixture.parent.iterdir())
+
+    vfs = DirectoryVFS(realm_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_fixture.name)
+    RealmParser().parse(node, vfs)
+
+    new_files = set(realm_fixture.parent.iterdir()) - files_before
+    assert new_files == set(), f"Parser left unexpected files next to evidence: {new_files}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="chmod semantics differ on Windows")
+@pytest.mark.forensic(
+    category="Read-only Media",
+    desc="RealmParser must succeed when evidence directory is 0o555 and file is 0o444",
+)
+def test_realm_parser_works_on_readonly_media(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    realm = evidence_dir / "minimal.realm"
+    realm.write_bytes((FIXTURES_DIR / "minimal.realm").read_bytes())
+
+    realm.chmod(0o444)
+    evidence_dir.chmod(0o555)
+    try:
+        vfs = DirectoryVFS(evidence_dir)
+        root = vfs.root()
+        node = next(c for c in root.children if c.name == "minimal.realm")
+        result = RealmParser().parse(node, vfs)
+        assert result.viewer_type == "realm"
+    finally:
+        evidence_dir.chmod(0o755)
+        realm.chmod(0o644)
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="minimal.realm must parse to exactly: schema ['metadata', 'class_Evidence'], Tables found=2",
+)
+def test_realm_fixture_known_output(realm_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    schema = result.data["schema"]
+    assert schema == ["metadata", "class_Evidence"]
+    assert result.metadata["Tables found"] == "2"
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Parsing the same Realm file twice must produce structurally identical results",
+)
+def test_realm_parse_is_reproducible(realm_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_fixture.name)
+    parser = RealmParser()
+
+    r1 = parser.parse(node, vfs)
+    r2 = parser.parse(node, vfs)
+
+    assert r1.data == r2.data
+    assert r1.metadata == r2.metadata
+    assert r1.viewer_type == r2.viewer_type
     vfs.close()

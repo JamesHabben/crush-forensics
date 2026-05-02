@@ -305,7 +305,7 @@ def _read_scalar_leaf(
 
     elif scheme == 1:
         eb = int(width)
-        if eb < 1:
+        if eb < 1 or eb > 8:
             return None
         result = []
         for i in range(count):

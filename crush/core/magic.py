@@ -17,6 +17,9 @@ ABX_MAGIC: Final = b"ABX\x00"
 SEGB_MAGIC: Final = b"SEGB"
 # SEGB v1 header is 56 bytes; magic sits at the last 4 bytes (offset 52 = 0x34)
 _SEGB_V1_MAGIC_OFFSET: Final = 52
+# Realm: 24-byte file header, mnemonic "T-DB" at offset 16
+REALM_MNEMONIC: Final = b"T-DB"
+_REALM_MNEMONIC_OFFSET: Final = 16
 
 
 def detect_fast_label(peek_bytes: bytes, path: str) -> str:
@@ -37,6 +40,8 @@ def detect_fast_label(peek_bytes: bytes, path: str) -> str:
             if isinstance(ext, str) and ext:
                 return ext.upper()
 
+    if peek_bytes[_REALM_MNEMONIC_OFFSET : _REALM_MNEMONIC_OFFSET + 4] == REALM_MNEMONIC:
+        return "Realm"
     if peek_bytes.startswith(SQLITE_MAGIC):
         return "SQLite"
     if peek_bytes.startswith(BPLIST_MAGIC):
