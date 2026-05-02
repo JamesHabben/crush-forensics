@@ -255,10 +255,23 @@ Opens `.realm` files in a tabbed view:
 | Tab | Content |
 |---|---|
 | **Header** | File metadata decoded from the Realm file header |
-| **Schema** | List of all classes/tables stored in the database |
+| **Schema** | All classes/tables with their columns and declared types (expand a table to see each field) |
 | **Top Refs** | Comparison of top-ref pointers across header slots (useful for detecting corruption or versioning) |
-| **Tables** | Column data for each table, displayed in the Table Viewer |
+| **Tables** | Decoded column data for each table; SQL queries run against a temporary SQLite representation of the data |
+| **Strings** | String values extracted from the file |
 | **Hex Preview** | Raw hex of the first bytes of the file |
+
+**SQL queries in the Tables tab**
+
+The decoded table data is loaded into a temporary SQLite file when the Tables tab is opened. Every table includes a leading `_objkey` column populated from the Realm ObjKey array. This allows cross-table JOINs using the same link-column values Realm stores internally:
+
+```sql
+SELECT a.title, e.name
+FROM class_Article a
+JOIN class_ArticleEDP e ON a.edp = e._objkey
+```
+
+The temporary file is deleted automatically when the viewer is closed.
 
 ### Protobuf Viewer
 
