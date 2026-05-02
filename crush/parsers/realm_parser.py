@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
@@ -15,6 +16,28 @@ _MNEMONIC = b"T-DB"
 # width_ndx (bits [2:0] of array flags byte) → element width value
 # Scheme 0: width is in bits.  Scheme 1: width is in bytes.
 _WIDTH_TABLE = [0, 1, 2, 4, 8, 16, 32, 64]
+
+# Realm ColumnType codes stored in spec→child[0]
+_REALM_COL_TYPES: dict[int, str] = {
+    0: "int",
+    1: "bool",
+    2: "string",
+    4: "data",
+    6: "mixed",
+    8: "date",
+    9: "float",
+    10: "double",
+    11: "decimal128",
+    12: "link",
+    13: "linklist",
+    14: "backlink",
+    15: "objectId",
+    16: "typedlink",
+    17: "uuid",
+}
+
+# Column types that are hidden (no user-visible name) and must be skipped
+_HIDDEN_COL_TYPES: frozenset[int] = frozenset({14})  # BackLink
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +672,171 @@ def _read_direct_string_column(
     return results
 
 
+def _decode_timestamp(val: int) -> str:
+    """Convert a Realm Timestamp integer to a readable UTC string.
+
+    Realm format 24 stores the seconds part of Timestamp as an int64.
+    Auto-detects unit by magnitude: seconds → milliseconds → nanoseconds.
+    Falls back to the raw integer string if the value is out of any useful range.
+    """
+    try:
+        if 0 < val < 10_000_000_000:          # seconds (1970 – ~2286)
+            dt = datetime.fromtimestamp(val, tz=timezone.utc)
+        elif 0 < val < 10_000_000_000_000:    # milliseconds
+            dt = datetime.fromtimestamp(val / 1_000, tz=timezone.utc)
+        elif 0 < val < 10_000_000_000_000_000_000:  # nanoseconds
+            dt = datetime.fromtimestamp(val / 1_000_000_000, tz=timezone.utc)
+        else:
+            return str(val)
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (OSError, OverflowError, ValueError):
+        return str(val)
+
+
+def _read_nullable_integer_column(
+    data: bytes,
+    col_offset: int,
+    file_size: int,
+    expected_rows: int | None = None,
+) -> list[int | None] | None:
+    """Parse a nullable integer/date column stored as a 2-entry ref array.
+
+    Format: outer ref array with count=2:
+        ref[0] → values Data Array (scheme=0, count=expected_rows)
+        ref[1] → null bitmap (scheme=0, width=1, count=expected_rows; 1 = NULL)
+
+    Used for Realm nullable int, date, float, double, objectId, uuid, etc.
+    """
+    hdr = _parse_array_header(data, col_offset)
+    if hdr is None or not hdr["has_refs"] or hdr["Element count (size)"] != 2:
+        return None
+
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+
+    values_ref = _read_ref(data, col_offset + 8, 0, eb)
+    null_ref = _read_ref(data, col_offset + 8, 1, eb)
+
+    if values_ref <= 0 or values_ref >= file_size:
+        return None
+    if null_ref <= 0 or null_ref >= file_size:
+        return None
+
+    null_hdr = _parse_array_header(data, null_ref)
+    if (
+        null_hdr is None
+        or null_hdr["has_refs"]
+        or null_hdr["width"] != 1
+        or null_hdr["width_scheme"] != 0
+    ):
+        return None
+
+    vals_hdr = _parse_array_header(data, values_ref)
+    if vals_hdr is None or vals_hdr["has_refs"]:
+        return None
+
+    null_count = null_hdr["Element count (size)"]
+    vals_count = vals_hdr["Element count (size)"]
+    if null_count != vals_count:
+        return None
+    if expected_rows is not None and null_count != expected_rows:
+        return None
+
+    null_payload = data[null_ref + 8 : null_ref + 8 + null_hdr["Payload bytes (raw)"]]
+    null_bits: list[bool] = []
+    for i in range(null_count):
+        byte_i, bit_i = divmod(i, 8)
+        null_bits.append(
+            bool((null_payload[byte_i] >> bit_i) & 1)
+            if byte_i < len(null_payload)
+            else False
+        )
+
+    values_list = _read_scalar_leaf(data, values_ref, file_size)
+    if values_list is None:
+        return None
+
+    result: list[int | None] = []
+    for i in range(null_count):
+        if null_bits[i]:
+            result.append(None)
+        elif i < len(values_list):
+            result.append(values_list[i])
+        else:
+            result.append(None)
+    return result
+
+
+def _read_timestamp_column(
+    data: bytes,
+    col_offset: int,
+    file_size: int,
+    expected_rows: int | None = None,
+) -> list[str | None] | None:
+    """Parse a Realm Timestamp column stored as a 2-entry ref array.
+
+    Format: outer ref array count=2:
+        ref[0] → seconds array (scheme=0, w≥8, 1-indexed; position 0 = INT_MAX null sentinel)
+        ref[1] → nanoseconds array (scheme=0, any w; 0-indexed, same count = expected_rows)
+
+    Row i maps to secs_vals[i+1].  Sentinel value (max signed for given width) → NULL.
+    """
+    hdr = _parse_array_header(data, col_offset)
+    if hdr is None or not hdr["has_refs"] or hdr["Element count (size)"] != 2:
+        return None
+
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+
+    secs_ref = _read_ref(data, col_offset + 8, 0, eb)
+    nanos_ref = _read_ref(data, col_offset + 8, 1, eb)
+
+    if secs_ref <= 0 or secs_ref >= file_size:
+        return None
+
+    secs_hdr = _parse_array_header(data, secs_ref)
+    if secs_hdr is None or secs_hdr["has_refs"] or secs_hdr["width"] < 8:
+        return None
+
+    secs_count = secs_hdr["Element count (size)"]
+    # 1-indexed: position 0 is the null-sentinel slot; actual rows are 1..secs_count-1
+    actual_rows = secs_count - 1
+    if actual_rows < 0:
+        return None
+    if expected_rows is not None and actual_rows != expected_rows:
+        return None
+
+    secs_vals = _read_scalar_leaf(data, secs_ref, file_size)
+    if secs_vals is None:
+        return None
+
+    # Nanoseconds — optional, ignored if width=0 (all zeros)
+    nanos_vals: list[Any] | None = None
+    if 0 < nanos_ref < file_size:
+        nanos_hdr = _parse_array_header(data, nanos_ref)
+        if nanos_hdr and not nanos_hdr["has_refs"] and nanos_hdr["width"] >= 8:
+            nanos_vals = _read_scalar_leaf(data, nanos_ref, file_size)
+
+    width = secs_hdr["width"]
+    null_sentinel = (1 << (width - 1)) - 1  # INT32_MAX for w=32, INT64_MAX for w=64
+
+    result: list[str | None] = []
+    for i in range(actual_rows):
+        idx = i + 1
+        s = secs_vals[idx] if idx < len(secs_vals) else None
+        if s is None or s == null_sentinel:
+            result.append(None)
+        else:
+            ns = 0
+            if nanos_vals and i < len(nanos_vals):
+                ns = nanos_vals[i] or 0
+            ts = s + (ns / 1_000_000_000 if ns else 0)
+            result.append(_decode_timestamp(int(ts)))
+    return result
+
+
 def _extract_column_names(
     data: bytes,
     table_ref: int,
@@ -700,6 +888,85 @@ def _extract_column_names(
             name = f"col_{i}"
         names.append(name if name else f"col_{i}")
     return names
+
+
+def _extract_column_types(
+    data: bytes,
+    table_ref: int,
+    table_eb: int,
+    file_size: int,
+) -> list[int]:
+    """Read column type codes from spec→child[0].
+
+    Path: table_ref → child[0] (spec) → child[0] (type codes Data Array).
+    Returns a list of integer type codes aligned with the column names list.
+    Returns an empty list on any failure.
+    """
+    spec_ref = _read_ref(data, table_ref + 8, 0, table_eb)
+    if spec_ref <= 0 or spec_ref >= file_size:
+        return []
+    spec_hdr = _parse_array_header(data, spec_ref)
+    if spec_hdr is None or not spec_hdr["has_refs"] or spec_hdr["Element count (size)"] < 1:
+        return []
+    spec_eb = _elem_bytes(spec_hdr)
+    if spec_eb < 1:
+        return []
+
+    types_ref = _read_ref(data, spec_ref + 8, 0, spec_eb)
+    if types_ref <= 0 or types_ref >= file_size:
+        return []
+
+    codes = _read_scalar_leaf(data, types_ref, file_size)
+    if codes is None:
+        return []
+    return [int(c) for c in codes if c is not None]
+
+
+def _extract_column_key_map(
+    data: bytes,
+    table_ref: int,
+    table_eb: int,
+    file_size: int,
+    raw_type_codes: list[int],
+) -> dict[int, int] | None:
+    """Build a cluster-index → user-column-index map from spec→child[5] colkeys.
+
+    Each column key encodes its physical cluster position:
+        cluster_idx = (colkey & 0xFFFF) + 1
+    Entries whose type code is in _HIDDEN_COL_TYPES (e.g. BackLink = 14) are skipped.
+    Returns None if spec has fewer than 6 children or colkeys cannot be read.
+    """
+    spec_ref = _read_ref(data, table_ref + 8, 0, table_eb)
+    if spec_ref <= 0 or spec_ref >= file_size:
+        return None
+    spec_hdr = _parse_array_header(data, spec_ref)
+    if spec_hdr is None or not spec_hdr["has_refs"] or spec_hdr["Element count (size)"] < 6:
+        return None
+    spec_eb = _elem_bytes(spec_hdr)
+    if spec_eb < 1:
+        return None
+
+    colkeys_ref = _read_ref(data, spec_ref + 8, 5, spec_eb)
+    if colkeys_ref <= 0 or colkeys_ref >= file_size:
+        return None
+
+    colkeys = _read_scalar_leaf(data, colkeys_ref, file_size)
+    if not colkeys:
+        return None
+
+    key_map: dict[int, int] = {}
+    user_col_idx = 0
+    for i, colkey in enumerate(colkeys):
+        if colkey is None:
+            continue
+        type_code = raw_type_codes[i] if i < len(raw_type_codes) else -1
+        if type_code in _HIDDEN_COL_TYPES:
+            continue
+        cluster_idx = (int(colkey) & 0xFFFF) + 1
+        key_map[cluster_idx] = user_col_idx
+        user_col_idx += 1
+
+    return key_map if key_map else None
 
 
 def _derive_row_count(
@@ -790,43 +1057,83 @@ def _extract_table_data(
         cd_eb = _elem_bytes(cd_hdr)
         num_cluster = cd_hdr["Element count (size)"]
 
-        # Derive row count from the most common element count across cluster sub-arrays.
-        row_count: int | None = _derive_row_count(
-            data, col_data_ref, num_cluster, cd_eb, file_size
-        )
+        # Cluster[0] is the ObjKey array — the most reliable source for row count.
+        # ObjKey is always a non-ref scalar array with exactly one entry per row.
+        # Falls back to the statistical heuristic if cluster[0] can't be read.
+        obj_keys: list[Any] | None = None
+        row_count: int | None = None
+        obj_key_ref = _read_ref(data, col_data_ref + 8, 0, cd_eb)
+        if 0 < obj_key_ref < file_size:
+            ok_hdr = _parse_array_header(data, obj_key_ref)
+            if ok_hdr and not ok_hdr["has_refs"]:
+                row_count = ok_hdr["Element count (size)"]
+                obj_keys = _read_scalar_leaf(data, obj_key_ref, file_size)
+        if row_count is None:
+            row_count = _derive_row_count(data, col_data_ref, num_cluster, cd_eb, file_size)
 
-        # Column names from spec → child[1] (user-visible columns, excludes ObjKey).
+        # Column names and types from spec (user-visible columns, excludes ObjKey).
         col_names = _extract_column_names(data, table_ref, t_eb, file_size)
+        raw_type_codes = _extract_column_types(data, table_ref, t_eb, file_size)
         n_names = len(col_names)
+        # col_type_codes aligned with user column names: remove BackLink entries,
+        # then take the first n_names to match the names list.
+        col_type_codes = [tc for tc in raw_type_codes if tc not in _HIDDEN_COL_TYPES]
+        if n_names > 0:
+            col_type_codes = col_type_codes[:n_names]
 
-        # Format 24 cluster layout: [ObjKey, ...internals..., user_col_0, ..., user_col_N-1]
-        # User columns are the LAST n_names sub-arrays; everything before is internal.
-        col_start = (num_cluster - n_names) if n_names > 0 and num_cluster >= n_names else 0
+        # Build a cluster-index → user-col-index map using spec→child[5] colkeys.
+        # Falls back to the "last N" heuristic when colkeys are unavailable.
+        key_map: dict[int, int] | None = None
+        if n_names > 0:
+            key_map = _extract_column_key_map(data, table_ref, t_eb, file_size, raw_type_codes)
+            if key_map is None and num_cluster >= n_names:
+                col_start = num_cluster - n_names
+                key_map = {col_start + i: i for i in range(n_names)}
 
         columns: dict[int, list[Any]] = {}
         for c_idx in range(num_cluster):
             col_ref = _read_ref(data, col_data_ref + 8, c_idx, cd_eb)
             if col_ref <= 0 or col_ref >= file_size:
                 continue
-            # Try format-24 inline strings first, then fall back to legacy decoders.
-            values: list[Any] | None = _read_inline_string_leaf(data, col_ref)
-            if values is None:
-                values = _read_string_leaf(data, col_ref, file_size, row_count)
-            if values is None:
-                values = _read_blob_leaf(data, col_ref, file_size, row_count)
-            if values is None:
-                values = _read_direct_string_column(data, col_ref, file_size, row_count)
-            if values is None:
-                values = _read_scalar_leaf(data, col_ref, file_size)
-            if values is None:
-                continue
+
+            # Determine if this cluster entry is a user column.
             if n_names > 0:
-                # Only keep user-column sub-arrays; remap to 0-based index for the viewer.
-                if c_idx >= col_start:
-                    columns[c_idx - col_start] = values
+                user_col_idx = key_map.get(c_idx) if key_map is not None else None
+                if user_col_idx is None:
+                    continue  # ObjKey, BackLink, or other internal column
+                type_code = col_type_codes[user_col_idx] if user_col_idx < len(col_type_codes) else -1
             else:
+                user_col_idx = None
+                type_code = -1
+
+            # Decode the column data; timestamp columns use a dedicated decoder.
+            values: list[Any] | None
+            if type_code == 8:  # Timestamp
+                values = _read_timestamp_column(data, col_ref, file_size, row_count)
+                if values is None:
+                    values = _read_scalar_leaf(data, col_ref, file_size)
+            else:
+                values = _read_inline_string_leaf(data, col_ref)
+                if values is None:
+                    values = _read_string_leaf(data, col_ref, file_size, row_count)
+                if values is None:
+                    values = _read_blob_leaf(data, col_ref, file_size, row_count)
+                if values is None:
+                    values = _read_direct_string_column(data, col_ref, file_size, row_count)
+                if values is None:
+                    values = _read_nullable_integer_column(data, col_ref, file_size, row_count)
+                if values is None:
+                    values = _read_scalar_leaf(data, col_ref, file_size)
+
+            if n_names > 0 and user_col_idx is not None:
+                # NULL-only columns: emit all-None list so the column appears in output.
+                columns[user_col_idx] = values if values is not None else [None] * (row_count or 0)
+            elif n_names == 0:
                 # No names available: expose all sub-arrays with raw cluster indices.
-                columns[c_idx] = values
+                if values is not None:
+                    columns[c_idx] = values
+
+        col_type_names = [_REALM_COL_TYPES.get(c, f"type_{c}") for c in col_type_codes]
 
         if columns or row_count is not None:
             tables.append(
@@ -835,6 +1142,8 @@ def _extract_table_data(
                     "row_count": row_count,
                     "columns": columns,
                     "column_names": col_names,
+                    "column_types": col_type_names,
+                    "obj_keys": obj_keys,
                 }
             )
 

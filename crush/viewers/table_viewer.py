@@ -205,9 +205,15 @@ class TableViewer(QWidget):
         }
     """
     open_bytes_requested = Signal(bytes, str)
-    def __init__(self, data: dict[str, Any], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        data: dict[str, Any],
+        parent: QWidget | None = None,
+        show_db_tabs: bool = True,
+    ) -> None:
         super().__init__(parent)
         self._data = data
+        self._show_db_tabs = show_db_tabs
         self._col_ts_formats: dict[int, str] = {}
         db_path_value = data.get("__db_path") if isinstance(data, dict) else None
         if isinstance(db_path_value, str) and db_path_value:
@@ -228,26 +234,31 @@ class TableViewer(QWidget):
             table_names = [k for k in data.keys() if not k.startswith("__")]
             if self._db_path:
                 self._table_combo.clear()
-                self._table_combo.addItem(self._summary_label)
-                self._table_combo.addItem(self._db_structure_label)
-                self._table_combo.addItem(self._db_info_label)
-                if self._db_path and Path(str(self._db_path) + "-wal").exists():
-                    self._table_combo.addItem(self._wal_label)
+                if show_db_tabs:
+                    self._table_combo.addItem(self._summary_label)
+                    self._table_combo.addItem(self._db_structure_label)
+                    self._table_combo.addItem(self._db_info_label)
+                    if self._db_path and Path(str(self._db_path) + "-wal").exists():
+                        self._table_combo.addItem(self._wal_label)
                 self._table_combo.addItems(table_names)
-                conn = self._ensure_db()
-                if conn:
-                    try:
-                        view_names = [
-                            r[0] for r in conn.execute(
-                                "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
-                            ).fetchall()
-                        ]
-                        if view_names:
-                            self._table_combo.insertSeparator(self._table_combo.count())
-                            self._table_combo.addItems(view_names)
-                    except Exception:
-                        pass
-                self._load_summary()
+                if show_db_tabs:
+                    conn = self._ensure_db()
+                    if conn:
+                        try:
+                            view_names = [
+                                r[0] for r in conn.execute(
+                                    "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+                                ).fetchall()
+                            ]
+                            if view_names:
+                                self._table_combo.insertSeparator(self._table_combo.count())
+                                self._table_combo.addItems(view_names)
+                        except Exception:
+                            pass
+                    self._load_summary()
+                else:
+                    if table_names:
+                        self._load_table(table_names[0])
             else:
                 if table_names:
                     self._load_table(table_names[0])
