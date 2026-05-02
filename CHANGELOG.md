@@ -11,6 +11,10 @@ All notable changes to Crush will be documented in this file.
 ### Improvements
 
 - **Realm file type label** — `.realm` files now show `Realm` as the fast type label in the VFS tree panel, consistent with how SQLite, bplist, ABX, and SEGB files are labelled. Previously, `.realm` files showed no label at all.
+- **Realm column names (format 24)** — the parser now reads column names from the correct spec node (`spec → child[1]` rather than `child[0]`, which holds type codes). Previously every column was labelled `col_0`, `col_1`, … regardless of the actual schema names.
+- **Realm string column decoding (format 24 cluster architecture)** — format 24 stores strings in fixed-width inline entries (scheme=1) where `content_length = (entry_width − 1) − last_byte`. This replaces the incorrect legacy pointer-following logic that produced garbage string values. The generalised decoder handles any byte-width entry: 8-byte entries (≤ 7 chars) and 16-byte entries (≤ 15 chars) are both decoded; entries whose last byte equals or exceeds the width are decoded as NULL; non-zero "oversized" last bytes indicate a heap pointer and are shown as `<long>`.
+- **Realm link column display** — link columns (ObjKey references stored in narrow ref arrays, width < 32) are now decoded as their raw integer values instead of being misinterpreted as string pointer arrays. Wide ref arrays (width ≥ 32) still go through the legacy indirect-string decoder as a fallback.
+- **Realm column-to-name mapping** — in the format 24 cluster layout the user-visible columns occupy the *last N* sub-arrays (the leading sub-arrays are internal, e.g. ObjKey and metadata). The parser now maps sub-array indices to 0-based user-column indices correctly, so the table viewer shows named columns in the right order.
 
 ### Testing
 

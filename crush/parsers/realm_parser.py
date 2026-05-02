@@ -255,7 +255,7 @@ def _read_scalar_leaf(
     if the node does not look like a scalar leaf.
     """
     hdr = _parse_array_header(data, col_offset)
-    if hdr is None or hdr["has_refs"]:
+    if hdr is None:
         return None
 
     count = hdr["Element count (size)"]
@@ -301,6 +301,9 @@ def _read_scalar_leaf(
                 if sign_bit and val >= sign_bit:
                     val -= (1 << width)
                 result.append(val)
+            # 2-bit scheme=0 is Realm's nullable boolean: 0=False, 1=True, ≥2=NULL
+            if width == 2:
+                result = [None if v is None or v >= 2 else bool(v) for v in result]
             return result
 
     elif scheme == 1:
@@ -497,6 +500,68 @@ def _read_blob_leaf(
     return results
 
 
+def _read_inline_string_leaf(
+    data: bytes,
+    col_offset: int,
+) -> list[str | None] | None:
+    """Parse a Realm format-24 inline string column (scheme=1, any byte-width).
+
+    General encoding for a W-byte entry:
+      - bytes [0 .. length-1]: UTF-8 string content (up to W-1 chars)
+      - byte [W-1]: padding count; actual length = (W-1) - pad
+      - pad >= W → NULL value (all content bytes are zero) or heap pointer
+    Validated against integer columns: if any non-null entry contains a null
+    byte in its content region, the whole column is rejected (→ None).
+    Returns None if the array does not match this layout.
+    """
+    hdr = _parse_array_header(data, col_offset)
+    if hdr is None or hdr["has_refs"] or hdr["width_scheme"] != 1:
+        return None
+
+    width = hdr["width"]
+    if width < 8:
+        return None
+
+    count = hdr["Element count (size)"]
+    if count == 0:
+        return []
+
+    max_len = width - 1
+    payload_start = col_offset + 8
+    results: list[str | None] = []
+    valid = 0
+
+    for i in range(count):
+        off = payload_start + i * width
+        if off + width > len(data):
+            results.append(None)
+            continue
+        entry = data[off : off + width]
+        pad = entry[width - 1]
+        if pad >= width:
+            # NULL: content bytes all zero; otherwise heap pointer
+            if entry[:max_len] == b"\x00" * max_len:
+                results.append(None)
+            else:
+                results.append("<long>")
+            valid += 1
+        else:
+            length = max_len - pad
+            raw = entry[:length] if length > 0 else b""
+            # Reject if content has null bytes — integers stored in scheme=1
+            # arrays often produce null bytes here, signalling a non-string column.
+            if b"\x00" in raw:
+                return None
+            try:
+                s = raw.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                return None
+            results.append(s)
+            valid += 1
+
+    return results if valid > 0 else None
+
+
 def _read_direct_string_column(
     data: bytes,
     col_offset: int,
@@ -528,6 +593,9 @@ def _read_direct_string_column(
     # 3-entry refs are string/blob columns, handled elsewhere
     count = hdr["Element count (size)"]
     if count == 3:
+        return None
+    # Refs narrower than 32 bits are integer link keys, not file-offset string pointers
+    if hdr["width"] < 32:
         return None
     if expected_rows is not None and count != expected_rows:
         return None
@@ -579,6 +647,59 @@ def _read_direct_string_column(
     if valid == 0 and count > 0:
         return None
     return results
+
+
+def _extract_column_names(
+    data: bytes,
+    table_ref: int,
+    table_eb: int,
+    file_size: int,
+) -> list[str]:
+    """Read column names from the spec at child[0] of the table node.
+
+    Path: table_ref → child[0] (spec) → child[1] (names Data Array).
+    spec child[0] holds column type codes; child[1] holds fixed-width 32-byte
+    null-terminated ASCII names for user-visible columns (ObjKey is omitted).
+    Returns an empty list on any failure.
+    """
+    spec_ref = _read_ref(data, table_ref + 8, 0, table_eb)
+    if spec_ref <= 0 or spec_ref >= file_size:
+        return []
+    spec_hdr = _parse_array_header(data, spec_ref)
+    if spec_hdr is None or not spec_hdr["has_refs"] or spec_hdr["Element count (size)"] < 2:
+        return []
+    spec_eb = _elem_bytes(spec_hdr)
+    if spec_eb < 1:
+        return []
+
+    # child[1] = column names (scheme=1, width=32, fixed-width ASCII)
+    names_ref = _read_ref(data, spec_ref + 8, 1, spec_eb)
+    if names_ref <= 0 or names_ref >= file_size:
+        return []
+    names_hdr = _parse_array_header(data, names_ref)
+    if names_hdr is None or names_hdr["has_refs"]:
+        return []
+
+    entry_bytes = _elem_bytes(names_hdr)
+    count = names_hdr["Element count (size)"]
+    if entry_bytes < 1 or count == 0:
+        return []
+
+    payload_start = names_ref + 8
+    names: list[str] = []
+    for i in range(count):
+        entry_off = payload_start + i * entry_bytes
+        if entry_off + entry_bytes > len(data):
+            break
+        entry = data[entry_off : entry_off + entry_bytes]
+        null_pos = entry.find(b"\x00")
+        raw = entry[:null_pos] if null_pos >= 0 else entry
+        try:
+            name = raw.decode("ascii").strip()
+        except Exception:
+            name = f"col_{i}"
+        names.append(name if name else f"col_{i}")
+    return names
 
 
 def _derive_row_count(
@@ -667,27 +788,44 @@ def _extract_table_data(
             continue
 
         cd_eb = _elem_bytes(cd_hdr)
-        num_cols = cd_hdr["Element count (size)"]
+        num_cluster = cd_hdr["Element count (size)"]
 
-        # Derive row count from the most common element count across data arrays.
-        # The child[7]-based approach is unreliable across Realm format versions.
+        # Derive row count from the most common element count across cluster sub-arrays.
         row_count: int | None = _derive_row_count(
-            data, col_data_ref, num_cols, cd_eb, file_size
+            data, col_data_ref, num_cluster, cd_eb, file_size
         )
 
+        # Column names from spec → child[1] (user-visible columns, excludes ObjKey).
+        col_names = _extract_column_names(data, table_ref, t_eb, file_size)
+        n_names = len(col_names)
+
+        # Format 24 cluster layout: [ObjKey, ...internals..., user_col_0, ..., user_col_N-1]
+        # User columns are the LAST n_names sub-arrays; everything before is internal.
+        col_start = (num_cluster - n_names) if n_names > 0 and num_cluster >= n_names else 0
+
         columns: dict[int, list[Any]] = {}
-        for c_idx in range(num_cols):
+        for c_idx in range(num_cluster):
             col_ref = _read_ref(data, col_data_ref + 8, c_idx, cd_eb)
             if col_ref <= 0 or col_ref >= file_size:
                 continue
-            values: list[Any] | None = _read_string_leaf(data, col_ref, file_size, row_count)
+            # Try format-24 inline strings first, then fall back to legacy decoders.
+            values: list[Any] | None = _read_inline_string_leaf(data, col_ref)
+            if values is None:
+                values = _read_string_leaf(data, col_ref, file_size, row_count)
             if values is None:
                 values = _read_blob_leaf(data, col_ref, file_size, row_count)
             if values is None:
                 values = _read_direct_string_column(data, col_ref, file_size, row_count)
             if values is None:
                 values = _read_scalar_leaf(data, col_ref, file_size)
-            if values is not None:
+            if values is None:
+                continue
+            if n_names > 0:
+                # Only keep user-column sub-arrays; remap to 0-based index for the viewer.
+                if c_idx >= col_start:
+                    columns[c_idx - col_start] = values
+            else:
+                # No names available: expose all sub-arrays with raw cluster indices.
                 columns[c_idx] = values
 
         if columns or row_count is not None:
@@ -696,6 +834,7 @@ def _extract_table_data(
                     "name": schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]",
                     "row_count": row_count,
                     "columns": columns,
+                    "column_names": col_names,
                 }
             )
 
@@ -818,4 +957,17 @@ class RealmParser(AbstractParser):
         else:
             meta["Header"] = "Not detected (possibly encrypted or non-standard)"
 
-        return ParseResult(viewer_type="realm", data=data, metadata=meta)
+        text_parts: list[str] = []
+        for t in tables:
+            for vals in t.get("columns", {}).values():
+                for v in vals:
+                    if isinstance(v, str) and v.strip() and not v.startswith("<blob"):
+                        text_parts.append(v)
+        text_parts.extend(strings[:500])
+
+        return ParseResult(
+            viewer_type="realm",
+            data=data,
+            metadata=meta,
+            text_index=" ".join(text_parts[:2000]),
+        )

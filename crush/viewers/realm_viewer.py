@@ -54,6 +54,17 @@ class RealmViewer(QWidget):
         if tables:
             tabs.addTab(self._build_tables_tab(tables, tabs), "Tables")
 
+        # --- Strings ---
+        strings: list[str] = self._data.get("strings", [])
+        if strings:
+            strings_data: dict[str, Any] = {
+                f"Strings ({len(strings)})": {
+                    "columns": ["String"],
+                    "rows": [[s] for s in strings],
+                }
+            }
+            tabs.addTab(TableViewer(strings_data, tabs), "Strings")
+
         # --- Hex Preview ---
         preview = self._data.get("preview", b"")
         tabs.addTab(HexViewer(preview, tabs), "Hex Preview")
@@ -73,7 +84,14 @@ class RealmViewer(QWidget):
             if not cols_dict:
                 continue
             col_indices = sorted(cols_dict.keys())
-            col_headers = [f"col_{i}" for i in col_indices]
+            col_names = t.get("column_names")
+            if col_names:
+                col_headers = [
+                    col_names[i] if i < len(col_names) else f"col_{i}"
+                    for i in col_indices
+                ]
+            else:
+                col_headers = [f"col_{i}" for i in col_indices]
             row_count = max((len(v) for v in cols_dict.values()), default=0)
             rows: list[list] = []
             for r in range(row_count):
