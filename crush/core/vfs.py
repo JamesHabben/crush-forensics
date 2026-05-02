@@ -156,7 +156,12 @@ class ZipVFS(VFS):
         _offsets: dict[str, int] = {}  # virtual_path -> header_offset for storage-order prescan
 
         for info in sorted(self._zf.infolist(), key=lambda i: i.filename):
-            parts = info.filename.rstrip("/").split("/")
+            # Filter empty components (from leading/double slashes) and "." — same
+            # normalisation TarVFS applies with lstrip("./").  Keeps ".." intact so
+            # the archive structure is represented faithfully.
+            parts = [p for p in info.filename.rstrip("/").split("/") if p and p != "."]
+            if not parts:
+                continue
             for depth, _ in enumerate(parts, 1):
                 virtual_path = "/" + "/".join(parts[:depth])
                 if virtual_path not in nodes:

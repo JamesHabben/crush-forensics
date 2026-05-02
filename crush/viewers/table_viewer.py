@@ -57,6 +57,27 @@ from crush.core.ts_decode import TS_FORMATS as _TS_FORMATS
 from crush.core.ts_decode import decode_ts as _decode_ts
 
 
+def _wal_diag(db_path: "str | None", parser_diag: str = "") -> str:
+    """Return a short diagnostic string explaining why WAL parsing failed."""
+    if db_path is None:
+        return "db_path is None"
+    wal_path = Path(str(db_path) + "-wal")
+    if not wal_path.exists():
+        suffix = f" (parser: {parser_diag})" if parser_diag else ""
+        return f"WAL file not found at temp path{suffix}"
+    size = wal_path.stat().st_size
+    if size < 32:
+        suffix = f" — parser: {parser_diag}" if parser_diag else ""
+        return f"WAL too small ({size} B){suffix}"
+    try:
+        magic = struct.unpack_from(">I", wal_path.read_bytes(), 0)[0]
+    except Exception as exc:
+        return f"read error: {exc}"
+    if magic not in _WAL_MAGIC:
+        return f"invalid magic 0x{magic:08x}"
+    return f"WAL ok (size={size} B, magic=0x{magic:08x}) — frames list empty"
+
+
 class _SqlHighlighter(QSyntaxHighlighter):
     _KEYWORDS = (
         "SELECT FROM WHERE INSERT UPDATE DELETE CREATE DROP TABLE VIEW INDEX TRIGGER "
@@ -399,6 +420,9 @@ class TableViewer(QWidget):
                 self._sql_status.setStyleSheet("color: red;")
                 self._sql_status.setText(str(exc))
                 return
+
+        # Ensure _page_table_map is populated before checking has_wal (cached after first call)
+        self._get_wal_frames()
 
         # Show WAL toggle only for real tables that have WAL data
         has_wal = bool(self._page_table_map) and any(
@@ -744,7 +768,9 @@ class TableViewer(QWidget):
             ["Frame", "Page", "Transaction", "Status", "Table", "Offset (B)"]
         )
         if not frames:
-            item = QStandardItem("No WAL file found or format not recognised")
+            parser_diag = self._data.get("__wal_diag", "") if isinstance(self._data, dict) else ""
+            diag = _wal_diag(self._db_path, parser_diag)
+            item = QStandardItem(f"No WAL file found or format not recognised — {diag}")
             item.setEditable(False)
             self._source_model.appendRow([item])
             self._row_count_label.setText("")
@@ -948,7 +974,7 @@ class TableViewer(QWidget):
 
     def _run_sql(self) -> None:
         cursor = self._sql_input.textCursor()
-        selected = cursor.selectedText().replace(" ", "\n").strip()
+        selected = cursor.selectedText().replace("", "\n").strip()
         sql = selected if selected else self._sql_input.toPlainText().strip()
         if not sql:
             self._sql_status.setStyleSheet("color: red;")

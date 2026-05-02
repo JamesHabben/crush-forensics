@@ -31,29 +31,56 @@ class SQLiteParser(AbstractParser):
 
         # Copy WAL and SHM companion files if present
         companions: list[str] = []
+        _wal_diag_lines: list[str] = []
         for suffix in ("-wal", "-shm"):
             sibling = find_sibling(node, vfs, suffix)
             if sibling is not None:
                 try:
                     sib_bytes = vfs.read(sibling)
-                    sib_path = tmp_path + suffix
-                    with open(sib_path, "wb") as f:
-                        f.write(sib_bytes)
-                    companions.append(sibling.name)
-                    _logger.debug("Copied companion file: %s", sibling.name)
+                    if not sib_bytes:
+                        msg = (
+                            f"VFS found {sibling.name} (path={sibling.path!r}, "
+                            f"vfs_size={sibling.size} B) but read returned 0 bytes — "
+                            f"ZIP entry may be empty in the archive"
+                        )
+                        _logger.warning(msg)
+                        if suffix == "-wal":
+                            _wal_diag_lines.append(msg)
+                    else:
+                        sib_path = tmp_path + suffix
+                        with open(sib_path, "wb") as f:
+                            f.write(sib_bytes)
+                        companions.append(sibling.name)
+                        _logger.debug("Copied companion file: %s (%d B)", sibling.name, len(sib_bytes))
+                        if suffix == "-wal":
+                            _wal_diag_lines.append(
+                                f"Copied {sibling.name} ({len(sib_bytes):,} B) from {sibling.path!r}"
+                            )
                 except Exception as exc:
-                    _logger.debug("Could not copy companion %s: %s", sibling.name, exc)
+                    msg = f"VFS found {sibling.name} but read raised: {exc}"
+                    _logger.warning(msg)
+                    if suffix == "-wal":
+                        _wal_diag_lines.append(msg)
             else:
+                if suffix == "-wal":
+                    _wal_diag_lines.append(
+                        f"find_sibling returned None for db_node.path={node.path!r}"
+                    )
                 # FileVFS: node.path is an absolute filesystem path — check for the
                 # companion directly on disk (find_sibling only searches the VFS tree)
                 fs_companion = Path(node.path + suffix)
                 if fs_companion.is_file():
                     try:
                         sib_path = tmp_path + suffix
+                        fs_bytes = fs_companion.read_bytes()
                         with open(sib_path, "wb") as f:
-                            f.write(fs_companion.read_bytes())
+                            f.write(fs_bytes)
                         companions.append(fs_companion.name)
                         _logger.debug("Loaded filesystem companion: %s", fs_companion.name)
+                        if suffix == "-wal":
+                            _wal_diag_lines.append(
+                                f"Loaded filesystem companion {fs_companion.name} ({len(fs_bytes):,} B)"
+                            )
                     except Exception as exc:
                         _logger.debug("Could not load filesystem companion %s: %s", fs_companion.name, exc)
 
@@ -69,7 +96,10 @@ class SQLiteParser(AbstractParser):
                 ).fetchall()
             ]
 
-            data: dict[str, Any] = {"__db_path": tmp_path}
+            data: dict[str, Any] = {
+                "__db_path": tmp_path,
+                "__wal_diag": " | ".join(_wal_diag_lines) if _wal_diag_lines else "",
+            }
             text_parts: list[str] = []
             truncated_tables: list[str] = []
 
