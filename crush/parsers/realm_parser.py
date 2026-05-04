@@ -1204,6 +1204,8 @@ class RealmParser(AbstractParser):
 
         top_refs: dict[str, Any] = {}
         schema: list[str] = []
+        inactive_schema: list[str] = []
+        inactive_ref_idx: int = 0
         active_idx = 0
 
         if header_info:
@@ -1233,7 +1235,10 @@ class RealmParser(AbstractParser):
             }
 
             active_offset = top_ref1_val if active_idx == 1 else top_ref0_val
+            inactive_offset = top_ref0_val if active_idx == 1 else top_ref1_val
+            inactive_ref_idx = 0 if active_idx == 1 else 1
             schema = _extract_schema(full_data, active_offset, node.size)
+            inactive_schema = _extract_schema(full_data, inactive_offset, node.size)
 
         strings = _scan_strings(full_data)
 
@@ -1241,12 +1246,39 @@ class RealmParser(AbstractParser):
         if header_info and schema:
             tables = _extract_table_data(full_data, active_offset, schema, node.size)
 
+        inactive_tables: list[dict[str, Any]] = []
+        if header_info and inactive_schema:
+            inactive_tables = _extract_table_data(
+                full_data, inactive_offset, inactive_schema, node.size
+            )
+
+        # Inject schema-level diff into top_refs so the viewer can display it.
+        if top_refs and (schema or inactive_schema):
+            active_set = set(schema)
+            inactive_set = set(inactive_schema)
+            active_rows = {t["name"]: t.get("row_count", 0) for t in tables}
+            inactive_rows = {t["name"]: t.get("row_count", 0) for t in inactive_tables}
+            changed: dict[str, str] = {}
+            for name in active_set & inactive_set:
+                ar = active_rows.get(name, 0) or 0
+                ir = inactive_rows.get(name, 0) or 0
+                if ar != ir:
+                    changed[name] = f"active={ar}  vs  inactive={ir}"
+            top_refs["schema_diff"] = {
+                "only_in_active": sorted(active_set - inactive_set),
+                "only_in_inactive": sorted(inactive_set - active_set),
+                "row_count_changed": changed,
+            }
+
         data: dict[str, Any] = {
             "header": header_info,
             "preview": preview,
             "top_refs": top_refs,
             "schema": schema,
             "tables": tables,
+            "inactive_schema": inactive_schema,
+            "inactive_tables": inactive_tables,
+            "inactive_ref_index": inactive_ref_idx if header_info else None,
             "strings": strings,
         }
 
