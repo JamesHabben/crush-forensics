@@ -1363,9 +1363,6 @@ class RealmParser(AbstractParser):
         if header_info:
             active_fl  = _extract_free_list(full_data, active_offset,   node.size)
             inactive_fl = _extract_free_list(full_data, inactive_offset, node.size)
-            # Key: (offset, size) → stable identity across both free lists
-            active_keys   = {(e["offset"], e["size"]) for e in active_fl}
-            inactive_keys = {(e["offset"], e["size"]) for e in inactive_fl}
             # Merge: prefer the entry object from whichever ref has it;
             # "both" wins over individual, active-only appears last (most recently freed)
             seen: dict[tuple[int, int], dict[str, Any]] = {}
