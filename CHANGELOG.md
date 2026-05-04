@@ -2,45 +2,47 @@
 
 All notable changes to Crush will be documented in this file.
 
-## [Unreleased]
+## [0.7.0] — 2026-05-04
 
 ### Bug Fixes
 
+- **SQLite WAL support from ZIP** — fixed incorrect path resolution preventing WAL from loading correctly.
+- **Realm table viewer crash (OverflowError)** — fixed Qt overflow when decoding invalid >64B integer widths; unsupported scheme=1 widths are now rejected.
+- **Realm schema mapping (BackLink issue)** — replaced heuristic column mapping with explicit `spec→child[5]` colkey mapping; BackLink (type 14) excluded.
+- **Realm timestamp decoding** — fixed type-8 decoding where nanoseconds were misinterpreted as a null bitmap.
+- **Realm row count mismatch** — row count now derived from ObjKey array instead of heuristic, fixing sparse table issues.
+- **Realm nullable booleans** — correct decoding of 2-bit values (True / False / None instead of raw integers).
+- **Realm NULL-only columns missing** — now preserved and displayed as all-`None` columns.
 
-- **SQLite Wal Support loading from zip** - When opening a SQLite DB from a ZIP file the wal was not loaded correctly into the viewer because of a wrong built path.Now the path is built correctly and the data of the wal is showed correctly.
-- **Realm table viewer: OverflowError when navigating integer columns** — `_read_scalar_leaf` accepted scheme=1 arrays with element widths up to 64 bytes (512-bit integers). Passing such values to Qt's `QVariant` raised `OverflowError: int too big to convert` in the terminal whenever the table was sorted or scrolled. Realm integer columns never use widths above 8 bytes; scheme=1 arrays wider than that are now rejected and the column is skipped rather than returning garbage data.
-- **Realm column mapping via spec colkeys** — the previous "last N sub-arrays" heuristic for mapping cluster entries to user columns silently broke whenever a BackLink column was present between user columns, assigning the BackLink slot to the wrong user column. The parser now reads the explicit 64-bit column keys from `spec→child[5]` and derives the physical cluster index via `(colkey & 0xFFFF) + 1`, producing a correct cluster-index → user-column-index map. BackLink entries (type 14) are filtered out of both the map and the column-type list. The heuristic is kept as a fallback for older format variants that lack `spec→child[5]`.
-- **Realm timestamp columns decoded incorrectly** — columns with type code 8 (Timestamp) were fed through the nullable-integer decoder, which misread the nanoseconds sub-array as a null-bitmap and produced wrong values (Unix-epoch-1970 dates). A dedicated `_read_timestamp_column` decoder is now called first for any type-8 column; it follows the 1-indexed seconds array structure (position 0 holds the INT_MAX null sentinel, positions 1..N hold row data) and formats values as `YYYY-MM-DD HH:MM:SS UTC`.
-- **Realm row count wrong for sparse tables** — `_derive_row_count` used a most-common-element-count heuristic across cluster sub-arrays. Tables where most columns were empty (count = 0) or where all non-empty columns were reference arrays (skipped by the heuristic) returned row_count = 0, causing the timestamp decoder to fail with a count mismatch. The parser now reads the ObjKey array at cluster[0] — which always has exactly one entry per row — as the authoritative row count, falling back to the heuristic only if cluster[0] is unreadable.
-- **Realm nullable boolean columns showed raw integers** — 2-bit scheme=0 arrays (Realm's nullable boolean encoding: 0 = False, 1 = True, ≥ 2 = NULL) were returned as raw integers 0/1/2/3. `_read_scalar_leaf` now converts 2-bit values to `False`, `True`, or `None` immediately after decoding.
-- **Realm NULL-only columns missing from output** — columns whose entire payload is absent (scheme=1, width=0, e.g. `outside_link`, `livetext_edition_id`) were silently dropped. They now appear in the table with an all-`None` list so the column is visible in the viewer.
+---
 
 ### Improvements
 
-- **Realm Freed Data tab** — a new "Freed Data (N)" tab lists all entries from the Realm free-space list (child[3]/[4]/[5] of the Group root node). Each entry is colour-coded by source: **orange** = freed before the last transaction (inactive ref only), **red** = freed *in* the last transaction (active ref only), **grey** = present in both free lists (long-standing free space). Selecting a row loads the block's raw bytes into a hex viewer below the table. For blocks without a valid Realm array header (raw string/blob heaps), the table previews the null-separated printable strings extracted from those bytes, which can expose deleted application data still present in the file.
-- **Realm Top Refs tab: child-level diff** — the diff section now compares each root child by index, reporting changes in element count, width, and flags. Offsets are excluded because they always change on every write and carry no forensic signal. The previous "root array header" diff (which was almost always empty) has been relabelled and kept for completeness.
-- **Realm dual top-ref decoding** — the parser now decodes schema and table data from *both* top-level references (the active/current snapshot and the inactive/previous snapshot), not just the active one. This mirrors how the SQLite WAL viewer exposes superseded page versions. In the Tables tab, one can select `Show diff to prev ref` - to show the contents from the previews ref.
-- **Realm Top Refs tab: schema-level diff** — the Top Refs tab previously compared only low-level array-header fields between the two refs. It now also shows a **Diff — schema** section listing tables that exist only in the active ref (added since the last snapshot), tables that exist only in the inactive ref (deleted), and tables present in both but with a changed row count.
+- **Realm Freed Data tab** — added view of free-space entries with offset, size, source refs, decoded content, and hex view. Entries are color-coded by source ref state.
+- **Realm Top Refs diff** — added child-level comparison of root structure (count, width, flags); offset diff removed as non-informative.
+- **Dual Top Ref decoding** — active and previous snapshots are now both parsed and available for comparison.
+- **Top Refs schema diff** — added detection of added/removed tables and row-count changes between snapshots.
+- **Realm file labeling** — `.realm` files now correctly identified in the VFS tree.
+- **Schema tab overhaul** — real column names and types are now displayed instead of generic `col_N`.
+- **Format 24 decoding fixes**
+  - correct string decoding (fixed-width inline entries)
+  - correct column ordering (last-N user columns)
+  - correct link column handling (ObjKey refs)
+- **Type system improvements** — column types now parsed from schema and shown consistently across Schema and Tables tabs.
+- **SQL support in Tables tab** — in-memory SQLite database enables full querying, including JOINs.
+- **Cross-table joins** — link columns can be joined directly via ObjKey-based mapping.
 
-- **Realm file type label** — `.realm` files now show `Realm` as the fast type label in the VFS tree panel, consistent with how SQLite, bplist, ABX, and SEGB files are labelled. Previously, `.realm` files showed no label at all.
-- **Realm column names (format 24)** — the parser now reads column names from the correct spec node (`spec → child[1]` rather than `child[0]`, which holds type codes). Previously every column was labelled `col_0`, `col_1`, … regardless of the actual schema names.
-- **Realm string column decoding (format 24 cluster architecture)** — format 24 stores strings in fixed-width inline entries (scheme=1) where `content_length = (entry_width − 1) − last_byte`. This replaces the incorrect legacy pointer-following logic that produced garbage string values. The generalised decoder handles any byte-width entry: 8-byte entries (≤ 7 chars) and 16-byte entries (≤ 15 chars) are both decoded; entries whose last byte equals or exceeds the width are decoded as NULL; non-zero "oversized" last bytes indicate a heap pointer and are shown as `<long>`.
-- **Realm link column display** — link columns (ObjKey references stored in narrow ref arrays, width < 32) are now decoded as their raw integer values instead of being misinterpreted as string pointer arrays. Wide ref arrays (width ≥ 32) still go through the legacy indirect-string decoder as a fallback.
-- **Realm column-to-name mapping** — in the format 24 cluster layout the user-visible columns occupy the *last N* sub-arrays (the leading sub-arrays are internal, e.g. ObjKey and metadata). The parser now maps sub-array indices to 0-based user-column indices correctly, so the table viewer shows named columns in the right order.
-- **Realm column type labels** — the parser reads column type codes from `spec→child[0]` and maps them to human-readable names (int, bool, string, date, link, …). Type names are shown next to column names in the Schema tab and stored per table for use by the timestamp decoder.
-- **Realm Schema tab: columns and types** — the Schema tab now shows each table as an expandable node listing all column names with their Realm type (e.g. `dt_created → date`, `is_prime → bool`). Tables without decoded data still appear as leaf entries labelled "(no column data decoded)".
-- **Realm Tables tab: SQL queries** — decoded table data is loaded into a temporary in-memory SQLite file when the Tables tab opens. The SQL bar is now fully functional: `SELECT`, `WHERE`, `ORDER BY`, aggregates, and cross-table `JOIN`s all work. The temp file is deleted automatically when the tab is closed.
-- **Realm Tables tab: cross-table JOIN support via `_objkey`** — each table in the temporary SQLite database receives a leading `_objkey` column containing the Realm ObjKey for every row. Realm link columns store ObjKey values of the referenced table, so joins can be written as `JOIN class_ArticleEDP e ON a.edp = e._objkey`. ObjKeys are not shown in the table grid; they are only present in the SQL database.
+---
 
 ### Testing
 
-- **Realm forensic test coverage** — five new `@pytest.mark.forensic` tests covering the same categories already used for SQLite:
-  - *Source Immutability* — `RealmParser` must leave the source file bytes unchanged after parsing.
-  - *No Side Effects* — `RealmParser` must not create any sibling files next to the evidence file.
-  - *Read-only Media* — `RealmParser` must succeed when the evidence directory is `chmod 0o555` and the file is `0o444`.
-  - *Known-output Verification* — `minimal.realm` must always parse to exactly `schema = ["metadata", "class_Evidence"]`, `Tables found = 2`.
-  - *Reproducibility* — parsing the same Realm file twice must produce structurally identical results.
-- **`minimal.realm` reference fixture** — a 112-byte synthetic Realm file is committed to `crush/tests/fixtures/` with its SHA-256 checksum in `checksums.json`. The corpus integrity guard now covers Realm alongside the existing SQLite, plist, ZIP, and TAR fixtures.
+- **Realm forensic test suite**
+  - immutability check (no modification of source file)
+  - no side effects (no sibling files created)
+  - read-only media support
+  - deterministic output validation
+  - known fixture validation (`minimal.realm`)
+- **Corpus integrity expansion** — Realm added to existing SQLite/plist/ZIP/TAR test coverage with SHA-256 verified fixture.
 
 ## [0.6.0] — 2026-05-01
 
