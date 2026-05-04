@@ -159,6 +159,12 @@ class HexViewer(QWidget):
         end = base_offset + len(page_data)
         self._status.setText(f"0x{start:X}–0x{end:X}  ({len(self._data):,} B total)")
 
+    def set_data(self, data: bytes) -> None:
+        """Replace the displayed bytes and reset to page 0."""
+        self._data = data
+        self._page = 0
+        self._load_page()
+
     def _prev_page(self) -> None:
         if self._page > 0:
             self._page -= 1

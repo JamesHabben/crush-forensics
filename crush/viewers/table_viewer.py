@@ -311,6 +311,11 @@ class TableViewer(QWidget):
         self._wal_toggle.stateChanged.connect(self._on_wal_toggle)
         toolbar_layout.addWidget(self._wal_toggle)
 
+        self._prev_ref_toggle = QCheckBox("Show diff to prev ref")
+        self._prev_ref_toggle.setVisible(False)
+        self._prev_ref_toggle.stateChanged.connect(self._on_prev_ref_toggle)
+        toolbar_layout.addWidget(self._prev_ref_toggle)
+
         toolbar_layout.addStretch()
 
         search_label = QLabel("Search:")
@@ -430,13 +435,23 @@ class TableViewer(QWidget):
         )
         self._wal_toggle.setVisible(has_wal)
 
+        # Show prev-ref diff toggle only for tables that have inactive-ref data
+        _prev_ref_all: dict | None = (
+            self._data.get("__prev_ref_data") if isinstance(self._data, dict) else None
+        )
+        has_prev_ref = bool(_prev_ref_all and _prev_ref_all.get(table_name))
+        self._prev_ref_toggle.setVisible(has_prev_ref)
+
         self._col_ts_formats.clear()
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
         self._source_model.clear()
         show_wal = has_wal and self._wal_toggle.isChecked()
-        headers = ["Row"] + columns + (["WAL Source"] if show_wal else [])
+        show_prev_ref = has_prev_ref and self._prev_ref_toggle.isChecked()
+        show_source_col = show_wal or show_prev_ref
+        source_col_name = "WAL Source" if show_wal else "Source"
+        headers = ["Row"] + columns + ([source_col_name] if show_source_col else [])
         self._source_model.setHorizontalHeaderLabels(headers)
 
         def _append_row(row_data: list[Any], source_label: str | None = None,
@@ -468,20 +483,38 @@ class TableViewer(QWidget):
                         pass
                 cell.setEditable(False)
                 items.append(cell)
-            if show_wal:
-                src = QStandardItem(source_label or "current")
+            if show_source_col:
+                src = QStandardItem(source_label or "")
                 src.setEditable(False)
                 if row_color:
                     src.setForeground(row_color)
                 items.append(src)
             self._source_model.appendRow(items)
 
-        for row_data in rows:
-            _append_row(row_data)
+        if show_prev_ref:
+            prev_ref_table = (_prev_ref_all or {}).get(table_name, {})
+            prev_obj_keys_set = {
+                k for k in (prev_ref_table.get("__obj_keys") or []) if k is not None
+            }
+            active_obj_keys: list = (self._data.get(table_name) or {}).get("__obj_keys") or []
+            _added_color = QColor("#228833")
+            for r, row_data in enumerate(rows):
+                objkey = active_obj_keys[r] if r < len(active_obj_keys) else None
+                if objkey is not None and objkey not in prev_obj_keys_set:
+                    _append_row(row_data, "added", _added_color)
+                else:
+                    _append_row(row_data)
+        else:
+            for row_data in rows:
+                _append_row(row_data)
 
         wal_row_count = 0
         if show_wal:
             wal_row_count = self._inject_wal_rows(table_name, columns, _append_row)
+
+        prev_ref_count = 0
+        if show_prev_ref:
+            prev_ref_count = self._inject_prev_ref_rows(table_name, columns, _append_row)
 
         self._table_view.resizeColumnsToContents()
         table_meta = self._data.get(table_name, {}) if isinstance(self._data, dict) else {}
@@ -492,6 +525,8 @@ class TableViewer(QWidget):
             else f"({total:,} {row_word})"
         if wal_row_count:
             label += f"  +{wal_row_count} from WAL"
+        if prev_ref_count:
+            label += f"  +{prev_ref_count} from prev ref"
         self._row_count_label.setText(label)
 
     def _inject_wal_rows(
@@ -552,6 +587,70 @@ class TableViewer(QWidget):
             self._wal_label,
         ):
             self._load_table(current)
+
+    def _on_prev_ref_toggle(self, _state: int) -> None:
+        """Re-load the current table when the prev-ref diff toggle changes."""
+        current = self._table_combo.currentText()
+        if current and current not in (
+            self._summary_label,
+            self._db_structure_label,
+            self._db_info_label,
+            self._wal_label,
+        ):
+            self._load_table(current)
+
+    def _inject_prev_ref_rows(
+        self,
+        table_name: str,
+        columns: list[str],
+        append_row: object,
+    ) -> int:
+        """Append deleted and modified-previous-version rows from the inactive Realm ref.
+
+        Color coding mirrors the WAL viewer:
+          - deleted  (in prev ref, not in active): red
+          - prev version (modified row, previous state): orange
+        Returns the number of rows injected.
+        """
+        prev_ref_all: dict | None = (
+            self._data.get("__prev_ref_data") if isinstance(self._data, dict) else None
+        )
+        if not prev_ref_all:
+            return 0
+        prev_data = prev_ref_all.get(table_name)
+        if not prev_data:
+            return 0
+
+        active_data = self._data.get(table_name) or {}
+        active_obj_keys: list = active_data.get("__obj_keys") or []
+        active_rows: list = active_data.get("rows") or []
+        prev_obj_keys: list = prev_data.get("__obj_keys") or []
+        prev_rows: list = prev_data.get("rows") or []
+
+        active_by_key = {
+            k: list(r) for k, r in zip(active_obj_keys, active_rows) if k is not None
+        }
+        prev_by_key = {
+            k: list(r) for k, r in zip(prev_obj_keys, prev_rows) if k is not None
+        }
+
+        n_cols = len(columns)
+        del_color = QColor("#cc3333")
+        mod_color = QColor("#cc8800")
+        injected = 0
+
+        for key, prev_row in prev_by_key.items():
+            padded_prev = (prev_row + [None] * n_cols)[:n_cols]
+            if key not in active_by_key:
+                append_row(padded_prev, "deleted", del_color)  # type: ignore[operator]
+                injected += 1
+            else:
+                padded_active = (active_by_key[key] + [None] * n_cols)[:n_cols]
+                if padded_prev != padded_active:
+                    append_row(padded_prev, "prev version", mod_color)  # type: ignore[operator]
+                    injected += 1
+
+        return injected
 
     def _load_summary(self) -> None:
         """Show tables and views with row counts; label includes full schema object counts."""

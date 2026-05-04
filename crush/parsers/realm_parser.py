@@ -179,6 +179,94 @@ def _read_ref(data: bytes, payload_start: int, index: int, elem_bytes: int) -> i
 # Schema extraction
 # ---------------------------------------------------------------------------
 
+def _read_uint_array(data: bytes, offset: int) -> list[int]:
+    """Read all unsigned integer values from a Realm integer array at *offset*."""
+    hdr = _parse_array_header(data, offset)
+    if not hdr:
+        return []
+    count = hdr["Element count (size)"]
+    width = hdr["width"]
+    scheme = hdr["width_scheme"]
+    if count == 0 or width == 0:
+        return []
+    payload = data[offset + 8:]
+    vals: list[int] = []
+    if scheme == 0:
+        # bit-packed
+        for i in range(count):
+            bit_off = i * width
+            byte_off = bit_off // 8
+            eb = (width + 7) // 8
+            if byte_off + eb > len(payload):
+                break
+            v = int.from_bytes(payload[byte_off : byte_off + eb], "little")
+            mask = (1 << width) - 1
+            vals.append((v >> (bit_off % 8)) & mask)
+    elif scheme == 1:
+        eb = width
+        for i in range(count):
+            if (i + 1) * eb > len(payload):
+                break
+            vals.append(int.from_bytes(payload[i * eb : (i + 1) * eb], "little"))
+    return vals
+
+
+def _extract_free_list(
+    data: bytes, root_offset: int, file_size: int
+) -> list[dict[str, Any]]:
+    """Extract the Realm free-space list from a root reference array.
+
+    Realm's Group node stores three parallel arrays at child indices 3/4/5:
+      child[3] — file positions of freed blocks
+      child[4] — byte sizes of freed blocks
+      child[5] — database version when each block was freed
+
+    Returns a list of dicts with keys:
+      offset, size, version, array_header (or None), strings (list[str]), bytes
+    """
+    root_hdr = _parse_array_header(data, root_offset)
+    if root_hdr is None or not root_hdr["has_refs"]:
+        return []
+    ref_eb = _elem_bytes(root_hdr)
+    if ref_eb < 1 or root_hdr["Element count (size)"] < 6:
+        return []
+    payload_start = root_offset + 8
+    pos_off = _read_ref(data, payload_start, 3, ref_eb)
+    sz_off  = _read_ref(data, payload_start, 4, ref_eb)
+    ver_off = _read_ref(data, payload_start, 5, ref_eb)
+
+    positions = _read_uint_array(data, pos_off)
+    sizes     = _read_uint_array(data, sz_off)
+    versions  = _read_uint_array(data, ver_off)
+
+    entries: list[dict[str, Any]] = []
+    for i, (pos, sz) in enumerate(zip(positions, sizes)):
+        if pos <= 0 or sz <= 0 or pos + sz > len(data):
+            continue
+        block = data[pos : pos + sz]
+        arr_hdr = _parse_array_header(data, pos)
+        strings: list[str] = []
+        if arr_hdr is None:
+            # Raw heap — extract null-separated printable strings (≥4 chars)
+            for chunk in block.split(b"\x00"):
+                try:
+                    s = chunk.decode("utf-8")
+                    if len(s) >= 4 and s.isprintable():
+                        strings.append(s)
+                except Exception:
+                    pass
+        entries.append({
+            "index": i,
+            "offset": pos,
+            "size": sz,
+            "version": versions[i] if i < len(versions) else None,
+            "array_header": arr_hdr,
+            "strings": strings,
+            "bytes": block,
+        })
+    return entries
+
+
 def _extract_root_children(
     data: bytes, root_offset: int, file_size: int
 ) -> list[dict[str, Any]]:
@@ -1270,6 +1358,31 @@ class RealmParser(AbstractParser):
                 "row_count_changed": changed,
             }
 
+        # Free-list extraction from both refs — merged with source tagging.
+        freed_blocks: list[dict[str, Any]] = []
+        if header_info:
+            active_fl  = _extract_free_list(full_data, active_offset,   node.size)
+            inactive_fl = _extract_free_list(full_data, inactive_offset, node.size)
+            # Key: (offset, size) → stable identity across both free lists
+            active_keys   = {(e["offset"], e["size"]) for e in active_fl}
+            inactive_keys = {(e["offset"], e["size"]) for e in inactive_fl}
+            # Merge: prefer the entry object from whichever ref has it;
+            # "both" wins over individual, active-only appears last (most recently freed)
+            seen: dict[tuple[int, int], dict[str, Any]] = {}
+            for entry in inactive_fl:
+                k = (entry["offset"], entry["size"])
+                entry["source"] = "inactive"
+                seen[k] = entry
+            for entry in active_fl:
+                k = (entry["offset"], entry["size"])
+                if k in seen:
+                    seen[k] = dict(seen[k])
+                    seen[k]["source"] = "both"
+                else:
+                    entry["source"] = "active"
+                    seen[k] = entry
+            freed_blocks = sorted(seen.values(), key=lambda e: e["offset"])
+
         data: dict[str, Any] = {
             "header": header_info,
             "preview": preview,
@@ -1280,6 +1393,7 @@ class RealmParser(AbstractParser):
             "inactive_tables": inactive_tables,
             "inactive_ref_index": inactive_ref_idx if header_info else None,
             "strings": strings,
+            "freed_blocks": freed_blocks,
         }
 
         meta: dict[str, Any] = {

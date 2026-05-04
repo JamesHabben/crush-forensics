@@ -9,11 +9,111 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import (
+    QLabel,
+    QSplitter,
+    QTabWidget,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
+)
 
 from crush.viewers.tree_viewer import TreeViewer
 from crush.viewers.hex_viewer import HexViewer
 from crush.viewers.table_viewer import TableViewer
+
+
+class FreeDataViewer(QWidget):
+    """Splitter widget: freed-block table (top) + HexViewer of selected block (bottom)."""
+
+    _SOURCE_COLORS = {
+        "inactive": QColor("#cc8800"),   # orange — freed before this transaction
+        "active":   QColor("#cc3333"),   # red    — freed in this transaction
+        "both":     QColor("#888888"),   # gray   — present in both free lists
+    }
+    _COLUMNS = ["Offset", "Size", "Source", "Type", "Strings / notes"]
+
+    def __init__(self, blocks: list[dict], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._blocks = blocks
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # --- top: table of freed blocks ---
+        self._model = QStandardItemModel(0, len(self._COLUMNS))
+        self._model.setHorizontalHeaderLabels(self._COLUMNS)
+
+        for block in self._blocks:
+            offset  = block["offset"]
+            size    = block["size"]
+            source  = block.get("source", "?")
+            arr_hdr = block.get("array_header")
+            strings = block.get("strings", [])
+
+            if arr_hdr:
+                type_str = (
+                    f"array  count={arr_hdr['Element count (size)']}"
+                    f"  w={arr_hdr['width']}"
+                    f"  has_refs={arr_hdr['has_refs']}"
+                )
+                notes = ""
+            else:
+                type_str = "raw data"
+                preview = " | ".join(strings[:4])
+                if len(strings) > 4:
+                    preview += f"  (+{len(strings) - 4} more)"
+                notes = preview or "(no printable strings)"
+
+            color = self._SOURCE_COLORS.get(source)
+            row_items = [
+                self._item(f"0x{offset:08x}", color),
+                self._item(f"{size:,}", color),
+                self._item(source, color),
+                self._item(type_str, color),
+                self._item(notes, color),
+            ]
+            self._model.appendRow(row_items)
+
+        self._table = QTableView()
+        self._table.setModel(self._model)
+        self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self._table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.resizeColumnsToContents()
+        self._table.selectionModel().currentRowChanged.connect(self._on_row_changed)
+        splitter.addWidget(self._table)
+
+        # --- bottom: hex viewer ---
+        self._hex = HexViewer(b"", splitter)
+        splitter.addWidget(self._hex)
+        splitter.setSizes([300, 250])
+
+        layout.addWidget(splitter)
+
+        # Select first row by default
+        if self._blocks:
+            self._table.selectRow(0)
+
+    @staticmethod
+    def _item(text: str, color: QColor | None) -> QStandardItem:
+        it = QStandardItem(text)
+        it.setEditable(False)
+        if color:
+            it.setForeground(color)
+        return it
+
+    def _on_row_changed(self, current, _previous) -> None:
+        row = current.row()
+        if 0 <= row < len(self._blocks):
+            self._hex.set_data(self._blocks[row]["bytes"])
 
 
 def _create_realm_sqlite(
@@ -131,6 +231,14 @@ class RealmViewer(QWidget):
                 "Tables",
             )
 
+        # --- Freed Data ---
+        freed_blocks: list[dict] = self._data.get("freed_blocks", [])
+        if freed_blocks:
+            tabs.addTab(
+                FreeDataViewer(freed_blocks, tabs),
+                f"Freed Data ({len(freed_blocks)})",
+            )
+
         # --- Strings ---
         strings: list[str] = self._data.get("strings", [])
         if strings:
@@ -153,20 +261,17 @@ class RealmViewer(QWidget):
         tables: list[dict],
         parent: QWidget,
         inactive_tables: list[dict] | None = None,
-        inactive_ref_index: int | None = None,
+        inactive_ref_index: int | None = None,  # noqa: ARG002  kept for future use
     ) -> QWidget:
         """Convert Realm table dicts to the TableViewer format and return the widget.
 
-        Active-ref tables are shown under their original names.
-        Inactive-ref tables (previous snapshot) are shown with a
-        ``[prev ref N] `` prefix and stored in the SQLite temp DB as ``_prev_<name>``.
+        Active-ref tables are shown by default.  When the user checks
+        "Show diff to prev ref" the viewer injects deleted/modified rows
+        from the inactive ref inline, colour-coded like the SQLite WAL view.
+        Inactive-ref tables are stored as ``_prev_<name>`` in the temp SQLite
+        DB so cross-snapshot SQL comparisons are still possible.
         """
         inactive_tables = inactive_tables or []
-        inactive_label = (
-            f"[prev ref {inactive_ref_index}] "
-            if inactive_ref_index is not None
-            else "[prev] "
-        )
 
         table_data: dict[str, Any] = {}
         inactive_table_data: dict[str, Any] = {}
@@ -198,29 +303,24 @@ class RealmViewer(QWidget):
                 continue
             headers, rows, obj_keys, n_rows = _decode(t)
             table_data[name] = {"columns": headers, "rows": rows, "__obj_keys": obj_keys}
-            summary_rows.append([name, "active", len(headers), n_rows])
+            summary_rows.append([name, len(headers), n_rows])
 
         for t in inactive_tables:
             name = t.get("name") or "?"
             if not t.get("columns"):
                 continue
             headers, rows, obj_keys, n_rows = _decode(t)
-            viewer_key = inactive_label + name
             inactive_table_data[name] = {"columns": headers, "rows": rows, "__obj_keys": obj_keys}
-            table_data[viewer_key] = {"columns": headers, "rows": rows, "__obj_keys": obj_keys}
-            summary_rows.append([name, f"prev (ref {inactive_ref_index})", len(headers), n_rows])
 
         viewer_data: dict[str, Any] = {
             "Summary": {
-                "columns": ["Table", "Ref", "Decoded cols", "Rows"],
+                "columns": ["Table", "Decoded cols", "Rows"],
                 "rows": summary_rows,
-            }
+            },
+            "__prev_ref_data": inactive_table_data or None,
         }
         viewer_data.update(table_data)
-        tmp = _create_realm_sqlite(
-            {k: v for k, v in table_data.items() if not k.startswith("[")},
-            inactive_table_data or None,
-        )
+        tmp = _create_realm_sqlite(table_data, inactive_table_data or None)
         if tmp:
             viewer_data["__db_path"] = str(tmp)
         return TableViewer(viewer_data, parent, show_db_tabs=False)
@@ -268,18 +368,50 @@ class RealmViewer(QWidget):
 
             tree[label] = node_info
 
-        # Structural diff (array header fields)
+        # Structural diff — root array header fields
         hdr0 = top_refs.get("top_ref_0", {}).get("array_header")
         hdr1 = top_refs.get("top_ref_1", {}).get("array_header")
         if hdr0 and hdr1:
-            diff: dict[str, str] = {
+            root_diff: dict[str, str] = {
                 k: f"ref[0]={hdr0[k]}  vs  ref[1]={hdr1[k]}"
                 for k in hdr0
                 if str(hdr0[k]) != str(hdr1[k])
             }
-            tree["Diff — array header fields"] = (
-                diff if diff else {"(none)": "Both top_refs are identical"}
+            tree["Diff — root array header"] = (
+                root_diff if root_diff else {"(none)": "Root array headers are identical"}
             )
+
+        # Structural diff — children content (element count, flags, width; NOT offsets,
+        # since offsets always change on every write and carry no forensic signal)
+        _SKIP_KEYS = {"Checksum", "Payload bytes (raw)", "Payload bytes (aligned)",
+                      "Total array bytes", "Flags (raw)"}
+        ch0_list = top_refs.get("top_ref_0", {}).get("children", [])
+        ch1_list = top_refs.get("top_ref_1", {}).get("children", [])
+        ch0_by_idx = {c["index"]: c for c in ch0_list}
+        ch1_by_idx = {c["index"]: c for c in ch1_list}
+        all_indices = sorted(set(ch0_by_idx) | set(ch1_by_idx))
+        child_diff: dict[str, Any] = {}
+        for i in all_indices:
+            c0 = ch0_by_idx.get(i)
+            c1 = ch1_by_idx.get(i)
+            if c0 is None:
+                child_diff[f"[{i}]"] = "only in ref[1]"
+                continue
+            if c1 is None:
+                child_diff[f"[{i}]"] = "only in ref[0]"
+                continue
+            ch0h = c0.get("array_header") or {}
+            ch1h = c1.get("array_header") or {}
+            diffs: dict[str, str] = {
+                k: f"ref[0]={ch0h[k]}  vs  ref[1]={ch1h.get(k)}"
+                for k in ch0h
+                if k not in _SKIP_KEYS and str(ch0h.get(k)) != str(ch1h.get(k))
+            }
+            if diffs:
+                child_diff[f"[{i}]"] = diffs
+        tree["Diff — children"] = (
+            child_diff if child_diff else {"(none)": "All children are identical"}
+        )
 
         # Schema-level diff between the two refs
         schema_diff = top_refs.get("schema_diff")
