@@ -2,6 +2,27 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### New Features
+
+- **LevelDB viewer** — LevelDB databases are now parsed and shown in a dedicated viewer with three tabs:
+  - *Overview* — MANIFEST metadata: comparator, last sequence number, log number, and files grouped by compaction level.
+  - *Files* — per-file summary table showing filename, type (Ldb / Log), compaction level, and live / deleted / unknown record counts. Files containing deleted records are colour-coded red.
+  - *Records* — all records in a single table with a filter toolbar (All / Live / Deleted / Unknown). Deleted records are shown inline in red so the examiner sees both live and deleted data in context. Columns show a UTF-8 text preview and a hex preview for both the user key and the value. Selecting a row feeds the full key + value bytes into a hex pane below the table.
+- **LevelDB cell inspector** — right-clicking any row in the Records table offers *Inspect Key…* and *Inspect Value…*, opening the shared BLOB Inspector dialog (Auto / Hex / UTF-8 / Latin-1 / Base64 / Plist / XML / Protobuf / ABX / Image decode modes).
+- **Realm Freed Data — cell inspector** — right-clicking a freed block in the Freed Data tab now offers *Inspect Block…*, opening the same BLOB Inspector dialog for that block's raw bytes.
+- **BLOB Inspector — Protobuf decode** — new *Protobuf (schema-less)* mode renders wire-decoded fields in `protoc --decode_raw` style text; also detected automatically in Auto mode when the blob is valid protobuf.
+- **BLOB Inspector — Android Binary XML (ABX) decode** — new *Android Binary XML (ABX)* mode reconstructs the XML and shows it as formatted text.
+- **BLOB Inspector — image preview** — new *Image (PNG / JPEG / GIF)* mode renders the image inline inside the inspector dialog. PNG, JPEG, and GIF are detected automatically in Auto mode via magic bytes.
+
+### Improvements
+
+- **BLOB Inspector made public** — `BlobInspector` is now importable from `crush.viewers.table_viewer` so all viewers share one implementation; any improvement (new decode mode, UI fix) benefits SQLite, LevelDB, Realm, and future viewers at once.
+- **macOS badge** — README updated to reflect that macOS support is currently source-only (no successfully tested pre-built executable).
+
+---
+
 ## [0.7.0] — 2026-05-04
 
 ### Bug Fixes

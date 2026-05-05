@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import plistlib
 import sqlite3
+import struct
 from pathlib import Path
 
 
@@ -438,3 +439,209 @@ def test_detect_lossy_fallback() -> None:
     text, label = _detect_encoding(raw)
     assert isinstance(text, str)
     assert "lossy" in label.lower() or "UTF-8" in label
+
+
+# ---------------------------------------------------------------------------
+# LevelDB parser
+# ---------------------------------------------------------------------------
+
+def _varint(n: int) -> bytes:
+    out = []
+    while n > 127:
+        out.append((n & 0x7f) | 0x80)
+        n >>= 7
+    out.append(n)
+    return bytes(out)
+
+
+def _make_log_entry(key: bytes, value: bytes | None, seq: int) -> bytes:
+    """Build one LevelDB log record (Full type). CRC is zeroed — ccl_leveldb doesn't validate it."""
+    batch = struct.pack("<QI", seq, 1)
+    if value is not None:
+        batch += b"\x01" + _varint(len(key)) + key + _varint(len(value)) + value
+    else:
+        batch += b"\x00" + _varint(len(key)) + key
+    header = struct.pack("<IHB", 0, len(batch), 1)  # CRC=0, length, type=Full
+    return header + batch
+
+
+def _make_minimal_leveldb(
+    path: Path,
+    records: list[tuple[bytes, bytes | None]],
+) -> None:
+    """Write a minimal LevelDB directory with one log file containing *records*."""
+    path.mkdir(parents=True, exist_ok=True)
+    log_data = b"".join(
+        _make_log_entry(k, v, seq=i + 1) for i, (k, v) in enumerate(records)
+    )
+    (path / "000001.log").write_bytes(log_data)
+    (path / "MANIFEST-000001").write_bytes(b"")  # empty manifest — parser handles gracefully
+
+
+def test_leveldb_can_parse_dir_ldb(tmp_path: Path) -> None:
+    (tmp_path / "000001.ldb").touch()
+    from crush.parsers.leveldb_parser import LeveldbParser
+    node = DirectoryVFS(tmp_path).root()
+    assert LeveldbParser().can_parse_dir(node)
+
+
+def test_leveldb_can_parse_dir_log(tmp_path: Path) -> None:
+    (tmp_path / "000001.log").touch()
+    from crush.parsers.leveldb_parser import LeveldbParser
+    node = DirectoryVFS(tmp_path).root()
+    assert LeveldbParser().can_parse_dir(node)
+
+
+def test_leveldb_can_parse_dir_sst(tmp_path: Path) -> None:
+    (tmp_path / "000001.sst").touch()
+    from crush.parsers.leveldb_parser import LeveldbParser
+    node = DirectoryVFS(tmp_path).root()
+    assert LeveldbParser().can_parse_dir(node)
+
+
+def test_leveldb_can_parse_dir_manifest(tmp_path: Path) -> None:
+    (tmp_path / "MANIFEST-000001").touch()
+    from crush.parsers.leveldb_parser import LeveldbParser
+    node = DirectoryVFS(tmp_path).root()
+    assert LeveldbParser().can_parse_dir(node)
+
+
+def test_leveldb_can_parse_dir_negative(tmp_path: Path) -> None:
+    (tmp_path / "README.txt").write_text("not a leveldb")
+    from crush.parsers.leveldb_parser import LeveldbParser
+    node = DirectoryVFS(tmp_path).root()
+    assert not LeveldbParser().can_parse_dir(node)
+
+
+def test_leveldb_parse_viewer_type(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    _make_minimal_leveldb(db, [(b"key1", b"value1")])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    assert result.viewer_type == "leveldb"
+
+
+def test_leveldb_parse_live_records(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    _make_minimal_leveldb(db, [(b"hello", b"world")])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    records = result.data["records"]
+    live = [r for r in records if r["state"] == "Live"]
+    assert len(live) == 1
+    assert live[0]["user_key_bytes"] == b"hello"
+    assert live[0]["value_bytes"] == b"world"
+    assert live[0]["user_key_text"] == "hello"
+    assert live[0]["value_text"] == "world"
+
+
+def test_leveldb_parse_deleted_records(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    _make_minimal_leveldb(db, [(b"gone", b"data"), (b"gone", None)])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    records = result.data["records"]
+    deleted = [r for r in records if r["state"] == "Deleted"]
+    assert len(deleted) >= 1
+    assert deleted[0]["user_key_bytes"] == b"gone"
+
+
+def test_leveldb_parse_file_stats(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    _make_minimal_leveldb(db, [(b"k", b"v"), (b"k2", None)])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    files = result.data["files"]
+    assert len(files) == 1
+    assert files[0]["type"] == "Log"
+    assert files[0]["total"] == 2
+    assert files[0]["live"] == 1
+    assert files[0]["deleted"] == 1
+
+
+def test_leveldb_binary_key_value(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    binary_key = b"\x80\x81\x82\x83"   # invalid UTF-8 (continuation bytes without leader)
+    binary_val = b"\xff\xfe\xfd"
+    _make_minimal_leveldb(db, [(binary_key, binary_val)])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    records = result.data["records"]
+    assert records[0]["user_key_bytes"] == binary_key
+    assert records[0]["value_bytes"] == binary_val
+    assert records[0]["user_key_text"] is None   # not valid UTF-8
+    assert records[0]["value_text"] is None
+
+
+# ---------------------------------------------------------------------------
+# BlobInspector helpers: _is_image, _render_protobuf
+# ---------------------------------------------------------------------------
+
+def test_is_image_png() -> None:
+    from crush.viewers.table_viewer import _is_image
+    assert _is_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+
+def test_is_image_jpeg() -> None:
+    from crush.viewers.table_viewer import _is_image
+    assert _is_image(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+
+def test_is_image_gif87() -> None:
+    from crush.viewers.table_viewer import _is_image
+    assert _is_image(b"GIF87a" + b"\x00" * 100)
+
+
+def test_is_image_gif89() -> None:
+    from crush.viewers.table_viewer import _is_image
+    assert _is_image(b"GIF89a" + b"\x00" * 100)
+
+
+def test_is_image_negative() -> None:
+    from crush.viewers.table_viewer import _is_image
+    assert not _is_image(b"SQLite format 3\x00" + b"\x00" * 100)
+    assert not _is_image(b"")
+    assert not _is_image(b"\x00\x01\x02\x03")
+
+
+def test_render_protobuf_simple() -> None:
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {"field": 1, "wire_type": "varint", "value": 42},
+        {"field": 2, "wire_type": "varint", "value": 0},
+    ]
+    result = _render_protobuf(entries)
+    assert "1 [varint]: 42" in result
+    assert "2 [varint]: 0" in result
+
+
+def test_render_protobuf_nested() -> None:
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {"field": 1, "wire_type": "message", "value": {
+            "entries": [{"field": 3, "wire_type": "varint", "value": 99}]
+        }},
+    ]
+    result = _render_protobuf(entries)
+    assert "1 {" in result
+    assert "3 [varint]: 99" in result
+    assert "}" in result
+
+
+def test_render_protobuf_bytes_value() -> None:
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [{"field": 2, "wire_type": "bytes", "value": bytes(range(40))}]
+    result = _render_protobuf(entries)
+    assert "2:" in result           # field number present
+    assert "…" in result            # truncation marker for > 32 bytes
+    assert "00010203" in result     # hex content starts correctly
