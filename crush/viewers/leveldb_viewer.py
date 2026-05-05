@@ -8,7 +8,6 @@ from typing import Any
 from PySide6.QtCore import Qt, QSortFilterProxyModel
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
@@ -192,7 +191,6 @@ class LevelDbRecordsWidget(QWidget):
             btn.setChecked(s == state)
 
         # update label to show visible / total
-        visible = self._proxy.rowCount()
         total = self._model.rowCount()
         for s, btn in self._filter_buttons.items():
             if s is None:

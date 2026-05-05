@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+import struct
 from pathlib import Path
 
 import pytest
@@ -433,9 +434,6 @@ def test_realm_parse_is_reproducible(realm_fixture: Path) -> None:
 # (uses the same _make_minimal_leveldb helper as test_parsers.py)
 # ---------------------------------------------------------------------------
 
-import struct as _struct
-
-
 def _varint_f(n: int) -> bytes:
     out = []
     while n > 127:
@@ -448,8 +446,8 @@ def _varint_f(n: int) -> bytes:
 def _make_leveldb_fixture(path: Path) -> Path:
     """Create a minimal LevelDB directory at *path* and return it."""
     path.mkdir(parents=True, exist_ok=True)
-    batch = _struct.pack("<QI", 1, 1) + b"\x01" + _varint_f(5) + b"mykey" + _varint_f(7) + b"myvalue"
-    log = _struct.pack("<IHB", 0, len(batch), 1) + batch
+    batch = struct.pack("<QI", 1, 1) + b"\x01" + _varint_f(5) + b"mykey" + _varint_f(7) + b"myvalue"
+    log = struct.pack("<IHB", 0, len(batch), 1) + batch
     (path / "000001.log").write_bytes(log)
     (path / "MANIFEST-000001").write_bytes(b"")
     return path
@@ -485,7 +483,7 @@ def test_leveldb_does_not_modify_source(tmp_path: Path) -> None:
 )
 def test_leveldb_no_sibling_files(tmp_path: Path) -> None:
     from crush.parsers.leveldb_parser import LeveldbParser
-    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    _make_leveldb_fixture(tmp_path / "evidence.leveldb")
     names_before = {p.name for p in tmp_path.iterdir()}
 
     vfs = DirectoryVFS(tmp_path)
@@ -524,7 +522,7 @@ def test_leveldb_read_only_media(tmp_path: Path) -> None:
 )
 def test_leveldb_parse_is_reproducible(tmp_path: Path) -> None:
     from crush.parsers.leveldb_parser import LeveldbParser
-    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    _make_leveldb_fixture(tmp_path / "evidence.leveldb")
 
     vfs = DirectoryVFS(tmp_path)
     node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")

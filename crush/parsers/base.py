@@ -19,6 +19,7 @@ ViewerType = Literal[
     "multi_log",
     "protobuf",
     "realm",
+    "leveldb",
 ]
 
 
