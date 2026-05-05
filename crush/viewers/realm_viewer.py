@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QLabel,
+    QMenu,
     QSplitter,
     QTabWidget,
     QTableView,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from crush.viewers.tree_viewer import TreeViewer
 from crush.viewers.hex_viewer import HexViewer
-from crush.viewers.table_viewer import TableViewer
+from crush.viewers.table_viewer import BlobInspector, TableViewer
 
 
 class FreeDataViewer(QWidget):
@@ -89,6 +90,8 @@ class FreeDataViewer(QWidget):
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.resizeColumnsToContents()
         self._table.selectionModel().currentRowChanged.connect(self._on_row_changed)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_context_menu)
         splitter.addWidget(self._table)
 
         # --- bottom: hex viewer ---
@@ -114,6 +117,18 @@ class FreeDataViewer(QWidget):
         row = current.row()
         if 0 <= row < len(self._blocks):
             self._hex.set_data(self._blocks[row]["bytes"])
+
+    def _on_context_menu(self, pos) -> None:
+        index = self._table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        if 0 <= row < len(self._blocks):
+            raw: bytes = self._blocks[row]["bytes"]
+            menu = QMenu(self)
+            inspect = menu.addAction(f"Inspect Block… ({len(raw)} B)")
+            if menu.exec(self._table.viewport().mapToGlobal(pos)) == inspect:
+                BlobInspector(raw, self).exec()
 
 
 def _create_realm_sqlite(

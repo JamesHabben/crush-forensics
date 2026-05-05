@@ -15,6 +15,7 @@ def _register_builtin_viewers() -> None:
     from crush.viewers.abx_viewer import AbxViewer
     from crush.viewers.protobuf_viewer import ProtobufViewer
     from crush.viewers.realm_viewer import RealmViewer
+    from crush.viewers.leveldb_viewer import LevelDbViewer
 
     ViewerRegistry.register("table", lambda r, n, v, p: TableViewer(r.data, p))
     ViewerRegistry.register("tree", lambda r, n, v, p: TreeViewer(r.data, p))
@@ -24,6 +25,7 @@ def _register_builtin_viewers() -> None:
     ViewerRegistry.register("abx", lambda r, n, v, p: AbxViewer(r.data, p))
     ViewerRegistry.register("protobuf", lambda r, n, v, p: ProtobufViewer(r.data, p))
     ViewerRegistry.register("realm", lambda r, n, v, p: RealmViewer(r.data, p))
+    ViewerRegistry.register("leveldb", lambda r, n, v, p: LevelDbViewer(r.data, p))
 
     from crush.viewers.multi_log_viewer import MultiLogViewer
     ViewerRegistry.register("multi_log", lambda r, n, v, p: MultiLogViewer(n, v, p))

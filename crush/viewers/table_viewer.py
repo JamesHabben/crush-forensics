@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QFont,
     QKeyEvent,
     QKeySequence,
+    QPixmap,
     QStandardItem,
     QStandardItemModel,
     QSyntaxHighlighter,
@@ -36,7 +37,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
     QSplitter,
+    QStackedWidget,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -1327,7 +1330,7 @@ class TableViewer(QWidget):
             self._sql_status.setText(str(exc))
 
     def _preview_blob(self, blob: bytes) -> None:
-        dialog = _BlobInspector(blob, self)
+        dialog = BlobInspector(blob, self)
         dialog.exec()
 
     def keyPressEvent(self, event: object) -> None:  # type: ignore[override]
@@ -1388,7 +1391,7 @@ _BLOB_ASCII_START = 59
 class _BlobViewerEdit(QPlainTextEdit):
     """QPlainTextEdit with a hex-aware context menu for the BLOB inspector."""
 
-    def __init__(self, inspector: "_BlobInspector") -> None:
+    def __init__(self, inspector: "BlobInspector") -> None:
         super().__init__()
         self._inspector = inspector
 
@@ -1408,7 +1411,7 @@ class _BlobViewerEdit(QPlainTextEdit):
         menu.exec(event.globalPos())
 
 
-class _BlobInspector(QDialog):
+class BlobInspector(QDialog):
     def __init__(self, blob: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._blob = blob
@@ -1428,6 +1431,7 @@ class _BlobInspector(QDialog):
 
         top_layout.addWidget(QLabel("Open as:"))
         self._format = QComboBox()
+        self._format = QComboBox()
         self._format.addItems([
             "Auto",
             "Hex",
@@ -1436,6 +1440,9 @@ class _BlobInspector(QDialog):
             "Base64 (decode)",
             "Plist / bplist",
             "XML",
+            "Protobuf (schema-less)",
+            "Android Binary XML (ABX)",
+            "Image (PNG / JPEG / GIF)",
         ])
         self._format.currentIndexChanged.connect(self._apply_view)
         top_layout.addWidget(self._format)
@@ -1446,10 +1453,23 @@ class _BlobInspector(QDialog):
         top_layout.addStretch()
         layout.addWidget(top)
 
+        # Stack: page 0 = text, page 1 = image
+        self._stack = QStackedWidget()
+
         self._viewer = _BlobViewerEdit(self)
         self._viewer.setReadOnly(True)
         self._viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        layout.addWidget(self._viewer, stretch=1)
+        self._stack.addWidget(self._viewer)
+
+        self._img_scroll = QScrollArea()
+        self._img_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._img_scroll.setWidgetResizable(False)
+        self._img_label = QLabel()
+        self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._img_scroll.setWidget(self._img_label)
+        self._stack.addWidget(self._img_scroll)
+
+        layout.addWidget(self._stack, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -1457,6 +1477,19 @@ class _BlobInspector(QDialog):
 
     def _apply_view(self) -> None:
         fmt = self._format.currentText()
+
+        if fmt == "Image (PNG / JPEG / GIF)":
+            self._show_image(self._blob)
+            return
+
+        if fmt == "Auto" and _is_image(self._blob):
+            self._show_image(self._blob)
+            return
+
+        # All other formats — switch to text page
+        self._stack.setCurrentIndex(0)
+        self._copy_btn.setEnabled(True)
+
         content = ""
         if fmt == "Auto":
             content = (
@@ -1478,7 +1511,24 @@ class _BlobInspector(QDialog):
             content = self._try_plist() or "[parse error]"
         elif fmt == "XML":
             content = self._try_xml() or "[parse error]"
+        elif fmt == "Protobuf (schema-less)":
+            content = self._try_protobuf() or "[parse error]"
+        elif fmt == "Android Binary XML (ABX)":
+            content = self._try_abx() or "[parse error]"
         self._viewer.setPlainText(content[:500_000])
+
+    def _show_image(self, data: bytes) -> None:
+        from PySide6.QtCore import QByteArray
+        px = QPixmap()
+        if px.loadFromData(QByteArray(data)):
+            self._img_label.setPixmap(px)
+            self._img_label.resize(px.size())
+            self._stack.setCurrentIndex(1)
+            self._copy_btn.setEnabled(False)
+        else:
+            self._stack.setCurrentIndex(0)
+            self._copy_btn.setEnabled(True)
+            self._viewer.setPlainText("[not a recognised image format]")
 
     def _is_hex_mode(self) -> bool:
         fmt = self._format.currentText()
@@ -1537,6 +1587,48 @@ class _BlobInspector(QDialog):
 
     def _try_xml(self) -> str:
         return try_xml_text(self._blob) or ""
+
+    def _try_protobuf(self) -> str:
+        try:
+            from crush.parsers.protobuf_parser import _decode_message
+            decoded, _warning, _text = _decode_message(self._blob)
+            return _render_protobuf(decoded.get("entries", []))
+        except Exception:
+            return ""
+
+    def _try_abx(self) -> str:
+        try:
+            from crush.parsers.abx_decoder import decode_abx
+            return decode_abx(self._blob).xml
+        except Exception:
+            return ""
+
+
+def _is_image(data: bytes) -> bool:
+    return (
+        data[:8] == b"\x89PNG\r\n\x1a\n"       # PNG
+        or data[:3] == b"\xff\xd8\xff"          # JPEG
+        or data[:6] in (b"GIF87a", b"GIF89a")   # GIF
+    )
+
+
+def _render_protobuf(entries: list, indent: int = 0) -> str:
+    """Render protobuf wire-decoded entries as protoc --decode_raw style text."""
+    lines: list[str] = []
+    pad = "  " * indent
+    for entry in entries:
+        field = entry.get("field", "?")
+        wt = entry.get("wire_type", "?")
+        val = entry.get("value")
+        if wt == "message" and isinstance(val, dict):
+            lines.append(f"{pad}{field} {{")
+            lines.append(_render_protobuf(val.get("entries", []), indent + 1))
+            lines.append(f"{pad}}}")
+        elif isinstance(val, bytes):
+            lines.append(f"{pad}{field}: {val[:32].hex()}" + ("…" if len(val) > 32 else ""))
+        else:
+            lines.append(f"{pad}{field} [{wt}]: {val}")
+    return "\n".join(lines)
 
 
 def _pretty(obj: object) -> str:

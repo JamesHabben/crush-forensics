@@ -426,3 +426,117 @@ def test_realm_parse_is_reproducible(realm_fixture: Path) -> None:
     assert r1.metadata == r2.metadata
     assert r1.viewer_type == r2.viewer_type
     vfs.close()
+
+
+# ---------------------------------------------------------------------------
+# LevelDB forensic tests
+# (uses the same _make_minimal_leveldb helper as test_parsers.py)
+# ---------------------------------------------------------------------------
+
+import struct as _struct
+
+
+def _varint_f(n: int) -> bytes:
+    out = []
+    while n > 127:
+        out.append((n & 0x7f) | 0x80)
+        n >>= 7
+    out.append(n)
+    return bytes(out)
+
+
+def _make_leveldb_fixture(path: Path) -> Path:
+    """Create a minimal LevelDB directory at *path* and return it."""
+    path.mkdir(parents=True, exist_ok=True)
+    batch = _struct.pack("<QI", 1, 1) + b"\x01" + _varint_f(5) + b"mykey" + _varint_f(7) + b"myvalue"
+    log = _struct.pack("<IHB", 0, len(batch), 1) + batch
+    (path / "000001.log").write_bytes(log)
+    (path / "MANIFEST-000001").write_bytes(b"")
+    return path
+
+
+def _sha256_dir(path: Path) -> dict[str, str]:
+    """SHA-256 of every file in a directory (name → digest)."""
+    return {
+        f.name: hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in sorted(path.iterdir()) if f.is_file()
+    }
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="LevelDB directory files must be byte-identical after parsing",
+)
+def test_leveldb_does_not_modify_source(tmp_path: Path) -> None:
+    from crush.parsers.leveldb_parser import LeveldbParser
+    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    digests_before = _sha256_dir(db)
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")
+    LeveldbParser().parse(node, vfs)
+
+    assert _sha256_dir(db) == digests_before, "LevelDB parser modified source files"
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="LevelDB parsing must not create files next to the evidence directory",
+)
+def test_leveldb_no_sibling_files(tmp_path: Path) -> None:
+    from crush.parsers.leveldb_parser import LeveldbParser
+    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    names_before = {p.name for p in tmp_path.iterdir()}
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")
+    LeveldbParser().parse(node, vfs)
+
+    names_after = {p.name for p in tmp_path.iterdir()}
+    assert names_after == names_before, f"Side-effect files created: {names_after - names_before}"
+
+
+@pytest.mark.forensic(
+    category="Read-only Media",
+    desc="LevelDB parser must succeed when directory and files are read-only (0o555/0o444)",
+)
+def test_leveldb_read_only_media(tmp_path: Path) -> None:
+    from crush.parsers.leveldb_parser import LeveldbParser
+    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    try:
+        for f in db.iterdir():
+            f.chmod(0o444)
+        db.chmod(0o555)
+
+        vfs = DirectoryVFS(tmp_path)
+        node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")
+        result = LeveldbParser().parse(node, vfs)
+        assert result.viewer_type == "leveldb"
+    finally:
+        db.chmod(0o755)
+        for f in db.iterdir():
+            f.chmod(0o644)
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Parsing the same LevelDB directory twice must produce identical results",
+)
+def test_leveldb_parse_is_reproducible(tmp_path: Path) -> None:
+    from crush.parsers.leveldb_parser import LeveldbParser
+    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")
+    parser = LeveldbParser()
+
+    r1 = parser.parse(node, vfs)
+    r2 = parser.parse(node, vfs)
+
+    assert r1.viewer_type == r2.viewer_type
+    assert r1.metadata == r2.metadata
+    assert len(r1.data["records"]) == len(r2.data["records"])
+    for rec1, rec2 in zip(r1.data["records"], r2.data["records"]):
+        assert rec1["state"] == rec2["state"]
+        assert rec1["user_key_bytes"] == rec2["user_key_bytes"]
+        assert rec1["value_bytes"] == rec2["value_bytes"]

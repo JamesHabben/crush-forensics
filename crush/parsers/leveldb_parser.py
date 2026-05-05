@@ -5,14 +5,28 @@ from __future__ import annotations
 
 import re
 import tempfile
+import shutil
+import logging
 from pathlib import Path
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
-from crush.third_party.ccl_leveldb import RawLevelDb
+from crush.third_party.ccl_leveldb import RawLevelDb, KeyState
+from crush.third_party.ccl_leveldb.ccl_leveldb import ManifestFile
 
-_DATA_FILE_RE = re.compile(r"^[0-9]{6}\\.(ldb|log|sst)$", re.IGNORECASE)
+_DATA_FILE_RE = re.compile(r"^[0-9]{6}\.(ldb|log|sst)$", re.IGNORECASE)
+_logger = logging.getLogger(__name__)
+
+_MAX_TEXT_LEN = 256  # truncation limit for decoded text fields
+
+
+def _try_utf8(raw: bytes) -> str | None:
+    """Return UTF-8 decoded string, or None if not valid UTF-8."""
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return None
 
 
 class LeveldbParser(AbstractParser):
@@ -20,7 +34,6 @@ class LeveldbParser(AbstractParser):
     DISPLAY_NAME = "LevelDB"
 
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:  # noqa: ARG002
-        # LevelDB is typically a directory; sniff via child filenames.
         return False
 
     def can_parse_dir(self, node: VFSNode) -> bool:
@@ -37,82 +50,193 @@ class LeveldbParser(AbstractParser):
         if not self.can_parse_dir(node):
             raise ValueError("Not a LevelDB directory")
 
-        import logging
-        _logger = logging.getLogger(__name__)
-
         tmp_dir = Path(tempfile.mkdtemp(prefix="crush-leveldb-"))
         try:
             _export_dir(node, vfs, tmp_dir)
-
-            max_records = 2000
-            rows: list[list[Any]] = []
-            total = 0
-            parse_warning = ""
-
-            try:
-                with RawLevelDb(tmp_dir) as db:
-                    for record in db.iterate_records_raw():
-                        total += 1
-                        if len(rows) >= max_records:
-                            continue
-                        try:
-                            rows.append([
-                                record.seq,
-                                record.state.name,
-                                record.file_type.name,
-                                Path(record.origin_file).name,
-                                record.offset,
-                                record.was_compressed,
-                                record.user_key,
-                                record.key,
-                                record.value,
-                            ])
-                        except Exception as exc:
-                            parse_warning = f"Record {total} failed: {exc}"
-                            _logger.debug("LevelDB record error: %s", exc)
-            except Exception as exc:
-                _logger.warning("LevelDB read error for %s: %s", node.path, exc)
-                if not rows:
-                    return ParseResult(
-                        viewer_type="tree",
-                        data={"error": str(exc), "hint": "LevelDB could not be opened"},
-                        metadata={
-                            "Format": "LevelDB (parse failed)",
-                            "Parse error": str(exc),
-                            "Files": f"{vfs.file_count(node):,}",
-                        },
-                    )
-                parse_warning = str(exc)
-
-            data = {
-                "LevelDB Records": {
-                    "columns": [
-                        "Seq", "State", "File Type", "Origin File",
-                        "Offset", "Compressed", "User Key (BLOB)", "Key (BLOB)", "Value (BLOB)",
-                    ],
-                    "rows": rows,
-                }
-            }
-
-            meta: dict[str, Any] = {
-                "Format": "LevelDB",
-                "Records": f"{total:,}",
-                "Displayed": f"{len(rows):,}",
-                "Files": f"{vfs.file_count(node):,}",
-                "Total size": f"{vfs.total_size(node):,} B",
-            }
-            if total > len(rows):
-                meta["Note"] = f"Showing first {len(rows):,} records"
-            if parse_warning:
-                meta["Parse warning"] = parse_warning
-            return ParseResult(viewer_type="table", data=data, metadata=meta)
-
+            return self._parse_tmp(node, vfs, tmp_dir)
         finally:
-            import shutil
             try:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
             except Exception:
                 pass
+
+    def _parse_tmp(self, node: VFSNode, vfs: VFS, tmp_dir: Path) -> ParseResult:
+        manifest_data: dict[str, Any] = {}
+        file_to_level: dict[int, int] = {}
+
+        try:
+            with RawLevelDb(tmp_dir) as db:
+                if db.manifest:
+                    manifest_data, file_to_level = _parse_manifest(db.manifest)
+
+                # Per-file counters: file_name → {type, level, total, live, deleted, unknown}
+                file_stats: dict[str, dict[str, Any]] = {}
+
+                records: list[dict[str, Any]] = []
+                parse_warning = ""
+
+                try:
+                    for record in db.iterate_records_raw():
+                        fname = Path(record.origin_file).name
+
+                        if fname not in file_stats:
+                            try:
+                                fno = int(Path(record.origin_file).stem, 16)
+                            except ValueError:
+                                fno = -1
+                            file_stats[fname] = {
+                                "name": fname,
+                                "type": record.file_type.name,
+                                "level": file_to_level.get(fno, -1),
+                                "total": 0,
+                                "live": 0,
+                                "deleted": 0,
+                                "unknown": 0,
+                            }
+
+                        fs = file_stats[fname]
+                        fs["total"] += 1
+                        state_name = record.state.name
+                        if record.state == KeyState.Live:
+                            fs["live"] += 1
+                        elif record.state == KeyState.Deleted:
+                            fs["deleted"] += 1
+                        else:
+                            fs["unknown"] += 1
+
+                        uk = record.user_key
+                        val = record.value if record.value is not None else b""
+
+                        records.append({
+                            "seq": record.seq,
+                            "state": state_name,
+                            "file": fname,
+                            "user_key_bytes": uk,
+                            "user_key_text": _try_utf8(uk),
+                            "value_bytes": val,
+                            "value_text": _try_utf8(val),
+                            "compressed": record.was_compressed,
+                        })
+
+                except Exception as exc:
+                    _logger.warning("LevelDB read error for %s: %s", node.path, exc)
+                    parse_warning = str(exc)
+                    if not records:
+                        return ParseResult(
+                            viewer_type="tree",
+                            data={"error": str(exc), "hint": "LevelDB could not be opened"},
+                            metadata={
+                                "Format": "LevelDB (parse failed)",
+                                "Parse error": str(exc),
+                                "Files": f"{vfs.file_count(node):,}",
+                            },
+                        )
+
+        except Exception as exc:
+            _logger.warning("LevelDB open error for %s: %s", node.path, exc)
+            return ParseResult(
+                viewer_type="tree",
+                data={"error": str(exc), "hint": "LevelDB could not be opened"},
+                metadata={"Format": "LevelDB (parse failed)", "Parse error": str(exc)},
+            )
+
+        total = len(records)
+        live_count = sum(1 for r in records if r["state"] == "Live")
+        deleted_count = sum(1 for r in records if r["state"] == "Deleted")
+
+        meta: dict[str, Any] = {
+            "Format": "LevelDB",
+            "Records": f"{total:,}",
+            "Live": f"{live_count:,}",
+            "Deleted": f"{deleted_count:,}",
+            "Files": f"{vfs.file_count(node):,}",
+            "Total size": f"{vfs.total_size(node):,} B",
+        }
+        if parse_warning:
+            meta["Parse warning"] = parse_warning
+
+        data: dict[str, Any] = {
+            "manifest": manifest_data,
+            "files": sorted(file_stats.values(), key=lambda f: f["name"]),
+            "records": records,
+        }
+
+        text_parts: list[str] = []
+        for r in records:
+            if r["user_key_text"]:
+                text_parts.append(r["user_key_text"][:_MAX_TEXT_LEN])
+            if r["value_text"]:
+                text_parts.append(r["value_text"][:_MAX_TEXT_LEN])
+            if len(text_parts) >= 2000:
+                break
+
+        return ParseResult(
+            viewer_type="leveldb",
+            data=data,
+            metadata=meta,
+            text_index=" ".join(text_parts[:2000]),
+        )
+
+
+def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, int]]:
+    """Extract summary info and file-to-level map from a ManifestFile."""
+    file_to_level: dict[int, int] = dict(manifest.file_to_level)
+
+    # Walk VersionEdits to collect compaction history and metadata
+    comparator: str | None = None
+    last_sequence: int | None = None
+    log_number: int | None = None
+    next_file_number: int | None = None
+    compaction_history: list[dict[str, Any]] = []
+
+    try:
+        for edit in manifest:
+            if edit.comparator and comparator is None:
+                comparator = edit.comparator
+            if edit.last_sequence is not None:
+                last_sequence = edit.last_sequence
+            if edit.log_number is not None:
+                log_number = edit.log_number
+            if edit.next_file_number is not None:
+                next_file_number = edit.next_file_number
+            if edit.new_files or edit.deleted_files:
+                entry: dict[str, Any] = {}
+                if edit.new_files:
+                    entry["new"] = [
+                        {"level": nf.level, "file": f"{nf.file_no:06x}", "size": nf.file_size}
+                        for nf in edit.new_files
+                    ]
+                if edit.deleted_files:
+                    entry["deleted"] = [
+                        {"level": df.level, "file": f"{df.file_no:06x}"}
+                        for df in edit.deleted_files
+                    ]
+                if entry:
+                    compaction_history.append(entry)
+    except Exception as exc:
+        _logger.debug("Manifest parse warning: %s", exc)
+
+    # Build levels summary: level → list of file numbers
+    levels: dict[str, list[str]] = {}
+    for fno, level in sorted(file_to_level.items()):
+        key = f"Level {level}"
+        levels.setdefault(key, []).append(f"{fno:06x}.ldb")
+
+    manifest_data: dict[str, Any] = {}
+    if comparator:
+        manifest_data["Comparator"] = comparator
+    if last_sequence is not None:
+        manifest_data["Last sequence"] = last_sequence
+    if log_number is not None:
+        manifest_data["Log number"] = log_number
+    if next_file_number is not None:
+        manifest_data["Next file number"] = next_file_number
+    if levels:
+        manifest_data["Files by level"] = {k: ", ".join(v) for k, v in sorted(levels.items())}
+    if compaction_history:
+        manifest_data["Compaction history"] = compaction_history
+
+    return manifest_data, file_to_level
 
 
 def _export_dir(node: VFSNode, vfs: VFS, target: Path) -> None:
