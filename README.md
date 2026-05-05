@@ -6,7 +6,7 @@ Crush — Digital Forensic Analysis Workbench
 [![Nightly](https://github.com/kalink0/crush-forensics/actions/workflows/nightly.yml/badge.svg)](https://github.com/kalink0/crush-forensics/actions/workflows/nightly.yml)
 ![Linux](https://img.shields.io/badge/linux-supported-success)
 ![Windows](https://img.shields.io/badge/windows-supported-success)
-![macOS](https://img.shields.io/badge/macOS-built%2C%20only-from-source-yellow)
+![macOS](https://img.shields.io/badge/macOS-source%20only-orange)
 [![Release](https://img.shields.io/github/v/release/kalink0/crush-forensics?display_name=tag)](https://github.com/kalink0/crush-forensics/releases)
 [![License](https://img.shields.io/github/license/kalink0/crush-forensics)](https://github.com/kalink0/crush-forensics/blob/main/LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
