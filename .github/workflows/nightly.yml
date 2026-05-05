@@ -52,7 +52,10 @@ jobs:
           p = pathlib.Path("crush/__init__.py")
           date = datetime.datetime.utcnow().strftime("%Y%m%d")
           sha = os.environ.get("GITHUB_SHA", "")[:7]
-          p.write_text(p.read_text().replace('__build__ = ""', f'__build__ = "{date}-nightly-{sha}"'))
+          build_id = f"{date}-nightly-{sha}"
+          p.write_text(p.read_text().replace('__build__ = ""', f'__build__ = "{build_id}"'))
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"BUILD_ID={build_id}\n")
           EOF
         shell: bash
 
@@ -144,22 +147,22 @@ jobs:
 
       - name: Package artifact (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf crush-linux.tar.gz -C dist crush
+        run: tar -czf crush-linux-${BUILD_ID}.tar.gz -C dist crush
 
       - name: Package artifact (macOS)
         if: runner.os == 'macOS'
-        run: tar -czf crush-macos.tar.gz -C dist crush.app
+        run: tar -czf crush-macos-${BUILD_ID}.tar.gz -C dist crush.app
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows.zip
+        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows-$env:BUILD_ID.zip
 
       - name: Upload artifact (Linux)
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: crush-linux
-          path: crush-linux.tar.gz
+          path: crush-linux-${{ env.BUILD_ID }}.tar.gz
           retention-days: 1
 
       - name: Upload artifact (macOS)
@@ -167,7 +170,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: crush-macos
-          path: crush-macos.tar.gz
+          path: crush-macos-${{ env.BUILD_ID }}.tar.gz
           retention-days: 1
 
       - name: Upload artifact (Windows)
@@ -175,7 +178,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: crush-windows
-          path: crush-windows.zip
+          path: crush-windows-${{ env.BUILD_ID }}.zip
           retention-days: 1
 
   release:
@@ -208,11 +211,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          DATE=$(date -u '+%Y-%m-%d')
+          BUILD_ID=$(ls crush-linux-*.tar.gz | sed 's/crush-linux-\(.*\)\.tar\.gz/\1/')
           gh release create nightly \
             --repo ${{ github.repository }} \
-            --title "Nightly Build ($(date -u '+%Y-%m-%d'))" \
+            --title "Nightly Build (${DATE})" \
             --notes "Automated nightly build from \`main\`. Not a stable release." \
             --prerelease \
-            crush-linux.tar.gz \
-            crush-macos.tar.gz \
-            crush-windows.zip
+            crush-linux-${BUILD_ID}.tar.gz \
+            crush-macos-${BUILD_ID}.tar.gz \
+            crush-windows-${BUILD_ID}.zip

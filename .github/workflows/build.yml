@@ -130,30 +130,30 @@ jobs:
 
       - name: Package artifact (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf crush-linux.tar.gz -C dist crush
+        run: tar -czf crush-linux-${{ github.ref_name }}.tar.gz -C dist crush
 
       - name: Package artifact (macOS)
         if: runner.os == 'macOS'
-        run: tar -czf crush-macos.tar.gz -C dist crush.app
+        run: tar -czf crush-macos-${{ github.ref_name }}.tar.gz -C dist crush.app
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows.zip
+        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows-${{ github.ref_name }}.zip
 
       - name: Upload release asset (Linux)
         if: runner.os == 'Linux'
         uses: softprops/action-gh-release@v2
         with:
-          files: crush-linux.tar.gz
+          files: crush-linux-${{ github.ref_name }}.tar.gz
 
       - name: Upload release asset (macOS)
         if: runner.os == 'macOS'
         uses: softprops/action-gh-release@v2
         with:
-          files: crush-macos.tar.gz
+          files: crush-macos-${{ github.ref_name }}.tar.gz
 
       - name: Upload release asset (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
-          files: crush-windows.zip
+          files: crush-windows-${{ github.ref_name }}.zip
