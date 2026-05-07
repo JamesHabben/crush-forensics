@@ -12,9 +12,10 @@ import threading
 import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import io
 from io import BytesIO
 from pathlib import Path
-from typing import IO
+from typing import IO, Iterator, cast
 
 
 class _AtimeRestoringIO:
@@ -22,6 +23,9 @@ class _AtimeRestoringIO:
 
     On Windows, os.utime() sets atime and mtime without touching ctime (creation
     time), so this is a clean atime-preserving read with no timestamp side-effects.
+
+    Implements the full IO[bytes] interface by delegating to the wrapped file so
+    that cast(IO[bytes], ...) is safe and all callers work without restriction.
     """
 
     def __init__(self, path: Path, f: IO[bytes], atime_ns: int, mtime_ns: int) -> None:
@@ -30,15 +34,73 @@ class _AtimeRestoringIO:
         self._atime_ns = atime_ns
         self._mtime_ns = mtime_ns
 
-    def read(self, n: int = -1) -> bytes:
-        return self._f.read(n)
+    # --- identity / metadata ---
+    @property
+    def name(self) -> str | int:
+        return self._f.name
 
+    @property
+    def mode(self) -> str:
+        return "rb"
+
+    @property
+    def closed(self) -> bool:
+        return self._f.closed
+
+    # --- positioning ---
     def seek(self, pos: int, whence: int = 0) -> int:
         return self._f.seek(pos, whence)
 
     def tell(self) -> int:
         return self._f.tell()
 
+    def seekable(self) -> bool:
+        return self._f.seekable()
+
+    # --- reading ---
+    def read(self, n: int = -1) -> bytes:
+        return self._f.read(n)
+
+    def readline(self, limit: int = -1) -> bytes:
+        return self._f.readline(limit)
+
+    def readlines(self, hint: int = -1) -> list[bytes]:
+        return self._f.readlines(hint)
+
+    def readable(self) -> bool:
+        return True
+
+    # --- writing (not supported) ---
+    def write(self, s: bytes) -> int:
+        raise io.UnsupportedOperation("write")
+
+    def writelines(self, lines: list[bytes]) -> None:
+        raise io.UnsupportedOperation("writelines")
+
+    def writable(self) -> bool:
+        return False
+
+    def truncate(self, size: int | None = None) -> int:
+        raise io.UnsupportedOperation("truncate")
+
+    # --- misc ---
+    def flush(self) -> None:
+        self._f.flush()
+
+    def fileno(self) -> int:
+        return self._f.fileno()
+
+    def isatty(self) -> bool:
+        return False
+
+    # --- iteration ---
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(self._f)
+
+    def __next__(self) -> bytes:
+        return next(self._f)
+
+    # --- context manager ---
     def __enter__(self) -> "_AtimeRestoringIO":
         return self
 
@@ -97,7 +159,7 @@ def _open_noatime(path: Path) -> IO[bytes]:
         return os.fdopen(fd, "rb")
     if sys.platform == "win32":
         st = path.stat()
-        return _AtimeRestoringIO(path, open(path, "rb"), st.st_atime_ns, st.st_mtime_ns)
+        return cast(IO[bytes], _AtimeRestoringIO(path, open(path, "rb"), st.st_atime_ns, st.st_mtime_ns))
     return open(path, "rb")
 
 
