@@ -18,8 +18,24 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **LevelDB viewer — numeric column sorting** — the *Seq* column in the Records tab and the *Level / Total / Live / Deleted / Unknown* columns in the Files tab now sort numerically instead of lexicographically (previously `10` sorted before `2`).
+- **LevelDB viewer — record search** — a *Search* box has been added to the Records toolbar. It filters rows case-insensitively across all columns and combines with the existing state filter buttons (e.g. show only Deleted records matching a key prefix).
+- **LevelDB viewer — split hex pane** — the bottom hex pane is now a tabbed *Key* / *Value* widget. Each tab shows the raw bytes of the respective field independently, replacing the previous single pane that concatenated key and value with a text separator.
+- **LevelDB viewer — CSV export** — an *Export CSV…* button in the Records toolbar saves the currently visible rows (after state filter and search) to a UTF-8 CSV file.
+- **atime preservation in `DirectoryVFS` and `FileVFS`** — reading evidence files through the VFS no longer updates the access time of the source file:
+  - *Linux*: files are opened with `O_NOATIME`; falls back silently to a plain read if the process does not own the file or lacks `CAP_FOWNER`.
+  - *Windows*: `st_atime_ns` is saved before the read and restored via `os.utime(..., ns=...)` after; `st_ctime` (creation time on NTFS) is unaffected.
+  - *macOS*: not yet implemented (no `O_NOATIME`; `setattrlist()` approach planned).
 - **BLOB Inspector made public** — `BlobInspector` is now importable from `crush.viewers.table_viewer` so all viewers share one implementation; any improvement (new decode mode, UI fix) benefits SQLite, LevelDB, Realm, and future viewers at once.
 - **macOS badge** — README updated to reflect that macOS support is currently source-only (no successfully tested pre-built executable).
+
+### Testing
+
+- **Forensic timestamp preservation** — six new forensic tests verify that no parser or VFS layer modifies the timestamps of source evidence files. Covered: `DirectoryVFS`, `ZipVFS`, `TarVFS`, `SQLiteParser`, `RealmParser`, `LeveldbParser`. Each test captures timestamps before and after a parse and asserts all three are unchanged:
+  - *mtime* (modification time) — all platforms
+  - *ctime* (inode-change time on Linux/macOS, creation time on Windows) — all platforms
+  - *birth time* (`st_birthtime`) — macOS only; silently skipped on Linux and Windows where the field is not exposed by the OS
+- **Forensic atime preservation** — one new forensic test verifies that `DirectoryVFS` does not update the access time of source files. The test deliberately sets atime 200 s into the past (so `relatime` would update it on a plain read) and asserts it remains unchanged after `read()` and `peek()`. Runs on Linux and Windows only; skipped on macOS where atime preservation is not yet implemented.
 
 ---
 

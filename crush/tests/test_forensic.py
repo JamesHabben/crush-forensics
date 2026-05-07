@@ -16,6 +16,7 @@ import hashlib
 import os
 import sqlite3
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,25 @@ from crush.tests.conftest import FIXTURES_DIR
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _timestamps(path: Path) -> tuple[int, int, float | None]:
+    """Return (mtime_ns, ctime_ns, birthtime).
+
+    ctime: inode-change time on POSIX, creation time on Windows.
+    birthtime: float seconds from st_birthtime (macOS); None on Linux/Windows.
+    """
+    st = path.stat()
+    birth: float | None = getattr(st, "st_birthtime", None)
+    return st.st_mtime_ns, st.st_ctime_ns, birth
+
+
+def _assert_timestamps_unchanged(before: tuple, after: tuple, label: str) -> None:
+    """Assert mtime, ctime, and (where available) birth time are identical."""
+    assert after[0] == before[0], f"{label} changed mtime"
+    assert after[1] == before[1], f"{label} changed ctime"
+    if before[2] is not None:
+        assert after[2] == before[2], f"{label} changed birth time"
 
 
 def _file_nodes(node: VFSNode) -> list[VFSNode]:
@@ -66,6 +86,50 @@ def test_directory_vfs_does_not_modify_source(tmp_path: Path) -> None:
 
 @pytest.mark.forensic(
     category="Source Immutability",
+    desc="DirectoryVFS read/peek must not change mtime or ctime of source files",
+)
+def test_directory_vfs_does_not_change_timestamps(tmp_path: Path) -> None:
+    src = tmp_path / "evidence.db"
+    src.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+    ts_before = _timestamps(src)
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.db")
+    _ = vfs.read(node)
+    _ = vfs.peek(node)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(src), "DirectoryVFS")
+
+
+@pytest.mark.skipif(
+    sys.platform not in ("linux", "win32"),
+    reason="atime preservation via O_NOATIME / utime restore only implemented on Linux and Windows",
+)
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="DirectoryVFS read/peek must not update atime (Linux: O_NOATIME, Windows: utime restore)",
+)
+def test_directory_vfs_does_not_change_atime(tmp_path: Path) -> None:
+    src = tmp_path / "evidence.db"
+    src.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+    # Push atime 200 s into the past so that relatime would update it on a plain
+    # read (relatime only skips the update when atime >= mtime).
+    mtime_ns = src.stat().st_mtime_ns
+    old_atime_ns = mtime_ns - 200_000_000_000
+    os.utime(src, ns=(old_atime_ns, mtime_ns))
+    atime_before = src.stat().st_atime_ns
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.db")
+    _ = vfs.read(node)
+    _ = vfs.peek(node)
+
+    assert src.stat().st_atime_ns == atime_before, "DirectoryVFS changed atime of source file"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
     desc="Exhaustively reading every entry of a ZIP archive must leave it byte-identical",
 )
 def test_zip_vfs_does_not_modify_archive(zip_fixture: Path) -> None:
@@ -81,6 +145,21 @@ def test_zip_vfs_does_not_modify_archive(zip_fixture: Path) -> None:
 
 @pytest.mark.forensic(
     category="Source Immutability",
+    desc="ZipVFS must not change mtime or ctime of the archive file",
+)
+def test_zip_vfs_does_not_change_timestamps(zip_fixture: Path) -> None:
+    ts_before = _timestamps(zip_fixture)
+
+    vfs = ZipVFS(zip_fixture)
+    for node in vfs.storage_ordered_files():
+        _ = vfs.read(node)
+    vfs.close()
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(zip_fixture), "ZipVFS")
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
     desc="Exhaustively reading every entry of a TAR archive must leave it byte-identical",
 )
 def test_tar_vfs_does_not_modify_archive(tar_fixture: Path) -> None:
@@ -92,6 +171,21 @@ def test_tar_vfs_does_not_modify_archive(tar_fixture: Path) -> None:
     vfs.close()
 
     assert _sha256_file(tar_fixture) == digest_before, "TarVFS modified the source archive"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="TarVFS must not change mtime or ctime of the archive file",
+)
+def test_tar_vfs_does_not_change_timestamps(tar_fixture: Path) -> None:
+    ts_before = _timestamps(tar_fixture)
+
+    vfs = TarVFS(tar_fixture)
+    for node in _file_nodes(vfs.root()):
+        _ = vfs.read(node)
+    vfs.close()
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(tar_fixture), "TarVFS")
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +248,22 @@ def test_sqlite_parse_creates_no_sibling_files(tmp_path: Path) -> None:
 
     new_files = set(tmp_path.iterdir()) - files_before
     assert new_files == set(), f"Parser left unexpected files next to evidence: {new_files}"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="SQLiteParser must not change mtime or ctime of source files",
+)
+def test_sqlite_parser_does_not_change_timestamps(tmp_path: Path) -> None:
+    db_path = tmp_path / "minimal.sqlite"
+    db_path.write_bytes((FIXTURES_DIR / "minimal.sqlite").read_bytes())
+    ts_before = _timestamps(db_path)
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "minimal.sqlite")
+    SQLiteParser().parse(node, vfs)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(db_path), "SQLiteParser")
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +464,20 @@ def test_realm_parser_does_not_modify_source(realm_fixture: Path) -> None:
 
 
 @pytest.mark.forensic(
+    category="Source Immutability",
+    desc="RealmParser must not change mtime or ctime of source files",
+)
+def test_realm_parser_does_not_change_timestamps(realm_fixture: Path) -> None:
+    ts_before = _timestamps(realm_fixture)
+
+    vfs = DirectoryVFS(realm_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == realm_fixture.name)
+    _ = RealmParser().parse(node, vfs)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(realm_fixture), "RealmParser")
+
+
+@pytest.mark.forensic(
     category="No Side Effects",
     desc="RealmParser must not create any sibling files next to the evidence",
 )
@@ -475,6 +599,23 @@ def test_leveldb_does_not_modify_source(tmp_path: Path) -> None:
     LeveldbParser().parse(node, vfs)
 
     assert _sha256_dir(db) == digests_before, "LevelDB parser modified source files"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="LevelDB parser must not change mtime or ctime of source directory files",
+)
+def test_leveldb_does_not_change_timestamps(tmp_path: Path) -> None:
+    from crush.parsers.leveldb_parser import LeveldbParser
+    db = _make_leveldb_fixture(tmp_path / "evidence.leveldb")
+    ts_before = {f.name: _timestamps(f) for f in sorted(db.iterdir()) if f.is_file()}
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "evidence.leveldb")
+    LeveldbParser().parse(node, vfs)
+
+    for fname, before in ts_before.items():
+        _assert_timestamps_unchanged(before, _timestamps(db / fname), f"LevelDB parser ({fname})")
 
 
 @pytest.mark.forensic(

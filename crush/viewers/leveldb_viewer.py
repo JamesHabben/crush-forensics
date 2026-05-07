@@ -3,12 +3,15 @@
 """LevelDB viewer — overview, files, records (all + deleted)."""
 from __future__ import annotations
 
+import csv
 from typing import Any
 
 from PySide6.QtCore import Qt, QSortFilterProxyModel
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
+    QFileDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
     QSplitter,
@@ -64,22 +67,42 @@ def _text_preview(text: str | None, raw: bytes) -> str:
     return f"<binary {len(raw)} B>"
 
 
+def _make_item(display: str, sort_val: Any = None) -> QStandardItem:
+    item = QStandardItem(display)
+    item.setEditable(False)
+    item.setData(display if sort_val is None else sort_val, Qt.ItemDataRole.UserRole)
+    return item
+
+
 class _StateFilterProxy(QSortFilterProxyModel):
-    """Filters rows by the State column (index 1). Empty filter = show all."""
+    """Filters rows by State column and optional full-text search."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state: str | None = None
+        self._text: str = ""
 
     def set_state(self, state: str | None) -> None:
         self._state = state
         self.invalidateFilter()
 
+    def set_text(self, text: str) -> None:
+        self._text = text.lower()
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row: int, source_parent: Any) -> bool:
-        if self._state is None:
-            return True
-        idx = self.sourceModel().index(source_row, 1, source_parent)
-        return self.sourceModel().data(idx) == self._state
+        model = self.sourceModel()
+        if self._state is not None:
+            idx = model.index(source_row, 1, source_parent)
+            if model.data(idx) != self._state:
+                return False
+        if self._text:
+            for col in range(model.columnCount()):
+                idx = model.index(source_row, col, source_parent)
+                if self._text in (model.data(idx) or "").lower():
+                    return True
+            return False
+        return True
 
 
 class LevelDbRecordsWidget(QWidget):
@@ -118,6 +141,20 @@ class LevelDbRecordsWidget(QWidget):
             toolbar.addWidget(btn)
             self._filter_buttons[state] = btn
 
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("  Search: "))
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Filter rows…")
+        self._search.setClearButtonEnabled(True)
+        self._search.setFixedWidth(220)
+        self._search.textChanged.connect(lambda t: self._proxy.set_text(t))
+        toolbar.addWidget(self._search)
+
+        toolbar.addSeparator()
+        export_btn = QPushButton("Export CSV…")
+        export_btn.clicked.connect(self._export_csv)
+        toolbar.addWidget(export_btn)
+
         layout.addWidget(toolbar)
 
         # --- splitter: table + hex ---
@@ -125,6 +162,7 @@ class LevelDbRecordsWidget(QWidget):
 
         self._model = QStandardItemModel(0, len(_COLUMNS))
         self._model.setHorizontalHeaderLabels(_COLUMNS)
+        self._model.setSortRole(Qt.ItemDataRole.UserRole)
         self._populate_model()
 
         self._proxy = _StateFilterProxy()
@@ -143,8 +181,12 @@ class LevelDbRecordsWidget(QWidget):
         self._table.customContextMenuRequested.connect(self._on_context_menu)
         splitter.addWidget(self._table)
 
-        self._hex = HexViewer(b"", splitter)
-        splitter.addWidget(self._hex)
+        hex_tabs = QTabWidget()
+        self._hex_key = HexViewer(b"")
+        self._hex_val = HexViewer(b"")
+        hex_tabs.addTab(self._hex_key, "Key")
+        hex_tabs.addTab(self._hex_val, "Value")
+        splitter.addWidget(hex_tabs)
         splitter.setSizes([400, 200])
 
         layout.addWidget(splitter)
@@ -160,21 +202,21 @@ class LevelDbRecordsWidget(QWidget):
             uk_bytes: bytes = rec.get("user_key_bytes") or b""
             val_bytes: bytes = rec.get("value_bytes") or b""
 
-            cells = [
-                str(rec.get("seq", "")),
-                state,
-                rec.get("file", ""),
-                _text_preview(rec.get("user_key_text"), uk_bytes),
-                _hex_preview(uk_bytes),
-                _text_preview(rec.get("value_text"), val_bytes),
-                _hex_preview(val_bytes),
-                "yes" if rec.get("compressed") else "no",
+            seq = rec.get("seq", 0)
+            cells: list[tuple[str, Any]] = [
+                (str(seq), seq),
+                (state, None),
+                (rec.get("file", ""), None),
+                (_text_preview(rec.get("user_key_text"), uk_bytes), None),
+                (_hex_preview(uk_bytes), None),
+                (_text_preview(rec.get("value_text"), val_bytes), None),
+                (_hex_preview(val_bytes), None),
+                ("yes" if rec.get("compressed") else "no", None),
             ]
 
             items = []
-            for i, text in enumerate(cells):
-                item = QStandardItem(text)
-                item.setEditable(False)
+            for display, sort_val in cells:
+                item = _make_item(display, sort_val)
                 if color:
                     item.setForeground(color)
                 items.append(item)
@@ -208,7 +250,22 @@ class LevelDbRecordsWidget(QWidget):
             item = self._model.item(row, 0)
             uk = item.data(_KEY_BYTES_ROLE) or b""
             val = item.data(_VAL_BYTES_ROLE) or b""
-            self._hex.set_data(uk + b"\n--- value ---\n" + val)
+            self._hex_key.set_data(uk)
+            self._hex_val.set_data(val)
+
+    def _export_csv(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "", "CSV (*.csv)")
+        if not path:
+            return
+        headers = [self._model.headerData(i, Qt.Orientation.Horizontal) for i in range(self._model.columnCount())]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for row in range(self._proxy.rowCount()):
+                writer.writerow(
+                    self._proxy.data(self._proxy.index(row, col)) or ""
+                    for col in range(self._proxy.columnCount())
+                )
 
     def _on_context_menu(self, pos) -> None:
         proxy_index = self._table.indexAt(pos)
@@ -279,16 +336,14 @@ class LevelDbViewer(QWidget):
             level = f.get("level", -1)
             level_str = str(level) if level >= 0 else "—"
             row = [
-                QStandardItem(f.get("name", "")),
-                QStandardItem(f.get("type", "")),
-                QStandardItem(level_str),
-                QStandardItem(str(f.get("total", 0))),
-                QStandardItem(str(f.get("live", 0))),
-                QStandardItem(str(f.get("deleted", 0))),
-                QStandardItem(str(f.get("unknown", 0))),
+                _make_item(f.get("name", "")),
+                _make_item(f.get("type", "")),
+                _make_item(level_str, level),
+                _make_item(str(f.get("total", 0)), f.get("total", 0)),
+                _make_item(str(f.get("live", 0)), f.get("live", 0)),
+                _make_item(str(f.get("deleted", 0)), f.get("deleted", 0)),
+                _make_item(str(f.get("unknown", 0)), f.get("unknown", 0)),
             ]
-            for item in row:
-                item.setEditable(False)
             # Color files that contain deleted records
             if f.get("deleted", 0) > 0:
                 for item in row:
@@ -296,6 +351,7 @@ class LevelDbViewer(QWidget):
             model.appendRow(row)
 
         table = QTableView()
+        model.setSortRole(Qt.ItemDataRole.UserRole)
         table.setModel(model)
         table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)

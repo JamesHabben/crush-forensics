@@ -5,6 +5,8 @@ through a single interface so viewers never need to know the origin.
 """
 from __future__ import annotations
 
+import os
+import sys
 import tarfile
 import threading
 import zipfile
@@ -13,6 +15,90 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import IO
+
+
+class _AtimeRestoringIO:
+    """Read-only file wrapper that restores atime after the file is closed (Windows).
+
+    On Windows, os.utime() sets atime and mtime without touching ctime (creation
+    time), so this is a clean atime-preserving read with no timestamp side-effects.
+    """
+
+    def __init__(self, path: Path, f: IO[bytes], atime_ns: int, mtime_ns: int) -> None:
+        self._path = path
+        self._f = f
+        self._atime_ns = atime_ns
+        self._mtime_ns = mtime_ns
+
+    def read(self, n: int = -1) -> bytes:
+        return self._f.read(n)
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        return self._f.seek(pos, whence)
+
+    def tell(self) -> int:
+        return self._f.tell()
+
+    def __enter__(self) -> "_AtimeRestoringIO":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._close()
+
+    def close(self) -> None:
+        self._close()
+
+    def _close(self) -> None:
+        self._f.close()
+        try:
+            os.utime(self._path, ns=(self._atime_ns, self._mtime_ns))
+        except OSError:
+            pass
+
+
+def _read_noatime(path: Path) -> bytes:
+    """Read a file without updating its atime where the OS supports it.
+
+    Linux:   O_NOATIME flag; falls back to a plain read if the caller does not
+             own the file or lacks CAP_FOWNER.
+    Windows: save atime, read, restore atime via os.utime() (does not touch ctime).
+    Others:  plain read.
+    """
+    if sys.platform == "linux":
+        try:
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOATIME)
+        except OSError:
+            return path.read_bytes()
+        with os.fdopen(fd, "rb") as f:
+            return f.read()
+    if sys.platform == "win32":
+        st = path.stat()
+        data = path.read_bytes()
+        try:
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        except OSError:
+            pass
+        return data
+    return path.read_bytes()
+
+
+def _open_noatime(path: Path) -> IO[bytes]:
+    """Open a file for reading without updating its atime where the OS supports it.
+
+    Linux:   O_NOATIME flag; falls back to a plain open if not permitted.
+    Windows: returns an _AtimeRestoringIO that restores atime on close.
+    Others:  plain open.
+    """
+    if sys.platform == "linux":
+        try:
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOATIME)
+        except OSError:
+            return open(path, "rb")
+        return os.fdopen(fd, "rb")
+    if sys.platform == "win32":
+        st = path.stat()
+        return _AtimeRestoringIO(path, open(path, "rb"), st.st_atime_ns, st.st_mtime_ns)
+    return open(path, "rb")
 
 
 @dataclass
@@ -99,10 +185,10 @@ class DirectoryVFS(VFS):
         return node
 
     def read(self, node: VFSNode) -> bytes:
-        return Path(node.path).read_bytes()
+        return _read_noatime(Path(node.path))
 
     def open(self, node: VFSNode) -> IO[bytes]:
-        return open(node.path, "rb")
+        return _open_noatime(Path(node.path))
 
     def file_count(self, node: VFSNode) -> int:
         return self._file_counts.get(node.path, 0)
@@ -427,10 +513,10 @@ class FileVFS(VFS):
         return self._root
 
     def read(self, node: VFSNode) -> bytes:
-        return Path(node.path).read_bytes()
+        return _read_noatime(Path(node.path))
 
     def open(self, node: VFSNode) -> IO[bytes]:
-        return open(node.path, "rb")
+        return _open_noatime(Path(node.path))
 
     def file_count(self, node: VFSNode) -> int:
         return 1
