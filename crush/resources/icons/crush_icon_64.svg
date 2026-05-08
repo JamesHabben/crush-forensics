@@ -1,0 +1,22 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>crush icon 64px</title>
+  <rect width="64" height="64" rx="11" fill="#0d1117"/>
+  <!-- turtle cx=32 cy=36 rx=11 ry=16 -->
+  <path d="M23,45 Q13,48 12,54 Q16,51 23,49 Z" fill="#166534" opacity="0.85"/>
+  <path d="M41,45 Q51,48 52,54 Q48,51 41,49 Z" fill="#166534" opacity="0.85"/>
+  <path d="M24,23 Q13,19 9,13 Q14,16 24,26 Z" fill="#166534"/>
+  <path d="M40,23 Q51,19 55,13 Q50,16 40,26 Z" fill="#166534"/>
+  <ellipse cx="32" cy="36" rx="11" ry="16" fill="#15803d"/>
+  <polygon points="32,27 37,30 37,36 32,39 27,36 27,30" fill="none" stroke="#4ade80" stroke-width="1"   opacity="1"/>
+  <polygon points="32,21 37,24 37,30 32,33 27,30 27,24" fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.7"/>
+  <polygon points="32,33 37,36 37,42 32,45 27,42 27,36" fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.65"/>
+  <polygon points="39,24 44,27 44,33 39,36 34,33 34,27" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.55"/>
+  <polygon points="25,24 30,27 30,33 25,36 20,33 20,27" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.55"/>
+  <ellipse cx="32" cy="36" rx="11" ry="16" fill="none" stroke="#22c55e" stroke-width="1.3"/>
+  <ellipse cx="32" cy="17" rx="5.5" ry="4.5" fill="#16a34a"/>
+  <circle cx="29" cy="15" r="1.3" fill="#052e16"/>
+  <circle cx="35" cy="15" r="1.3" fill="#052e16"/>
+  <circle cx="30" cy="14" r="0.5" fill="#bbf7d0"/>
+  <circle cx="36" cy="14" r="0.5" fill="#bbf7d0"/>
+  <path d="M29 19 Q32 22 35 19" fill="none" stroke="#052e16" stroke-width="0.8" stroke-linecap="round"/>
+</svg>

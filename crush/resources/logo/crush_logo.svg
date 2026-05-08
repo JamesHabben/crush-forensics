@@ -1,0 +1,92 @@
+<svg width="600" height="500" viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>crush – DFIR Workbench Logo</title>
+  <desc>Full logo for crush-forensics with EAC wave, surfing turtle, wordmark and release tagline</desc>
+
+  <!-- transparent background — works on light and dark -->
+
+  <!-- === datatype stream background === -->
+  <text x="10"  y="318" font-family="'Courier New',monospace" font-size="8" fill="#22c55e" opacity="0.22">plist  sqlite  hex  json  xml  bplist  segb  abx  leveldb  realm  protobuf  tracev3</text>
+  <text x="30"  y="332" font-family="'Courier New',monospace" font-size="8" fill="#22c55e" opacity="0.18">int8  []byte  float64  uuid  blob  uint32  enum  varchar  rune  timestamp</text>
+  <text x="0"   y="346" font-family="'Courier New',monospace" font-size="8" fill="#22c55e" opacity="0.20">zip  tar  sha256  utf8  binary  logarchive  syslog  pdf  image  audio  video</text>
+  <text x="20"  y="360" font-family="'Courier New',monospace" font-size="8" fill="#22c55e" opacity="0.16">magic_bytes  extension  forensic_relevance  iOS  Android  macOS  Windows</text>
+
+  <!-- === EAC wave === -->
+  <path d="M0 290 Q50 248 110 272 Q185 300 260 248 Q335 196 410 234 Q480 268 560 228 L600 224 L600 500 L0 500 Z"
+        fill="#14532d" opacity="0.2"/>
+  <path d="M0 290 Q50 248 110 272 Q185 300 260 248 Q335 196 410 234 Q480 268 560 228 L600 224"
+        fill="none" stroke="#22c55e" stroke-width="1.6" opacity="0.5"/>
+  <path d="M0 308 Q70 278 145 298 Q225 320 305 278 Q380 236 458 266 Q530 292 600 264"
+        fill="none" stroke="#16a34a" stroke-width="0.8" opacity="0.25"/>
+  <!-- spray -->
+  <circle cx="259" cy="241" r="2.5" fill="#4ade80" opacity="0.65"/>
+  <circle cx="268" cy="235" r="1.5" fill="#4ade80" opacity="0.45"/>
+  <circle cx="251" cy="238" r="1.2" fill="#4ade80" opacity="0.35"/>
+  <circle cx="409" cy="227" r="2"   fill="#4ade80" opacity="0.55"/>
+  <circle cx="418" cy="221" r="1.5" fill="#4ade80" opacity="0.4"/>
+
+  <!-- === SURFBOARD === -->
+  <ellipse cx="300" cy="272" rx="55" ry="8" fill="#14532d" opacity="0.9" transform="rotate(-5,300,272)"/>
+  <ellipse cx="300" cy="272" rx="55" ry="8" fill="none" stroke="#22c55e" stroke-width="0.9" transform="rotate(-5,300,272)"/>
+  <line x1="253" y1="278" x2="345" y2="265" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+
+  <!-- === TURTLE — cx=300 cy=236 rx=38 ry=52 === -->
+
+  <!-- rear flippers -->
+  <path d="M272,272 Q236,282 232,302 Q244,295 274,284 Z" fill="#166534" opacity="0.85"/>
+  <path d="M328,272 Q364,282 368,302 Q356,295 326,284 Z" fill="#166534" opacity="0.85"/>
+
+  <!-- front flippers -->
+  <path d="M275,188 Q238,174 222,152 Q238,162 277,198 Z" fill="#166534"/>
+  <path d="M325,188 Q362,174 378,152 Q362,162 323,198 Z" fill="#166534"/>
+
+  <!-- shell -->
+  <ellipse cx="300" cy="236" rx="38" ry="52" fill="#15803d"/>
+
+  <!-- hex pattern -->
+  <polygon points="300,212 311,219 311,233 300,240 289,233 289,219" fill="none" stroke="#4ade80" stroke-width="1.3" opacity="1"/>
+  <polygon points="300,194 311,201 311,215 300,222 289,215 289,201" fill="none" stroke="#4ade80" stroke-width="0.9" opacity="0.75"/>
+  <polygon points="300,230 311,237 311,251 300,258 289,251 289,237" fill="none" stroke="#4ade80" stroke-width="0.9" opacity="0.7"/>
+  <polygon points="322,203 333,210 333,224 322,231 311,224 311,210" fill="none" stroke="#4ade80" stroke-width="0.85" opacity="0.65"/>
+  <polygon points="278,203 289,210 289,224 278,231 267,224 267,210" fill="none" stroke="#4ade80" stroke-width="0.85" opacity="0.65"/>
+  <polygon points="322,221 333,228 333,242 322,249 311,242 311,228" fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.55"/>
+  <polygon points="278,221 289,228 289,242 278,249 267,242 267,228" fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.55"/>
+  <polygon points="322,185 333,192 333,206 322,213 311,206 311,192" fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.45"/>
+  <polygon points="278,185 289,192 289,206 278,213 267,206 267,192" fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.45"/>
+  <polygon points="322,239 333,246 333,260 322,267 311,260 311,246" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.38"/>
+  <polygon points="278,239 289,246 289,260 278,267 267,260 267,246" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.38"/>
+
+  <!-- shell rim -->
+  <ellipse cx="300" cy="236" rx="38" ry="52" fill="none" stroke="#22c55e" stroke-width="2"/>
+
+  <!-- head -->
+  <ellipse cx="300" cy="178" rx="16" ry="14" fill="#16a34a" transform="rotate(6,300,178)"/>
+  <circle cx="293" cy="174" r="3.2" fill="#052e16"/>
+  <circle cx="294" cy="173" r="1.2" fill="#bbf7d0"/>
+  <circle cx="307" cy="173" r="3.2" fill="#052e16"/>
+  <circle cx="308" cy="172" r="1.2" fill="#bbf7d0"/>
+  <path d="M293 182 Q300 188 307 182" fill="none" stroke="#052e16" stroke-width="1.2" stroke-linecap="round"/>
+
+  <!-- === WORDMARK === -->
+  <text x="300" y="352"
+    font-family="'Courier New', Courier, monospace"
+    font-size="54" font-weight="600" fill="#22c55e" text-anchor="middle"
+    letter-spacing="-1">crush</text>
+
+  <text x="300" y="376"
+    font-family="'Courier New', Courier, monospace"
+    font-size="12" fill="#86efac" text-anchor="middle" letter-spacing="4">DFIR WORKBENCH</text>
+
+  <!-- === RELEASE BADGE === -->
+  <rect x="178" y="392" width="244" height="30" rx="8" fill="#22c55e" opacity="0.07" stroke="#22c55e" stroke-width="0.8"/>
+  <text x="300" y="406"
+    font-family="'Courier New', Courier, monospace"
+    font-size="10" fill="#86efac" text-anchor="middle" letter-spacing="1.5">Riding the EAC</text>
+  <text x="300" y="418"
+    font-family="'Courier New', Courier, monospace"
+    font-size="9" fill="#4ade80" text-anchor="middle" opacity="0.75" letter-spacing="0.8">Surfing the datatypes 🐢</text>
+
+  <!-- wave flanks -->
+  <path d="M152 404 Q160 399 168 404 Q176 409 184 404" fill="none" stroke="#22c55e" stroke-width="0.9" opacity="0.3"/>
+  <path d="M416 404 Q424 399 432 404 Q440 409 448 404" fill="none" stroke="#22c55e" stroke-width="0.9" opacity="0.3"/>
+
+</svg>

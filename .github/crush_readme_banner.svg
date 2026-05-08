@@ -1,0 +1,110 @@
+<svg width="800" height="180" viewBox="0 0 800 180" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>crush – DFIR Workbench</title>
+  <desc>README banner for crush-forensics. Easter eggs: wave 1 = "Just keep swimming!" in hex, wave 2 = "Annika is awesome!" in binary.</desc>
+
+  <defs>
+    <clipPath id="bannerClip">
+      <rect width="800" height="180" rx="8"/>
+    </clipPath>
+  </defs>
+
+  <!-- background -->
+  <rect width="800" height="180" rx="8" fill="#0d1117"/>
+
+  <!-- === CYBER WAVE BACKGROUND — clipped === -->
+  <g clip-path="url(#bannerClip)">
+
+    <!-- Wave 1 — EASTER EGG 1: "Just keep swimming!" in hex -->
+    <path id="w1" d="M 0,28 Q 100,14 200,28 Q 300,42 400,28 Q 500,14 600,28 Q 700,42 800,28" fill="none"/>
+    <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#22c55e" opacity="0.4" letter-spacing="1">
+      <textPath href="#w1">0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21 0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21</textPath>
+    </text>
+
+    <!-- Wave 2 — EASTER EGG 2: "Annika is awesome!" in binary -->
+    <path id="w2" d="M 0,44 Q 100,30 200,44 Q 300,58 400,44 Q 500,30 600,44 Q 700,58 800,44" fill="none"/>
+    <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#16a34a" opacity="0.35" letter-spacing="1">
+      <textPath href="#w2">01000001 01101110 01101110 01101001 01101011 01100001 00100000 01101001 01110011 00100000 01100001 01110111 01100101 01110011 01101111 01101101 01100101 00100001</textPath>
+    </text>
+
+    <!-- Wave 3 — hex filler -->
+    <path id="w3" d="M 0,140 Q 100,126 200,140 Q 300,154 400,140 Q 500,126 600,140 Q 700,154 800,140" fill="none"/>
+    <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#22c55e" opacity="0.3" letter-spacing="1">
+      <textPath href="#w3">0x504C 0x4953 0x5420 0x5345 0x4742 0x2041 0x4258 0x4C44 0x4220 0x4845 0x5820 0x4A53 0x4F4E 0x5850 0x4D4C</textPath>
+    </text>
+
+    <!-- Wave 4 — binary filler -->
+    <path id="w4" d="M 0,156 Q 100,142 200,156 Q 300,170 400,156 Q 500,142 600,156 Q 700,170 800,158" fill="none"/>
+    <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#16a34a" opacity="0.22" letter-spacing="1">
+      <textPath href="#w4">10110100 11001010 01010101 00110011 11110000 10101010 01100011 00110101 11001010 01010110 10110001 01101001</textPath>
+    </text>
+
+  </g>
+
+  <!-- === TURTLE — cx=90 cy=100 rx=34 ry=48 === -->
+  <!-- rear flippers -->
+  <path d="M62,128 Q30,136 27,154 Q38,148 64,138 Z" fill="#166534" stroke="#22c55e" stroke-width="1"/>
+  <path d="M118,128 Q150,136 153,154 Q142,148 116,138 Z" fill="#166534" stroke="#22c55e" stroke-width="1"/>
+  <!-- front flippers -->
+  <path d="M65,74 Q30,62 18,46 Q32,54 67,82 Z" fill="#166534" stroke="#22c55e" stroke-width="1"/>
+  <path d="M115,74 Q150,62 162,46 Q148,54 113,82 Z" fill="#166534" stroke="#22c55e" stroke-width="1"/>
+
+  <!-- shell body -->
+  <ellipse cx="90" cy="105" rx="34" ry="48" fill="#15803d"/>
+
+  <!-- hex pattern -->
+  <polygon points="90,83  100,89  100,101 90,107 80,101 80,89"  fill="none" stroke="#4ade80" stroke-width="1.2" opacity="1"/>
+  <polygon points="90,65  100,71  100,83  90,89  80,83  80,71"  fill="none" stroke="#4ade80" stroke-width="0.85" opacity="0.75"/>
+  <polygon points="90,101 100,107 100,119 90,125 80,119 80,107" fill="none" stroke="#4ade80" stroke-width="0.85" opacity="0.7"/>
+  <polygon points="110,74 120,80 120,92  110,98 100,92  100,80" fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.65"/>
+  <polygon points="70,74  80,80  80,92  70,98  60,92  60,80"   fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.65"/>
+  <polygon points="110,92 120,98 120,110 110,116 100,110 100,98" fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.55"/>
+  <polygon points="70,92  80,98  80,110 70,116 60,110 60,98"   fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.55"/>
+  <polygon points="110,55 120,61 120,73  110,79 100,73  100,61" fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.45"/>
+  <polygon points="70,55  80,61  80,73  70,79  60,73  60,61"   fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.45"/>
+  <polygon points="110,111 120,117 120,129 110,135 100,129 100,117" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.38"/>
+  <polygon points="70,111  80,117  80,129 70,135 60,129  60,117"   fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.38"/>
+
+  <!-- shell rim -->
+  <ellipse cx="90" cy="105" rx="34" ry="48" fill="none" stroke="#22c55e" stroke-width="2"/>
+
+  <!-- head -->
+  <ellipse cx="90" cy="51" rx="14" ry="12" fill="#16a34a" stroke="#22c55e" stroke-width="1.2"/>
+  <circle cx="84" cy="48" r="2.5" fill="#052e16"/>
+  <circle cx="85" cy="47" r="1"   fill="#bbf7d0"/>
+  <circle cx="96" cy="47" r="2.5" fill="#052e16"/>
+  <circle cx="97" cy="46" r="1"   fill="#bbf7d0"/>
+  <path d="M84 55 Q90 61 96 55" fill="none" stroke="#052e16" stroke-width="1.1" stroke-linecap="round"/>
+
+  <!-- === DIVIDER === -->
+  <line x1="148" y1="20" x2="148" y2="160" stroke="#22c55e" stroke-width="0.5" opacity="0.2"/>
+
+  <!-- === TEXT BLOCK === -->
+  <text x="176" y="82"
+    font-family="'Courier New', Courier, monospace"
+    font-size="42" font-weight="600" fill="#22c55e"
+    letter-spacing="-0.5">crush</text>
+
+  <text x="178" y="104"
+    font-family="'Courier New', Courier, monospace"
+    font-size="11" fill="#86efac" letter-spacing="3">DIGITAL FORENSIC ANALYSIS WORKBENCH</text>
+
+  <line x1="178" y1="114" x2="775" y2="114" stroke="#22c55e" stroke-width="0.4" opacity="0.2"/>
+
+  <text x="178" y="130"
+    font-family="'Courier New', Courier, monospace"
+    font-size="9.5" fill="#4ade80" opacity="0.65">
+    SQLite · PLIST · HEX · LevelDB · Realm · ABX · SEGB · Unified Log · Protobuf
+  </text>
+
+  <text x="178" y="148"
+    font-family="'Courier New', Courier, monospace"
+    font-size="9.5" fill="#58a6ff" opacity="0.85">
+    github.com/kalink0/crush-forensics
+  </text>
+
+  <rect x="178" y="156" width="140" height="16" rx="8" fill="#22c55e" opacity="0.08" stroke="#22c55e" stroke-width="0.7"/>
+  <text x="248" y="168"
+    font-family="'Courier New', Courier, monospace"
+    font-size="9" fill="#4ade80" text-anchor="middle" letter-spacing="0.5">Riding the EAC 🐢</text>
+
+</svg>

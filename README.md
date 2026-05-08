@@ -1,5 +1,7 @@
 # crush-forensics
 
+![crush](.github/crush_readme_banner.svg)
+
 Crush — Digital Forensic Analysis Workbench
 
 [![CI](https://github.com/kalink0/crush-forensics/actions/workflows/ci.yml/badge.svg)](https://github.com/kalink0/crush-forensics/actions/workflows/ci.yml)

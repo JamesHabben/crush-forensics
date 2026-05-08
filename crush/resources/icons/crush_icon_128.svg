@@ -1,0 +1,26 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>crush icon 128px</title>
+  <rect width="128" height="128" rx="22" fill="#0d1117"/>
+  <!-- turtle cx=64 cy=70 rx=22 ry=32 -->
+  <path d="M46,89 Q27,94 25,106 Q32,101 47,96 Z" fill="#166534" opacity="0.85"/>
+  <path d="M82,89 Q101,94 103,106 Q96,101 81,96 Z" fill="#166534" opacity="0.85"/>
+  <path d="M48,46 Q26,38 18,26 Q27,32 49,52 Z" fill="#166534"/>
+  <path d="M80,46 Q102,38 110,26 Q101,32 79,52 Z" fill="#166534"/>
+  <ellipse cx="64" cy="70" rx="22" ry="32" fill="#15803d"/>
+  <polygon points="64,54 71,58 71,66 64,70 57,66 57,58" fill="none" stroke="#4ade80" stroke-width="1.2" opacity="1"/>
+  <polygon points="64,42 71,46 71,54 64,58 57,54 57,46" fill="none" stroke="#4ade80" stroke-width="0.9" opacity="0.75"/>
+  <polygon points="64,66 71,70 71,78 64,82 57,78 57,70" fill="none" stroke="#4ade80" stroke-width="0.9" opacity="0.7"/>
+  <polygon points="78,48 85,52 85,60 78,64 71,60 71,52" fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.6"/>
+  <polygon points="50,48 57,52 57,60 50,64 43,60 43,52" fill="none" stroke="#4ade80" stroke-width="0.8" opacity="0.6"/>
+  <polygon points="78,60 85,64 85,72 78,76 71,72 71,64" fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.5"/>
+  <polygon points="50,60 57,64 57,72 50,76 43,72 43,64" fill="none" stroke="#4ade80" stroke-width="0.75" opacity="0.5"/>
+  <polygon points="78,36 85,40 85,48 78,52 71,48 71,40" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.4"/>
+  <polygon points="50,36 57,40 57,48 50,52 43,48 43,40" fill="none" stroke="#4ade80" stroke-width="0.65" opacity="0.4"/>
+  <ellipse cx="64" cy="70" rx="22" ry="32" fill="none" stroke="#22c55e" stroke-width="1.8"/>
+  <ellipse cx="64" cy="33" rx="10" ry="9" fill="#16a34a"/>
+  <circle cx="59" cy="30" r="2.2" fill="#052e16"/>
+  <circle cx="60" cy="29" r="0.9" fill="#bbf7d0"/>
+  <circle cx="69" cy="29" r="2.2" fill="#052e16"/>
+  <circle cx="70" cy="28" r="0.9" fill="#bbf7d0"/>
+  <path d="M59 37 Q64 41 69 37" fill="none" stroke="#052e16" stroke-width="1" stroke-linecap="round"/>
+</svg>

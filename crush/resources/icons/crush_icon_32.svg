@@ -1,0 +1,17 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>crush icon 32px</title>
+  <rect width="32" height="32" rx="5" fill="#0d1117"/>
+  <!-- turtle cx=16 cy=18 rx=6 ry=9 -->
+  <path d="M11,22 Q6,24 6,27 Q8,26 11,25 Z" fill="#166534" opacity="0.85"/>
+  <path d="M21,22 Q26,24 26,27 Q24,26 21,25 Z" fill="#166534" opacity="0.85"/>
+  <path d="M12,11 Q6,9 4,6 Q7,8 12,13 Z" fill="#166534"/>
+  <path d="M20,11 Q26,9 28,6 Q25,8 20,13 Z" fill="#166534"/>
+  <ellipse cx="16" cy="18" rx="6" ry="9" fill="#15803d"/>
+  <polygon points="16,13 19,15 19,19 16,21 13,19 13,15" fill="none" stroke="#4ade80" stroke-width="0.9" opacity="1"/>
+  <polygon points="16,9  19,11 19,15 16,17 13,15 13,11" fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.65"/>
+  <polygon points="16,17 19,19 19,23 16,25 13,23 13,19" fill="none" stroke="#4ade80" stroke-width="0.7" opacity="0.6"/>
+  <ellipse cx="16" cy="18" rx="6" ry="9" fill="none" stroke="#22c55e" stroke-width="1.1"/>
+  <ellipse cx="16" cy="8"  rx="3.5" ry="3" fill="#16a34a"/>
+  <circle cx="14" cy="7"  r="1"   fill="#052e16"/>
+  <circle cx="18" cy="7"  r="1"   fill="#052e16"/>
+</svg>
