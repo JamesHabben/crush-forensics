@@ -128,7 +128,7 @@ class FreeDataViewer(QWidget):
             menu = QMenu(self)
             inspect = menu.addAction(f"Inspect Block… ({len(raw)} B)")
             if menu.exec(self._table.viewport().mapToGlobal(pos)) == inspect:
-                BlobInspector(raw, self).exec()
+                BlobInspector(raw, self).show()
 
 
 def _create_realm_sqlite(

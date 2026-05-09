@@ -1316,7 +1316,8 @@ class TableViewer(QWidget):
         viewer = HexViewer(blob, dialog)
         layout.addWidget(viewer)
         dialog.resize(900, 600)
-        dialog.exec()
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
 
     def _export_blob(self, blob: bytes) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export BLOB", "", "All files (*)")
@@ -1330,8 +1331,7 @@ class TableViewer(QWidget):
             self._sql_status.setText(str(exc))
 
     def _preview_blob(self, blob: bytes) -> None:
-        dialog = BlobInspector(blob, self)
-        dialog.exec()
+        BlobInspector(blob, self).show()
 
     def keyPressEvent(self, event: object) -> None:  # type: ignore[override]
         if hasattr(event, "matches") and event.matches(QKeySequence.StandardKey.Copy):
@@ -1414,6 +1414,7 @@ class _BlobViewerEdit(QPlainTextEdit):
 class BlobInspector(QDialog):
     def __init__(self, blob: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._blob = blob
         self._build_ui()
         self._apply_view()
@@ -1438,6 +1439,7 @@ class BlobInspector(QDialog):
             "UTF-8 text",
             "Latin-1 text",
             "Base64 (decode)",
+            "JSON",
             "Plist / bplist",
             "XML",
             "Protobuf (schema-less)",
@@ -1495,6 +1497,7 @@ class BlobInspector(QDialog):
             content = (
                 self._try_plist()
                 or self._try_xml()
+                or self._try_json()
                 or self._try_utf8()
                 or self._try_latin1()
                 or self._hex()
@@ -1507,6 +1510,8 @@ class BlobInspector(QDialog):
             content = self._try_latin1() or "[decode error]"
         elif fmt == "Base64 (decode)":
             content = self._try_base64() or "[decode error]"
+        elif fmt == "JSON":
+            content = self._try_json() or "[parse error]"
         elif fmt == "Plist / bplist":
             content = self._try_plist() or "[parse error]"
         elif fmt == "XML":
@@ -1581,6 +1586,24 @@ class BlobInspector(QDialog):
 
     def _try_base64(self) -> str:
         return try_base64_text(self._blob) or ""
+
+    def _try_json(self) -> str:
+        import json
+        try:
+            text = self._blob.decode("utf-8")
+        except Exception:
+            return ""
+        unescaped = text.replace('\\"', '"')
+        for candidate in (text, unescaped):
+            try:
+                return json.dumps(json.loads(candidate), indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+        # Truncated / partial JSON — show unescaped text with a warning header
+        candidate = unescaped if '\\"' in text else text
+        if candidate.lstrip().startswith(("{", "[")):
+            return "[partial / truncated JSON — pretty-print not possible]\n\n" + candidate
+        return ""
 
     def _try_plist(self) -> str:
         return try_plist_text(self._blob) or ""

@@ -865,9 +865,7 @@ class MainWindow(QMainWindow):
 
     def _paste_decode(self) -> None:
         from crush.ui.paste_decode_dialog import PasteDecodeDialog
-        dlg = PasteDecodeDialog(self)
-        dlg.open_requested.connect(self._open_bytes_with_format)
-        dlg.exec()
+        PasteDecodeDialog(self).show()
 
     def _open_bytes_with_format(self, data: bytes, filename_hint: str, parser_display_name: object) -> None:
         """Open *data* in the appropriate viewer, honouring an explicit format choice."""

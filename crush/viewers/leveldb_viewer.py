@@ -283,9 +283,9 @@ class LevelDbRecordsWidget(QWidget):
         inspect_val = menu.addAction(f"Inspect Value… ({len(val)} B)")
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
         if action == inspect_key and uk:
-            BlobInspector(uk, self).exec()
+            BlobInspector(uk, self).show()
         elif action == inspect_val and val:
-            BlobInspector(val, self).exec()
+            BlobInspector(val, self).show()
 
 
 class LevelDbViewer(QWidget):

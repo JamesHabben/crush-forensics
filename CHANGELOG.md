@@ -27,6 +27,9 @@ All notable changes to Crush will be documented in this file.
   - *Windows*: `st_atime_ns` is saved before the read and restored via `os.utime(..., ns=...)` after; `st_ctime` (creation time on NTFS) is unaffected.
   - *macOS*: not yet implemented (no `O_NOATIME`; `setattrlist()` approach planned).
 - **BLOB Inspector made public** — `BlobInspector` is now importable from `crush.viewers.table_viewer` so all viewers share one implementation; any improvement (new decode mode, UI fix) benefits SQLite, LevelDB, Realm, and future viewers at once.
+- **BLOB Inspector — non-blocking** — the inspector (and the hex-blob dialog) now opens as a non-modal window so the rest of the UI remains fully interactive while an inspector is open; multiple inspectors can be open simultaneously.
+- **BLOB Inspector — JSON decode** — new *JSON* mode pretty-prints the blob as formatted JSON; also detected automatically in Auto mode when the blob is valid UTF-8 JSON.
+- **Paste & Decode — inline result** — the decoded viewer now appears directly inside the Paste & Decode window (bottom pane of a splitter) instead of opening a separate tab; the dialog is non-modal so the rest of the UI remains accessible.
 - **macOS badge** — README updated to reflect that macOS support is currently source-only (no successfully tested pre-built executable).
 
 ### Testing
