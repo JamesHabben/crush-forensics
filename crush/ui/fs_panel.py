@@ -10,9 +10,10 @@ import os
 import threading
 import time
 
-from PySide6.QtCore import QModelIndex, Qt, Signal, QSortFilterProxyModel, QTimer
+from PySide6.QtCore import QModelIndex, QSettings, QStringListModel, Qt, Signal, QSortFilterProxyModel, QTimer
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
+    QCompleter,
     QLineEdit,
     QMenu,
     QStackedWidget,
@@ -46,6 +47,15 @@ def _format_size(size: int) -> str:
     if unit_index == 0:
         return f"{int(value)} {_SIZE_UNITS[unit_index]}"
     return f"{value:.1f} {_SIZE_UNITS[unit_index]}"
+
+
+class _FilterLineEdit(QLineEdit):
+    """QLineEdit that shows the completer dropdown on click/focus."""
+
+    def mousePressEvent(self, event):  # noqa: N802
+        super().mousePressEvent(event)
+        if self.completer():
+            self.completer().complete()
 
 
 class FilesystemPanel(QWidget):
@@ -105,10 +115,21 @@ class FilesystemPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._filter = QLineEdit()
+        self._filter = _FilterLineEdit()
         self._filter.setPlaceholderText("Filter… (name:x  type:x)")
         self._filter.setClearButtonEnabled(True)
-        self._filter.textChanged.connect(self._apply_filter)
+        self._filter.textChanged.connect(self._on_filter_text_changed)
+        self._filter.returnPressed.connect(self._on_filter_return)
+        self._filter_history_settings = QSettings("Crush DFIR", "Crush")
+        self._filter_history_model = QStringListModel(
+            self._filter_history_settings.value("filter_history", [], type=list)
+        )
+        _completer = QCompleter(self._filter_history_model, self._filter)
+        _completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        _completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        _completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        _completer.activated.connect(self._on_filter_return)
+        self._filter.setCompleter(_completer)
         layout.addWidget(self._filter)
 
         self._stack = QStackedWidget()
@@ -436,6 +457,28 @@ class FilesystemPanel(QWidget):
                 target = path_nodes[0] if path_nodes else node
         self._navigate_after_filter = (target, vfs)
         self._filter.clear()
+
+    def _save_filter_to_history(self, text: str = "") -> None:
+        value = (text or self._filter.text()).strip()
+        if not value:
+            return
+        history: list[str] = self._filter_history_settings.value("filter_history", [], type=list)
+        if value in history:
+            history.remove(value)
+        history.insert(0, value)
+        history = history[:30]
+        self._filter_history_settings.setValue("filter_history", history)
+        self._filter_history_model.setStringList(history)
+
+    def _on_filter_text_changed(self, text: str) -> None:
+        if not text:
+            self._pending_filter = ""
+            self._filter_timer.start()
+
+    def _on_filter_return(self) -> None:
+        self._pending_filter = self._filter.text()
+        self._filter_timer.start()
+        self._save_filter_to_history()
 
     def _apply_filter(self, text: str) -> None:
         self._pending_filter = text

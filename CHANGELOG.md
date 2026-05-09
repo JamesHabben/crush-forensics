@@ -6,52 +6,28 @@ All notable changes to Crush will be documented in this file.
 
 ### New Features
 
-- **LevelDB viewer** — LevelDB databases are now parsed and shown in a dedicated viewer with three tabs:
-  - *Overview* — MANIFEST metadata: comparator, last sequence number, log number, and files grouped by compaction level.
-  - *Files* — per-file summary table showing filename, type (Ldb / Log), compaction level, and live / deleted / unknown record counts. Files containing deleted records are colour-coded red.
-  - *Records* — all records in a single table with a filter toolbar (All / Live / Deleted / Unknown). Deleted records are shown inline in red so the examiner sees both live and deleted data in context. Columns show a UTF-8 text preview and a hex preview for both the user key and the value. Selecting a row feeds the full key + value bytes into a hex pane below the table.
-- **LevelDB cell inspector** — right-clicking any row in the Records table offers *Inspect Key…* and *Inspect Value…*, opening the shared BLOB Inspector dialog (Auto / Hex / UTF-8 / Latin-1 / Base64 / Plist / XML / Protobuf / ABX / Image decode modes).
-- **Realm Freed Data — cell inspector** — right-clicking a freed block in the Freed Data tab now offers *Inspect Block…*, opening the same BLOB Inspector dialog for that block's raw bytes.
-- **BLOB Inspector — Protobuf decode** — new *Protobuf (schema-less)* mode renders wire-decoded fields in `protoc --decode_raw` style text; also detected automatically in Auto mode when the blob is valid protobuf.
-- **BLOB Inspector — Android Binary XML (ABX) decode** — new *Android Binary XML (ABX)* mode reconstructs the XML and shows it as formatted text.
-- **BLOB Inspector — image preview** — new *Image (PNG / JPEG / GIF)* mode renders the image inline inside the inspector dialog. PNG, JPEG, and GIF are detected automatically in Auto mode via magic bytes.
+- **Recent files menu** — *File → Open Recent* lists the last 10 opened files, archives, and folders (full path shown, persisted across sessions); includes a *Clear Recent* option.
+- **Filter history** — the filesystem panel filter field remembers the last 30 used filters (persisted across sessions); click the field to browse history, or type to narrow by substring. Filter applies on Enter; picking from the dropdown applies immediately.
+- **LevelDB viewer** — LevelDB databases are parsed in a dedicated viewer:
+  - *Overview* — all `MANIFEST-*` files (active one labelled *(current)*), comparator, sequence number, and files by level.
+  - *Files* — per-file summary with size, key ranges, and live/deleted/unknown counts; deleted files highlighted red.
+  - *Records* — all records with live/deleted state, sortable *Offset* (byte position in source file), split *Key* / *Value* hex pane, state filter, free-text search, and *Export CSV…*.
+  - *Forensic columns* — full *Internal Key* (user key + 8-byte sequence/type suffix) for `.ldb`/`.sst` files; CSV exports include complete hex-encoded key and value bytes.
+  - *Cell inspector* — right-click any row for *Inspect Key…*, *Inspect Value…*, or *Inspect Internal Key…* in the BLOB Inspector.
+  - *LOG tabs* — `LOG` and `LOG.old` shown in dedicated read-only tabs with a *Find* toolbar.
+- **Realm Freed Data — cell inspector** — right-clicking a freed block now offers *Inspect Block…* in the BLOB Inspector.
+- **BLOB Inspector — new decode modes** — *Protobuf (schema-less)*, *Android Binary XML (ABX)*, *Image (PNG / JPEG / GIF)*, and *JSON* modes added; all auto-detected in Auto mode where applicable.
 
 ### Improvements
 
-- **LevelDB viewer — forensic record completeness** — three additions to every record in the Records table and CSV export:
-  - *Offset column* — the byte offset within the source file where the record begins is now shown as a sortable *Offset* column (hex display) and included in CSV exports, providing a traceable location for hex-editor cross-referencing and court testimony.
-  - *Internal Key* — for `.ldb`/`.sst` table files the full LevelDB internal key (user key + 8-byte sequence-number/type suffix) is accessible via a third *Internal Key* tab in the bottom hex pane, an *Inspect Internal Key…* right-click entry, and an *Internal Key (hex)* column in CSV exports. For log-file records the internal key equals the user key.
-  - *Full-hex CSV export* — the *User Key (hex)* and *Value (hex)* columns in CSV exports now contain the complete hex-encoded bytes; previous exports showed only the 16-byte table preview.
-- **LevelDB viewer — complete Overview tab** — the Overview tab now surfaces all database metadata:
-  - *All MANIFEST files* — every `MANIFEST-*` file in the database directory is parsed and shown, not just the latest; the active one is labelled *(current)*. Older manifests expose compaction history from before the last recovery, potentially revealing file numbers no longer present on disk.
-  - *CURRENT file* — the `CURRENT` pointer is shown as a separate entry, recording which MANIFEST the database currently considers active.
-  - *Prev log number* — the `prev_log_number` field from VersionEdit entries is now included when present, identifying the WAL log file that preceded a recovery.
-  - *Files-by-level extension fix* — files in the "Files by level" summary were previously always labelled `.ldb`; they are now shown as bare six-digit file numbers, which is correct for both `.ldb` and `.sst` databases.
-- **LevelDB viewer — Files tab key ranges** — the Files tab gains three new columns sourced directly from MANIFEST VersionEdit entries:
-  - *Size (B)* — on-disk file size as recorded in the MANIFEST for `.ldb`/`.sst` files; `—` for log files which have no MANIFEST entry.
-  - *Smallest Key / Largest Key* — the inclusive key-range boundaries of each table file, decoded as UTF-8 text where possible or hex otherwise.
-- **LevelDB viewer — LOG file tabs** — LevelDB's `LOG` and `LOG.old` operational log files are now shown in dedicated tabs (one per file that exists). Each tab displays the complete file content with no truncation in a monospace read-only view with a line count indicator and a *Find* toolbar (search field + *Next* button with wrap-around).
-- **LevelDB viewer — numeric column sorting** — the *Seq* column in the Records tab and the *Level / Total / Live / Deleted / Unknown* columns in the Files tab now sort numerically instead of lexicographically (previously `10` sorted before `2`).
-- **LevelDB viewer — record search** — a *Search* box has been added to the Records toolbar. It filters rows case-insensitively across all columns and combines with the existing state filter buttons (e.g. show only Deleted records matching a key prefix).
-- **LevelDB viewer — split hex pane** — the bottom hex pane is now a tabbed *Key* / *Value* widget. Each tab shows the raw bytes of the respective field independently, replacing the previous single pane that concatenated key and value with a text separator.
-- **LevelDB viewer — CSV export** — an *Export CSV…* button in the Records toolbar saves the currently visible rows (after state filter and search) to a UTF-8 CSV file.
-- **atime preservation in `DirectoryVFS` and `FileVFS`** — reading evidence files through the VFS no longer updates the access time of the source file:
-  - *Linux*: files are opened with `O_NOATIME`; falls back silently to a plain read if the process does not own the file or lacks `CAP_FOWNER`.
-  - *Windows*: `st_atime_ns` is saved before the read and restored via `os.utime(..., ns=...)` after; `st_ctime` (creation time on NTFS) is unaffected.
-  - *macOS*: not yet implemented (no `O_NOATIME`; `setattrlist()` approach planned).
-- **BLOB Inspector made public** — `BlobInspector` is now importable from `crush.viewers.table_viewer` so all viewers share one implementation; any improvement (new decode mode, UI fix) benefits SQLite, LevelDB, Realm, and future viewers at once.
-- **BLOB Inspector — non-blocking** — the inspector (and the hex-blob dialog) now opens as a non-modal window so the rest of the UI remains fully interactive while an inspector is open; multiple inspectors can be open simultaneously.
-- **BLOB Inspector — JSON decode** — new *JSON* mode pretty-prints the blob as formatted JSON; also detected automatically in Auto mode when the blob is valid UTF-8 JSON.
-- **Paste & Decode — inline result** — the decoded viewer now appears directly inside the Paste & Decode window (bottom pane of a splitter) instead of opening a separate tab; the dialog is non-modal so the rest of the UI remains accessible.
-- **macOS badge** — README updated to reflect that macOS support is currently source-only (no successfully tested pre-built executable).
+- **atime preservation** — `DirectoryVFS` and `FileVFS` no longer update the access time of source evidence files (Linux: `O_NOATIME`; Windows: atime restored after read; macOS: not yet implemented).
+- **BLOB Inspector — non-blocking** — opens as a non-modal window; multiple inspectors can be open simultaneously.
+- **Paste & Decode — inline result** — decoded output appears in the same window instead of a separate tab.
+- **macOS badge** — README updated to reflect source-only macOS support (no working pre-built executable).
 
 ### Testing
 
-- **Forensic timestamp preservation** — six new forensic tests verify that no parser or VFS layer modifies the timestamps of source evidence files. Covered: `DirectoryVFS`, `ZipVFS`, `TarVFS`, `SQLiteParser`, `RealmParser`, `LeveldbParser`. Each test captures timestamps before and after a parse and asserts all three are unchanged:
-  - *mtime* (modification time) — all platforms
-  - *ctime* (inode-change time on Linux/macOS, creation time on Windows) — all platforms
-  - *birth time* (`st_birthtime`) — macOS only; silently skipped on Linux and Windows where the field is not exposed by the OS
-- **Forensic atime preservation** — one new forensic test verifies that `DirectoryVFS` does not update the access time of source files. The test deliberately sets atime 200 s into the past (so `relatime` would update it on a plain read) and asserts it remains unchanged after `read()` and `peek()`. Runs on Linux and Windows only; skipped on macOS where atime preservation is not yet implemented.
+- **Forensic timestamp/atime preservation** — new tests verify that `DirectoryVFS`, `ZipVFS`, `TarVFS`, `SQLiteParser`, `RealmParser`, and `LeveldbParser` do not modify mtime, ctime, or atime of source evidence files.
 
 ---
 

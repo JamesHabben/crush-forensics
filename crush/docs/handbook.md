@@ -238,7 +238,74 @@ Extracts and displays the text content of PDF files in the Text Viewer. Scanned 
 
 ### LevelDB Viewer
 
-Opens LevelDB database directories (used by Chrome, Android apps, and iOS apps) and shows key-value records in a table. The first 2,000 records are displayed; use the search field to filter by key or value.
+Opens LevelDB database directories (used by Chrome, Android apps, and iOS apps) in a tabbed viewer.
+
+**Overview tab** — MANIFEST metadata for the database:
+- All `MANIFEST-*` files in the directory are parsed; the active one (pointed to by `CURRENT`) is labelled *(current)*. Older manifests expose compaction history from before the last recovery and may reference file numbers no longer on disk.
+- Comparator name, last sequence number, log number, and prev log number (when present).
+- Files grouped by compaction level.
+
+**Files tab** — one row per data file (`.ldb` / `.sst`) and WAL log file:
+
+| Column | Content |
+|---|---|
+| Filename | File name in the database directory |
+| Type | `Ldb` / `Log` |
+| Level | Compaction level (data files only) |
+| Size (B) | On-disk size from the MANIFEST (`—` for log files) |
+| Smallest Key / Largest Key | Inclusive key-range boundaries decoded as UTF-8 or hex |
+| Live / Deleted / Unknown | Record counts; rows with deleted records are highlighted red |
+
+**Records tab** — all records across all files in a single table. Deleted records are shown inline in red alongside live records so the examiner sees the full write history.
+
+| Column | Content |
+|---|---|
+| File | Source file |
+| Seq | LevelDB sequence number |
+| Type | `Live`, `Deleted`, or `Unknown` |
+| Offset | Byte offset of the record within the source file (hex) |
+| User Key (text) / (hex) | Key decoded as UTF-8 and as hex |
+| Value (text) / (hex) | Value decoded as UTF-8 and as hex |
+| Internal Key (hex) | Full internal key (user key + 8-byte sequence/type suffix) for `.ldb`/`.sst` records |
+
+Toolbar controls:
+
+| Control | Action |
+|---|---|
+| **All / Live / Deleted / Unknown** | Filter records by state |
+| **Search** | Case-insensitive filter across all columns; combines with the state filter |
+| **Export CSV…** | Save currently visible rows to a UTF-8 CSV file; includes full-length hex columns and the Internal Key |
+
+Selecting a row feeds the raw bytes into a tabbed *Key* / *Value* hex pane below the table. A third *Internal Key* tab shows the full internal key for `.ldb`/`.sst` records.
+
+Right-click any record row to open the [BLOB Inspector](#blob-inspector) for the key, value, or internal key of that record.
+
+**LOG tabs** — if `LOG` or `LOG.old` files exist in the directory, each gets a dedicated read-only tab showing the complete file content with a *Find* toolbar.
+
+### BLOB Inspector
+
+The BLOB Inspector is a shared decode dialog for examining raw binary fields. It opens as a non-modal window — the rest of the UI stays fully accessible and multiple inspector windows can be open at the same time.
+
+**How to open it:**
+- **SQLite viewer** — right-click any cell → **Inspect Cell…**
+- **LevelDB viewer** — right-click any record row → **Inspect Key…**, **Inspect Value…**, or **Inspect Internal Key…**
+- **Realm viewer** — right-click any freed block in the Freed Data tab → **Inspect Block…**
+
+**Decode modes:**
+
+| Mode | What it does |
+|---|---|
+| **Auto** | Tries each decoder in order and shows the first successful result; detects PNG/JPEG/GIF via magic bytes, valid Protobuf, UTF-8 JSON, XML, and plist automatically |
+| **Hex** | Raw hex dump |
+| **UTF-8** | Interprets bytes as UTF-8 text |
+| **Latin-1** | Interprets bytes as ISO-8859-1 text |
+| **Base64** | Decodes as Base64 then re-inspects the result |
+| **Plist** | Decodes as binary or XML property list |
+| **XML** | Parses as XML with pretty-printing |
+| **JSON** | Pretty-prints as formatted JSON |
+| **Protobuf (schema-less)** | Wire-format decode in `protoc --decode_raw` style |
+| **Android Binary XML (ABX)** | Reconstructs XML from Android's binary XML encoding |
+| **Image (PNG / JPEG / GIF)** | Renders the image inline |
 
 ### ABX Viewer
 
@@ -372,7 +439,7 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 
 ## Paste & Decode
 
-**Tools → Paste & Decode…** lets you paste raw binary data — copied from a hex editor, a SQLite BLOB cell, a network capture, or any other source — and open it directly in a Crush viewer without saving it to disk first.
+**Tools → Paste & Decode…** lets you paste raw binary data — copied from a hex editor, a SQLite BLOB cell, a network capture, or any other source — and inspect it directly in Crush without saving it to disk first.
 
 1. Paste hex, base64, or plain text into the input area.
 2. Set **Input encoding** to **Auto** (default) or force a specific encoding if auto-detection picks the wrong one.
@@ -393,7 +460,7 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 | Hex view (raw bytes) | Always open as raw hex, regardless of content |
 
 4. The status line shows the decoded byte count as you type — if it stays grey, the input could not be decoded with the current encoding setting.
-5. Click **Open** to open the data in a new viewer tab.
+5. Click **Open** — the decoded result appears in a viewer pane in the lower half of the same window. The dialog is non-modal so the rest of the UI remains accessible while it is open.
 
 > **Tip:** Use this to inspect a BLOB that is not a supported type for automatic chaining — for example, paste a hex dump of a custom binary format and open it as raw hex to examine its structure.
 

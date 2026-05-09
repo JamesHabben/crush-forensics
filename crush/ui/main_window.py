@@ -404,6 +404,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Open TAR archive…", self._open_tar)
         file_menu.addAction("Open folder…", self._open_folder)
         file_menu.addSeparator()
+        self._recent_menu = file_menu.addMenu("Open Recent")
+        self._rebuild_recent_menu()
+        file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit", self.close)
         exit_action.setShortcut("Ctrl+Q")
 
@@ -546,6 +549,7 @@ class MainWindow(QMainWindow):
             self._progress.close()
         self._status.showMessage(f"Loaded: {self._loading_path}")
         self._logger.info("Loaded: %s", self._loading_path)
+        self._add_to_recent_files(self._loading_path)
         if hasattr(self, "_tree_build_started"):
             elapsed = time.monotonic() - self._tree_build_started
             if hasattr(self, "_loading_vfs"):
@@ -1410,6 +1414,33 @@ class MainWindow(QMainWindow):
         default = min(8, _os.cpu_count() or 4)
         workers = self._settings.value("prescan_workers", default, type=int)
         self._fs_panel._prescan_workers = max(1, workers)
+
+    def _add_to_recent_files(self, path: str) -> None:
+        recent: list[str] = self._settings.value("recent_files", [], type=list)
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        recent = recent[:10]
+        self._settings.setValue("recent_files", recent)
+        self._rebuild_recent_menu()
+
+    def _rebuild_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        recent: list[str] = self._settings.value("recent_files", [], type=list)
+        if not recent:
+            empty = self._recent_menu.addAction("(empty)")
+            empty.setEnabled(False)
+        else:
+            for path in recent:
+                action = self._recent_menu.addAction(path)
+                action.setToolTip(path)
+                action.triggered.connect(lambda checked=False, p=path: self._load_source(p))
+            self._recent_menu.addSeparator()
+            self._recent_menu.addAction("Clear Recent", self._clear_recent_files)
+
+    def _clear_recent_files(self) -> None:
+        self._settings.setValue("recent_files", [])
+        self._rebuild_recent_menu()
 
     def _set_prescan_workers(self) -> None:
         import os as _os
