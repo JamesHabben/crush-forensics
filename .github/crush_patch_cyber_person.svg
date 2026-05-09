@@ -1,6 +1,6 @@
 <svg width="500" height="500" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>crush – Cyber Round Patch</title>
-  <desc>Round printed patch for crush-forensics. Easter eggs: wave 3 = "Just keep swimming!" in hex, wave 6 = "Annika is awesome!" in binary.</desc>
+  <desc>Round printed patch for crush-forensics.</desc>
 
   <defs>
     <clipPath id="innerClip">
@@ -28,7 +28,7 @@
       <textPath href="#w2">10110100 11001010 01010101 00110011 11110000 10101010 01100011 00110101</textPath>
     </text>
 
-    <!-- Wave 3 — EASTER EGG 1: "Just keep swimming!" in hex -->
+    <!-- Wave 3 -->
     <path id="w3" d="M 38,189 Q 85,167 138,189 Q 190,211 244,189 Q 298,167 351,189 Q 404,211 462,190" fill="none"/>
     <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#22c55e" opacity="0.4" letter-spacing="1">
       <textPath href="#w3">0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21</textPath>
@@ -46,7 +46,7 @@
       <textPath href="#w5">0x504C 0x4953 0x5420 0x5345 0x4742 0x2041 0x4258 0x4C44 0x4220 0x4845</textPath>
     </text>
 
-    <!-- Wave 6 — EASTER EGG 2: "Annika is awesome!" in binary -->
+    <!-- Wave 6 -->
     <path id="w6" d="M 38,335 Q 88,312 142,335 Q 196,358 252,335 Q 308,312 362,335 Q 416,358 462,337" fill="none"/>
     <text font-family="'Courier New',Courier,monospace" font-size="7.5" fill="#16a34a" opacity="0.42" letter-spacing="1">
       <textPath href="#w6">01000001 01101110 01101110 01101001 01101011 01100001 00100000 01101001 01110011 00100000 01100001 01110111 01100101 01110011 01101111 01101101 01100101 00100001</textPath>
@@ -92,7 +92,7 @@
   <!-- === ARC TEXT BOTTOM === -->
   <path id="botArc" d="M 65,315 A 198,198 0 0,0 435,315" fill="none"/>
   <text font-family="'Courier New', Courier, monospace" font-size="12" font-weight="600" fill="#86efac" letter-spacing="3.5">
-    <textPath href="#botArc" startOffset="50%" text-anchor="middle">DFIR WORKBENCH</textPath>
+    <textPath href="#botArc" startOffset="50%" text-anchor="middle">DIGITAL FORENSIC ANALYSIS WORKBENCH</textPath>
   </text>
 
   <!-- === TURTLE === -->

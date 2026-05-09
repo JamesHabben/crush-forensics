@@ -1,15 +1,15 @@
-<svg width="600" height="500" viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg" role="img">
+<svg width="600" height="400" viewBox="0 50 600 400" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>crush – DFIR Workbench Logo</title>
-  <desc>Full logo for crush-forensics with EAC wave, surfing turtle, wordmark and release tagline. Easter eggs: wave 1 = "Just keep swimming!" in hex, wave 4 = "Annika is awesome!" in binary.</desc>
+  <desc>Full logo for crush-forensics with EAC wave, surfing turtle, wordmark and release tagline.</desc>
 
   <!-- transparent background — works on light and dark -->
 
   <defs>
     <!-- wave paths for background text — sit below the EAC wave and turtle -->
-    <path id="lw1" d="M 0,60  Q 75,42  150,60  Q 225,78  300,60  Q 375,42  450,60  Q 525,78  600,60"/>
-    <path id="lw2" d="M 0,80  Q 80,63  160,80  Q 240,97  320,80  Q 400,63  480,80  Q 560,97  600,88"/>
-    <path id="lw3" d="M 0,100 Q 70,84  145,100 Q 220,116 295,100 Q 370,84  445,100 Q 520,116 600,104"/>
-    <path id="lw4" d="M 0,120 Q 85,103 165,120 Q 245,137 325,120 Q 405,103 480,120 Q 555,137 600,124"/>
+    <path id="lw1" d="M 0,80  Q 75,62  150,80  Q 225,98  300,80  Q 375,62  450,80  Q 525,98  600,80"/>
+    <path id="lw2" d="M 0,100 Q 80,83  160,100 Q 240,117 320,100 Q 400,83  480,100 Q 560,117 600,108"/>
+    <path id="lw3" d="M 0,120 Q 70,104 145,120 Q 220,136 295,120 Q 370,104 445,120 Q 520,136 600,124"/>
+    <path id="lw4" d="M 0,140 Q 85,123 165,140 Q 245,157 325,140 Q 405,123 480,140 Q 555,157 600,144"/>
     <path id="lw5" d="M 0,390 Q 75,373 150,390 Q 225,407 300,390 Q 375,373 450,390 Q 525,407 600,390"/>
     <path id="lw6" d="M 0,408 Q 80,392 160,408 Q 240,424 320,408 Q 400,392 480,408 Q 560,424 600,412"/>
     <path id="lw7" d="M 0,426 Q 70,410 145,426 Q 220,442 295,426 Q 370,410 445,426 Q 520,442 600,428"/>
@@ -17,44 +17,42 @@
   </defs>
 
   <!-- === WAVY DATATYPE BACKGROUND — top band === -->
-  <!-- Wave 1 — EASTER EGG: "Just keep swimming!" in hex -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.28" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.55" letter-spacing="1">
     <textPath href="#lw1">0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21 0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21</textPath>
   </text>
 
   <!-- Wave 2 — binary filler -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#16a34a" opacity="0.22" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#16a34a" opacity="0.45" letter-spacing="1">
     <textPath href="#lw2">10110100 11001010 01010101 00110011 11110000 10101010 01100011 00110101 11001010 01010110 10110001 01101001</textPath>
   </text>
 
   <!-- Wave 3 — hex format names -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.20" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.38" letter-spacing="1">
     <textPath href="#lw3">0x504C 0x4953 0x5420 0x5345 0x4742 0x2041 0x4258 0x4C44 0x4220 0x4845 0x5820 0x4A53 0x4F4E 0x5850 0x4D4C</textPath>
   </text>
 
-  <!-- Wave 4 — EASTER EGG: "Annika is awesome!" in binary -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#15803d" opacity="0.18" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#15803d" opacity="0.32" letter-spacing="1">
     <textPath href="#lw4">01000001 01101110 01101110 01101001 01101011 01100001 00100000 01101001 01110011 00100000 01100001 01110111 01100101 01110011 01101111 01101101 01100101 00100001</textPath>
   </text>
 
   <!-- === WAVY DATATYPE BACKGROUND — bottom band === -->
   <!-- Wave 5 -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.20" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.42" letter-spacing="1">
     <textPath href="#lw5">plist  sqlite  hex  json  xml  bplist  segb  abx  leveldb  realm  protobuf  tracev3  zip  tar  pdf</textPath>
   </text>
 
   <!-- Wave 6 -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#16a34a" opacity="0.16" letter-spacing="1">
-    <textPath href="#lw6">int8  []byte  float64  uuid  blob  uint32  enum  varchar  rune  timestamp  sha256  utf8  binary</textPath>
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#16a34a" opacity="0.34" letter-spacing="1">
+    <textPath href="#lw6">int8  []byte  float64  uuid  blob  uint32  enum  varchar  timestamp  sha256  utf8  binary</textPath>
   </text>
 
   <!-- Wave 7 -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.14" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#22c55e" opacity="0.28" letter-spacing="1">
     <textPath href="#lw7">magic_bytes  forensic_relevance  iOS  Android  macOS  Windows  Linux  logarchive  syslog  image</textPath>
   </text>
 
   <!-- Wave 8 -->
-  <text font-family="'Courier New',monospace" font-size="7.5" fill="#15803d" opacity="0.12" letter-spacing="1">
+  <text font-family="'Courier New',monospace" font-size="7.5" fill="#15803d" opacity="0.22" letter-spacing="1">
     <textPath href="#lw8">0x4446 0x4952 0x4353 0x4C54 0x4954 0x4543 0x4845 0x5820 0x4855 0x4E54 0x4556 0x4944</textPath>
   </text>
 
@@ -117,21 +115,21 @@
   <!-- === WORDMARK === -->
   <text x="300" y="352"
     font-family="'Courier New', Courier, monospace"
-    font-size="54" font-weight="600" fill="#22c55e" text-anchor="middle"
+    font-size="64" font-weight="600" fill="#22c55e" text-anchor="middle"
     letter-spacing="-1">crush</text>
 
   <text x="300" y="376"
     font-family="'Courier New', Courier, monospace"
-    font-size="12" fill="#86efac" text-anchor="middle" letter-spacing="4">DFIR WORKBENCH</text>
+    font-size="18" fill="#86efac" text-anchor="middle" letter-spacing="4">DIGITAL FORENSIC ANALYSIS WORKBENCH</text>
 
   <!-- === RELEASE BADGE === -->
   <rect x="178" y="392" width="244" height="30" rx="8" fill="#22c55e" opacity="0.07" stroke="#22c55e" stroke-width="0.8"/>
   <text x="300" y="406"
     font-family="'Courier New', Courier, monospace"
-    font-size="10" fill="#86efac" text-anchor="middle" letter-spacing="1.5">Riding the EAC</text>
+    font-size="14" fill="#86efac" text-anchor="middle" letter-spacing="1.5">Riding the EAC</text>
   <text x="300" y="418"
     font-family="'Courier New', Courier, monospace"
-    font-size="9" fill="#4ade80" text-anchor="middle" opacity="0.75" letter-spacing="0.8">Surfing the datatypes 🐢</text>
+    font-size="10" fill="#4ade80" text-anchor="middle" opacity="0.75" letter-spacing="0.8">Surfing the datatypes 🐢</text>
 
   <!-- wave flanks -->
   <path d="M152 404 Q160 399 168 404 Q176 409 184 404" fill="none" stroke="#22c55e" stroke-width="0.9" opacity="0.3"/>

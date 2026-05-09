@@ -83,7 +83,7 @@
   <!-- === ARC TEXT BOTTOM === -->
   <path id="botArc" d="M 65,315 A 198,198 0 0,0 435,315" fill="none"/>
   <text font-family="'Courier New', Courier, monospace" font-size="12" font-weight="600" fill="#86efac" letter-spacing="3.5">
-    <textPath href="#botArc" startOffset="50%" text-anchor="middle">DFIR WORKBENCH</textPath>
+    <textPath href="#botArc" startOffset="50%" text-anchor="middle">DIGITAL FORENSIC ANALYSIS WORKBENCH</textPath>
   </text>
 
   <!-- === TURTLE === -->

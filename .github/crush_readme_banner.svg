@@ -1,6 +1,6 @@
 <svg width="800" height="180" viewBox="0 0 800 180" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>crush – DFIR Workbench</title>
-  <desc>README banner for crush-forensics. Easter eggs: wave 1 = "Just keep swimming!" in hex, wave 2 = "Annika is awesome!" in binary.</desc>
+  <desc>README banner for crush-forensics.</desc>
 
   <defs>
     <clipPath id="bannerClip">
@@ -14,13 +14,13 @@
   <!-- === CYBER WAVE BACKGROUND — clipped === -->
   <g clip-path="url(#bannerClip)">
 
-    <!-- Wave 1 — EASTER EGG 1: "Just keep swimming!" in hex -->
+    <!-- Wave 1 -->
     <path id="w1" d="M 0,28 Q 100,14 200,28 Q 300,42 400,28 Q 500,14 600,28 Q 700,42 800,28" fill="none"/>
     <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#22c55e" opacity="0.4" letter-spacing="1">
       <textPath href="#w1">0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21 0x4A 0x75 0x73 0x74 0x20 0x6B 0x65 0x65 0x70 0x20 0x73 0x77 0x69 0x6D 0x6D 0x69 0x6E 0x67 0x21</textPath>
     </text>
 
-    <!-- Wave 2 — EASTER EGG 2: "Annika is awesome!" in binary -->
+    <!-- Wave 2 -->
     <path id="w2" d="M 0,44 Q 100,30 200,44 Q 300,58 400,44 Q 500,30 600,44 Q 700,58 800,44" fill="none"/>
     <text font-family="'Courier New',Courier,monospace" font-size="7" fill="#16a34a" opacity="0.35" letter-spacing="1">
       <textPath href="#w2">01000001 01101110 01101110 01101001 01101011 01100001 00100000 01101001 01110011 00100000 01100001 01110111 01100101 01110011 01101111 01101101 01100101 00100001</textPath>
