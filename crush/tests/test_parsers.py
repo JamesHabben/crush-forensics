@@ -583,6 +583,20 @@ def test_leveldb_binary_key_value(tmp_path: Path) -> None:
     assert records[0]["value_text"] is None
 
 
+def test_leveldb_parse_record_has_offset(tmp_path: Path) -> None:
+    db = tmp_path / "testdb"
+    _make_minimal_leveldb(db, [(b"key1", b"value1")])
+    from crush.parsers.leveldb_parser import LeveldbParser
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "testdb")
+    result = LeveldbParser().parse(node, vfs)
+    records = result.data["records"]
+    assert len(records) >= 1
+    assert "offset" in records[0]
+    assert isinstance(records[0]["offset"], int)
+    assert records[0]["offset"] >= 0
+
+
 # ---------------------------------------------------------------------------
 # BlobInspector helpers: _is_image, _render_protobuf
 # ---------------------------------------------------------------------------

@@ -18,6 +18,19 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **LevelDB viewer — forensic record completeness** — three additions to every record in the Records table and CSV export:
+  - *Offset column* — the byte offset within the source file where the record begins is now shown as a sortable *Offset* column (hex display) and included in CSV exports, providing a traceable location for hex-editor cross-referencing and court testimony.
+  - *Internal Key* — for `.ldb`/`.sst` table files the full LevelDB internal key (user key + 8-byte sequence-number/type suffix) is accessible via a third *Internal Key* tab in the bottom hex pane, an *Inspect Internal Key…* right-click entry, and an *Internal Key (hex)* column in CSV exports. For log-file records the internal key equals the user key.
+  - *Full-hex CSV export* — the *User Key (hex)* and *Value (hex)* columns in CSV exports now contain the complete hex-encoded bytes; previous exports showed only the 16-byte table preview.
+- **LevelDB viewer — complete Overview tab** — the Overview tab now surfaces all database metadata:
+  - *All MANIFEST files* — every `MANIFEST-*` file in the database directory is parsed and shown, not just the latest; the active one is labelled *(current)*. Older manifests expose compaction history from before the last recovery, potentially revealing file numbers no longer present on disk.
+  - *CURRENT file* — the `CURRENT` pointer is shown as a separate entry, recording which MANIFEST the database currently considers active.
+  - *Prev log number* — the `prev_log_number` field from VersionEdit entries is now included when present, identifying the WAL log file that preceded a recovery.
+  - *Files-by-level extension fix* — files in the "Files by level" summary were previously always labelled `.ldb`; they are now shown as bare six-digit file numbers, which is correct for both `.ldb` and `.sst` databases.
+- **LevelDB viewer — Files tab key ranges** — the Files tab gains three new columns sourced directly from MANIFEST VersionEdit entries:
+  - *Size (B)* — on-disk file size as recorded in the MANIFEST for `.ldb`/`.sst` files; `—` for log files which have no MANIFEST entry.
+  - *Smallest Key / Largest Key* — the inclusive key-range boundaries of each table file, decoded as UTF-8 text where possible or hex otherwise.
+- **LevelDB viewer — LOG file tabs** — LevelDB's `LOG` and `LOG.old` operational log files are now shown in dedicated tabs (one per file that exists). Each tab displays the complete file content with no truncation in a monospace read-only view with a line count indicator and a *Find* toolbar (search field + *Next* button with wrap-around).
 - **LevelDB viewer — numeric column sorting** — the *Seq* column in the Records tab and the *Level / Total / Live / Deleted / Unknown* columns in the Files tab now sort numerically instead of lexicographically (previously `10` sorted before `2`).
 - **LevelDB viewer — record search** — a *Search* box has been added to the Records toolbar. It filters rows case-insensitively across all columns and combines with the existing state filter buttons (e.g. show only Deleted records matching a key prefix).
 - **LevelDB viewer — split hex pane** — the bottom hex pane is now a tabbed *Key* / *Value* widget. Each tab shows the raw bytes of the respective field independently, replacing the previous single pane that concatenated key and value with a text separator.

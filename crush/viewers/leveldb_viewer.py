@@ -7,12 +7,13 @@ import csv
 from typing import Any
 
 from PySide6.QtCore import Qt, QSortFilterProxyModel
-from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QTabWidget,
@@ -29,6 +30,7 @@ from crush.viewers.tree_viewer import TreeViewer
 # Raw bytes stored alongside display text via custom item data roles
 _KEY_BYTES_ROLE = Qt.ItemDataRole.UserRole + 1
 _VAL_BYTES_ROLE = Qt.ItemDataRole.UserRole + 2
+_IKEY_BYTES_ROLE = Qt.ItemDataRole.UserRole + 3  # full internal key (LDB: includes seq/type suffix)
 
 _STATE_COLORS: dict[str, QColor] = {
     "Deleted": QColor("#cc3333"),
@@ -39,6 +41,7 @@ _COLUMNS = [
     "Seq",
     "State",
     "File",
+    "Offset",
     "User Key (text)",
     "User Key (hex)",
     "Value (text)",
@@ -184,8 +187,10 @@ class LevelDbRecordsWidget(QWidget):
         hex_tabs = QTabWidget()
         self._hex_key = HexViewer(b"")
         self._hex_val = HexViewer(b"")
+        self._hex_ikey = HexViewer(b"")
         hex_tabs.addTab(self._hex_key, "Key")
         hex_tabs.addTab(self._hex_val, "Value")
+        hex_tabs.addTab(self._hex_ikey, "Internal Key")
         splitter.addWidget(hex_tabs)
         splitter.setSizes([400, 200])
 
@@ -201,12 +206,15 @@ class LevelDbRecordsWidget(QWidget):
 
             uk_bytes: bytes = rec.get("user_key_bytes") or b""
             val_bytes: bytes = rec.get("value_bytes") or b""
+            ik_bytes: bytes = rec.get("internal_key_bytes") or b""
 
             seq = rec.get("seq", 0)
+            offset = rec.get("offset", 0)
             cells: list[tuple[str, Any]] = [
                 (str(seq), seq),
                 (state, None),
                 (rec.get("file", ""), None),
+                (f"0x{offset:08x}", offset),
                 (_text_preview(rec.get("user_key_text"), uk_bytes), None),
                 (_hex_preview(uk_bytes), None),
                 (_text_preview(rec.get("value_text"), val_bytes), None),
@@ -224,6 +232,7 @@ class LevelDbRecordsWidget(QWidget):
             # Store raw bytes for hex pane and inspector
             items[0].setData(uk_bytes, _KEY_BYTES_ROLE)
             items[0].setData(val_bytes, _VAL_BYTES_ROLE)
+            items[0].setData(ik_bytes, _IKEY_BYTES_ROLE)
 
             self._model.appendRow(items)
 
@@ -250,22 +259,47 @@ class LevelDbRecordsWidget(QWidget):
             item = self._model.item(row, 0)
             uk = item.data(_KEY_BYTES_ROLE) or b""
             val = item.data(_VAL_BYTES_ROLE) or b""
+            ik = item.data(_IKEY_BYTES_ROLE) or b""
             self._hex_key.set_data(uk)
             self._hex_val.set_data(val)
+            self._hex_ikey.set_data(ik)
 
     def _export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "", "CSV (*.csv)")
         if not path:
             return
-        headers = [self._model.headerData(i, Qt.Orientation.Horizontal) for i in range(self._model.columnCount())]
+        headers = [
+            "Seq", "State", "File", "Offset",
+            "User Key (text)", "User Key (hex)",
+            "Internal Key (hex)",
+            "Value (text)", "Value (hex)",
+            "Compressed",
+        ]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
-            for row in range(self._proxy.rowCount()):
-                writer.writerow(
-                    self._proxy.data(self._proxy.index(row, col)) or ""
-                    for col in range(self._proxy.columnCount())
-                )
+            for proxy_row in range(self._proxy.rowCount()):
+                src_row = self._proxy.mapToSource(
+                    self._proxy.index(proxy_row, 0)
+                ).row()
+                if src_row < 0 or src_row >= len(self._records):
+                    continue
+                rec = self._records[src_row]
+                uk: bytes = rec.get("user_key_bytes") or b""
+                val: bytes = rec.get("value_bytes") or b""
+                ik: bytes = rec.get("internal_key_bytes") or b""
+                writer.writerow([
+                    rec.get("seq", 0),
+                    rec.get("state", ""),
+                    rec.get("file", ""),
+                    f"0x{rec.get('offset', 0):08x}",
+                    rec.get("user_key_text") or "",
+                    uk.hex(),
+                    ik.hex(),
+                    rec.get("value_text") or "",
+                    val.hex(),
+                    "yes" if rec.get("compressed") else "no",
+                ])
 
     def _on_context_menu(self, pos) -> None:
         proxy_index = self._table.indexAt(pos)
@@ -277,15 +311,19 @@ class LevelDbRecordsWidget(QWidget):
         item = self._model.item(row, 0)
         uk: bytes = item.data(_KEY_BYTES_ROLE) or b""
         val: bytes = item.data(_VAL_BYTES_ROLE) or b""
+        ik: bytes = item.data(_IKEY_BYTES_ROLE) or b""
 
         menu = QMenu(self)
         inspect_key = menu.addAction(f"Inspect Key… ({len(uk)} B)")
         inspect_val = menu.addAction(f"Inspect Value… ({len(val)} B)")
+        inspect_ikey = menu.addAction(f"Inspect Internal Key… ({len(ik)} B)")
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
         if action == inspect_key and uk:
             BlobInspector(uk, self).show()
         elif action == inspect_val and val:
             BlobInspector(val, self).show()
+        elif action == inspect_ikey and ik:
+            BlobInspector(ik, self).show()
 
 
 class LevelDbViewer(QWidget):
@@ -303,11 +341,11 @@ class LevelDbViewer(QWidget):
 
         records: list[dict[str, Any]] = self._data.get("records", [])
         files: list[dict[str, Any]] = self._data.get("files", [])
-        manifest: dict[str, Any] = self._data.get("manifest", {})
+        manifests: dict[str, Any] = self._data.get("manifests", {})
 
         # --- Overview ---
-        if manifest:
-            tabs.addTab(TreeViewer({"MANIFEST": manifest}, tabs), "Overview")
+        if manifests:
+            tabs.addTab(TreeViewer(manifests, tabs), "Overview")
         else:
             lbl = QLabel("No MANIFEST file found.")
             lbl.setWordWrap(True)
@@ -325,24 +363,35 @@ class LevelDbViewer(QWidget):
                 f"Records ({total:,})",
             )
 
+        # --- LOG / LOG.old (full content, own tab each) ---
+        log_files: dict[str, str] = self._data.get("log_files", {})
+        for log_name, content in log_files.items():
+            if content:
+                tabs.addTab(self._build_log_tab(content, tabs), log_name)
+
         layout.addWidget(tabs)
 
     def _build_files_tab(self, files: list[dict[str, Any]], parent: QWidget) -> QWidget:
-        columns = ["File", "Type", "Level", "Total", "Live", "Deleted", "Unknown"]
+        columns = ["File", "Type", "Level", "Size (B)", "Total", "Live", "Deleted", "Unknown", "Smallest Key", "Largest Key"]
         model = QStandardItemModel(0, len(columns))
         model.setHorizontalHeaderLabels(columns)
 
         for f in files:
             level = f.get("level", -1)
             level_str = str(level) if level >= 0 else "—"
+            size = f.get("size")
+            size_str = f"{size:,}" if size is not None else "—"
             row = [
                 _make_item(f.get("name", "")),
                 _make_item(f.get("type", "")),
                 _make_item(level_str, level),
+                _make_item(size_str, size if size is not None else -1),
                 _make_item(str(f.get("total", 0)), f.get("total", 0)),
                 _make_item(str(f.get("live", 0)), f.get("live", 0)),
                 _make_item(str(f.get("deleted", 0)), f.get("deleted", 0)),
                 _make_item(str(f.get("unknown", 0)), f.get("unknown", 0)),
+                _make_item(f.get("smallest_key", "")),
+                _make_item(f.get("largest_key", "")),
             ]
             # Color files that contain deleted records
             if f.get("deleted", 0) > 0:
@@ -363,4 +412,44 @@ class LevelDbViewer(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(table)
+        return widget
+
+    def _build_log_tab(self, content: str, parent: QWidget) -> QWidget:
+        widget = QWidget(parent)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        line_count = len(content.splitlines())
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
+        toolbar.addWidget(QLabel(f"  {line_count:,} lines   "))
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("  Find: "))
+        search = QLineEdit()
+        search.setPlaceholderText("Find in log…")
+        search.setClearButtonEnabled(True)
+        search.setFixedWidth(240)
+        toolbar.addWidget(search)
+        find_next_btn = QPushButton("Next")
+        toolbar.addWidget(find_next_btn)
+        layout.addWidget(toolbar)
+
+        text_view = QPlainTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        text_view.document().setDefaultFont(QFont("Monospace", 9))
+        text_view.setPlainText(content)
+        layout.addWidget(text_view)
+
+        def find_next() -> None:
+            term = search.text()
+            if not term:
+                return
+            if not text_view.find(term):
+                text_view.moveCursor(QTextCursor.MoveOperation.Start)
+                text_view.find(term)
+
+        search.returnPressed.connect(find_next)
+        find_next_btn.clicked.connect(find_next)
         return widget

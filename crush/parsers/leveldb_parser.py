@@ -29,6 +29,15 @@ def _try_utf8(raw: bytes) -> str | None:
         return None
 
 
+def _decode_internal_key(raw: bytes) -> str:
+    """Return displayable representation of an LDB internal key (strips 8-byte seq/type suffix)."""
+    user_key = raw[:-8] if len(raw) > 8 else raw
+    text = _try_utf8(user_key)
+    if text is not None:
+        return text[:_MAX_TEXT_LEN]
+    return user_key[:32].hex() + ("…" if len(user_key) > 32 else "")
+
+
 class LeveldbParser(AbstractParser):
     SUPPORTED_EXTENSIONS: list[str] = []
     DISPLAY_NAME = "LevelDB"
@@ -61,13 +70,41 @@ class LeveldbParser(AbstractParser):
                 pass
 
     def _parse_tmp(self, node: VFSNode, vfs: VFS, tmp_dir: Path) -> ParseResult:
-        manifest_data: dict[str, Any] = {}
+        manifests_display: dict[str, Any] = {}
         file_to_level: dict[int, int] = {}
+        file_key_ranges: dict[int, dict[str, Any]] = {}
 
         try:
             with RawLevelDb(tmp_dir) as db:
+                current_fno = db.manifest.file_no if db.manifest else -1
+
                 if db.manifest:
-                    manifest_data, file_to_level = _parse_manifest(db.manifest)
+                    _, file_to_level, file_key_ranges = _parse_manifest(db.manifest)
+
+                # Parse ALL MANIFEST files for the Overview, not just the latest (#6)
+                _mfest_re = re.compile(ManifestFile.MANIFEST_FILENAME_PATTERN)
+                for mpath in sorted(tmp_dir.iterdir(), key=lambda p: p.name):
+                    if not _mfest_re.match(mpath.name):
+                        continue
+                    try:
+                        mf = ManifestFile(mpath)
+                        mdata, _, _ = _parse_manifest(mf)
+                        fno = mf.file_no
+                        mf.close()  # type: ignore[no-untyped-call]
+                        label = mpath.name + (" (current)" if fno == current_fno else "")
+                        if mdata:
+                            manifests_display[label] = mdata
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.debug("Could not parse %s: %s", mpath.name, exc)
+
+                # CURRENT file (#9)
+                current_file = tmp_dir / "CURRENT"
+                if current_file.exists():
+                    try:
+                        target = current_file.read_text(encoding="utf-8", errors="replace").strip()
+                        manifests_display["CURRENT"] = {"Active MANIFEST": target}
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.debug("Could not read CURRENT: %s", exc)
 
                 # Per-file counters: file_name → {type, level, total, live, deleted, unknown}
                 file_stats: dict[str, dict[str, Any]] = {}
@@ -111,6 +148,8 @@ class LeveldbParser(AbstractParser):
                             "seq": record.seq,
                             "state": state_name,
                             "file": fname,
+                            "offset": record.offset,
+                            "internal_key_bytes": record.key,
                             "user_key_bytes": uk,
                             "user_key_text": _try_utf8(uk),
                             "value_bytes": val,
@@ -140,6 +179,27 @@ class LeveldbParser(AbstractParser):
                 metadata={"Format": "LevelDB (parse failed)", "Parse error": str(exc)},
             )
 
+        # Merge manifest key ranges and file sizes into file_stats (#8)
+        for fstat in file_stats.values():
+            try:
+                fno = int(Path(fstat["name"]).stem, 16)
+            except ValueError:
+                continue
+            kr = file_key_ranges.get(fno)
+            fstat["size"] = kr["size"] if kr else None
+            fstat["smallest_key"] = kr["smallest"] if kr else ""
+            fstat["largest_key"] = kr["largest"] if kr else ""
+
+        # Read LOG and LOG.old in full — no truncation (#10)
+        log_files: dict[str, str] = {}
+        for log_name in ("LOG", "LOG.old"):
+            log_path = tmp_dir / log_name
+            if log_path.exists():
+                try:
+                    log_files[log_name] = log_path.read_text(encoding="utf-8", errors="replace")
+                except Exception as exc:  # noqa: BLE001
+                    _logger.debug("Could not read %s: %s", log_name, exc)
+
         total = len(records)
         live_count = sum(1 for r in records if r["state"] == "Live")
         deleted_count = sum(1 for r in records if r["state"] == "Deleted")
@@ -156,9 +216,10 @@ class LeveldbParser(AbstractParser):
             meta["Parse warning"] = parse_warning
 
         data: dict[str, Any] = {
-            "manifest": manifest_data,
+            "manifests": manifests_display,
             "files": sorted(file_stats.values(), key=lambda f: f["name"]),
             "records": records,
+            "log_files": log_files,
         }
 
         text_parts: list[str] = []
@@ -178,14 +239,17 @@ class LeveldbParser(AbstractParser):
         )
 
 
-def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, int]]:
-    """Extract summary info and file-to-level map from a ManifestFile."""
+def _parse_manifest(
+    manifest: ManifestFile,
+) -> tuple[dict[str, Any], dict[int, int], dict[int, dict[str, Any]]]:
+    """Extract summary info, file-to-level map, and per-file key ranges from a ManifestFile."""
     file_to_level: dict[int, int] = dict(manifest.file_to_level)
+    file_key_ranges: dict[int, dict[str, Any]] = {}  # fno → {size, smallest, largest}
 
-    # Walk VersionEdits to collect compaction history and metadata
     comparator: str | None = None
     last_sequence: int | None = None
     log_number: int | None = None
+    prev_log_number: int | None = None
     next_file_number: int | None = None
     compaction_history: list[dict[str, Any]] = []
 
@@ -197,8 +261,16 @@ def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, i
                 last_sequence = edit.last_sequence
             if edit.log_number is not None:
                 log_number = edit.log_number
+            if edit.prev_log_number is not None:
+                prev_log_number = edit.prev_log_number
             if edit.next_file_number is not None:
                 next_file_number = edit.next_file_number
+            for nf in edit.new_files:
+                file_key_ranges[nf.file_no] = {
+                    "size": nf.file_size,
+                    "smallest": _decode_internal_key(nf.smallest_key),
+                    "largest": _decode_internal_key(nf.largest_key),
+                }
             if edit.new_files or edit.deleted_files:
                 entry: dict[str, Any] = {}
                 if edit.new_files:
@@ -220,7 +292,7 @@ def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, i
     levels: dict[str, list[str]] = {}
     for fno, level in sorted(file_to_level.items()):
         key = f"Level {level}"
-        levels.setdefault(key, []).append(f"{fno:06x}.ldb")
+        levels.setdefault(key, []).append(f"{fno:06x}")
 
     manifest_data: dict[str, Any] = {}
     if comparator:
@@ -229,6 +301,8 @@ def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, i
         manifest_data["Last sequence"] = last_sequence
     if log_number is not None:
         manifest_data["Log number"] = log_number
+    if prev_log_number is not None:
+        manifest_data["Prev log number"] = prev_log_number
     if next_file_number is not None:
         manifest_data["Next file number"] = next_file_number
     if levels:
@@ -236,7 +310,7 @@ def _parse_manifest(manifest: ManifestFile) -> tuple[dict[str, Any], dict[int, i
     if compaction_history:
         manifest_data["Compaction history"] = compaction_history
 
-    return manifest_data, file_to_level
+    return manifest_data, file_to_level, file_key_ranges
 
 
 def _export_dir(node: VFSNode, vfs: VFS, target: Path) -> None:
