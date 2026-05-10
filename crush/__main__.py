@@ -1,8 +1,20 @@
 """Entry point."""
+import os
 import sys
+
+
+def _icon_path() -> str:
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        base = os.path.dirname(__file__)
+        return os.path.join(base, "resources", "icons", "crush_icon_128.svg")
+    return os.path.join(base, "crush", "resources", "icons", "crush_icon_128.svg")
+
 
 def main() -> None:
     import crush
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
     from crush.ui.main_window import MainWindow
     app = QApplication(sys.argv)
@@ -14,6 +26,9 @@ def main() -> None:
     app.setApplicationName("Crush")
     app.setApplicationVersion(crush.display_version())
     app.setOrganizationName("Crush DFIR")
+    icon_path = _icon_path()
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

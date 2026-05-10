@@ -16,7 +16,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -28,6 +28,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Set arch-specific variables for macOS builds
+      - name: Set macOS build vars
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            echo "MACOS_UL_BINARY=unifiedlog_iterator-aarch64-apple-darwin" >> $GITHUB_ENV
+            echo "MACOS_ARTIFACT_NAME=crush-macos" >> $GITHUB_ENV
+          else
+            echo "MACOS_UL_BINARY=unifiedlog_iterator-x86_64-apple-darwin" >> $GITHUB_ENV
+            echo "MACOS_ARTIFACT_NAME=crush-macos-intel" >> $GITHUB_ENV
+          fi
+
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -37,7 +49,8 @@ jobs:
             libegl1 \
             libxcb-xinerama0 \
             libxkbcommon-x11-0 \
-            libpulse0
+            libpulse0 \
+            librsvg2-bin
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
@@ -70,7 +83,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller Pillow
           python -m pip install .
           python -m pip install python-magic-bin
 
@@ -91,16 +104,15 @@ jobs:
       - name: Download unifiedlog_iterator binary (macOS)
         if: runner.os == 'macOS'
         run: |
-          ASSET="unifiedlog_iterator-v${UL_VERSION}-aarch64-apple-darwin.tar.gz"
+          ASSET="unifiedlog_iterator-v${UL_VERSION}-${MACOS_UL_BINARY#unifiedlog_iterator-}.tar.gz"
           URL="https://github.com/mandiant/macos-UnifiedLogs/releases/download/v${UL_VERSION}/${ASSET}"
-          mkdir -p crush/bin/unifiedlog_iterator
-          mkdir -p /tmp/ul-extract
+          mkdir -p crush/bin/unifiedlog_iterator /tmp/ul-extract
           curl -fsSL "$URL" -o /tmp/ul.tar.gz
           tar -xzf /tmp/ul.tar.gz -C /tmp/ul-extract
           find /tmp/ul-extract -name 'unifiedlog_iterator' -type f \
             | head -1 \
-            | xargs -I{} cp {} crush/bin/unifiedlog_iterator/unifiedlog_iterator-aarch64-apple-darwin
-          chmod +x crush/bin/unifiedlog_iterator/unifiedlog_iterator-aarch64-apple-darwin
+            | xargs -I{} cp {} crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}
+          chmod +x crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}
 
       - name: Download unifiedlog_iterator binary (Windows)
         if: runner.os == 'Windows'
@@ -115,6 +127,17 @@ jobs:
             | Select-Object -First 1 `
             | Copy-Item -Destination "crush\bin\unifiedlog_iterator\unifiedlog_iterator-x86_64-pc-windows-msvc.exe"
 
+      - name: Generate icon (macOS → crush.icns)
+        if: runner.os == 'macOS'
+        run: QT_QPA_PLATFORM=offscreen python scripts/make_icons.py
+
+      - name: Generate icon (Windows → crush.ico)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          set QT_QPA_PLATFORM=offscreen
+          python scripts/make_icons.py
+
       - name: Build (PyInstaller) Linux
         if: runner.os == 'Linux'
         run: |
@@ -122,6 +145,7 @@ jobs:
             --collect-all PySide6 \
             --collect-all magic \
             --add-data "crush/data/formats.db:data" \
+            --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu:crush/bin/unifiedlog_iterator/" \
             crush/__main__.py
 
@@ -129,29 +153,68 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name crush \
+            --icon crush.icns \
             --collect-all PySide6 \
             --collect-all magic \
             --add-data "crush/data/formats.db:data" \
-            --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-aarch64-apple-darwin:crush/bin/unifiedlog_iterator/" \
+            --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
+            --add-data "crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}:crush/bin/unifiedlog_iterator/" \
             crush/__main__.py
 
       - name: Build (PyInstaller) Windows
         if: runner.os == 'Windows'
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name crush `
+            --icon crush.ico `
             --collect-all PySide6 `
             --collect-all magic `
             --add-data "crush/data/formats.db;data" `
+            --add-data "crush/resources/icons/crush_icon_128.svg;crush/resources/icons/" `
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-pc-windows-msvc.exe;crush/bin/unifiedlog_iterator/" `
             crush/__main__.py
 
-      - name: Package artifact (Linux)
+      - name: Package artifact (Linux → AppImage)
         if: runner.os == 'Linux'
-        run: tar -czf crush-linux-${BUILD_ID}.tar.gz -C dist crush
+        run: |
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -O /tmp/appimagetool
+          chmod +x /tmp/appimagetool
 
-      - name: Package artifact (macOS)
+          mkdir -p AppDir
+          cp -r dist/crush AppDir/crush
+
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/crush/crush" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          cat > AppDir/crush.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Crush
+          Exec=crush
+          Icon=crush
+          Categories=Utility;Security;
+          EOF
+
+          rsvg-convert -w 256 -h 256 crush/resources/icons/crush_icon_128.svg -o AppDir/crush.png
+
+          ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run AppDir \
+            crush-linux-${BUILD_ID}.AppImage
+
+      - name: Package artifact (macOS → DMG)
         if: runner.os == 'macOS'
-        run: tar -czf crush-macos-${BUILD_ID}.tar.gz -C dist crush.app
+        run: |
+          mkdir -p /tmp/dmg-src
+          cp -r dist/crush.app /tmp/dmg-src/
+          ln -s /Applications /tmp/dmg-src/Applications
+          hdiutil create \
+            -volname "Crush ${BUILD_ID}" \
+            -srcfolder /tmp/dmg-src \
+            -ov -format UDZO \
+            "${MACOS_ARTIFACT_NAME}-${BUILD_ID}.dmg"
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
@@ -162,15 +225,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: crush-linux
-          path: crush-linux-${{ env.BUILD_ID }}.tar.gz
+          path: crush-linux-${{ env.BUILD_ID }}.AppImage
           retention-days: 1
 
       - name: Upload artifact (macOS)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: crush-macos
-          path: crush-macos-${{ env.BUILD_ID }}.tar.gz
+          name: ${{ env.MACOS_ARTIFACT_NAME }}
+          path: ${{ env.MACOS_ARTIFACT_NAME }}-${{ env.BUILD_ID }}.dmg
           retention-days: 1
 
       - name: Upload artifact (Windows)
@@ -196,6 +259,11 @@ jobs:
         with:
           name: crush-macos
 
+      - name: Download macOS Intel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: crush-macos-intel
+
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
@@ -212,12 +280,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DATE=$(date -u '+%Y-%m-%d')
-          BUILD_ID=$(ls crush-linux-*.tar.gz | sed 's/crush-linux-\(.*\)\.tar\.gz/\1/')
+          BUILD_ID=$(ls crush-linux-*.AppImage | sed 's/crush-linux-\(.*\)\.AppImage/\1/')
           gh release create nightly \
             --repo ${{ github.repository }} \
             --title "Nightly Build (${DATE})" \
             --notes "Automated nightly build from \`main\`. Not a stable release." \
             --prerelease \
-            crush-linux-${BUILD_ID}.tar.gz \
-            crush-macos-${BUILD_ID}.tar.gz \
+            crush-linux-${BUILD_ID}.AppImage \
+            crush-macos-${BUILD_ID}.dmg \
+            crush-macos-intel-${BUILD_ID}.dmg \
             crush-windows-${BUILD_ID}.zip
