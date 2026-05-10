@@ -297,12 +297,12 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p /tmp/dmg-src
-          cp -r dist/crush.app /tmp/dmg-src/
+          ditto dist/crush.app /tmp/dmg-src/crush.app
           ln -s /Applications /tmp/dmg-src/Applications
           hdiutil create \
             -volname "Crush ${BUILD_ID}" \
             -srcfolder /tmp/dmg-src \
-            -ov -format UDZO \
+            -ov -format UDBZ \
             "${MACOS_ARTIFACT_NAME}-${BUILD_ID}.dmg"
 
       - name: Package artifact (Windows)
