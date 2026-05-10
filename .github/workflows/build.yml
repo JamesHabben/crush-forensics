@@ -193,10 +193,28 @@ jobs:
             --add-data "crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}:crush/bin/unifiedlog_iterator/" \
             crush/__main__.py
 
+      - name: Strip unused Qt frameworks (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # PyInstaller 6+ bundles into _internal/; fall back to MacOS/ for older versions
+          for root in "dist/crush.app/Contents/MacOS/_internal" "dist/crush.app/Contents/MacOS"; do
+            lib="$root/PySide6/Qt/lib"
+            [ -d "$lib" ] || continue
+            for mod in \
+              QtWebEngineCore QtWebEngineWidgets QtWebEngineQuick \
+              Qt3DAnimation Qt3DCore Qt3DExtras Qt3DInput Qt3DLogic Qt3DRender \
+              QtMultimedia QtMultimediaWidgets QtBluetooth QtNfc QtSensors \
+              QtPositioning QtRemoteObjects QtSerialPort QtDataVisualization \
+              QtCharts QtQml QtQuick QtQuick3D; do
+              rm -rf "$lib/${mod}.framework"
+            done
+            find "$root" -name "QtWebEngineProcess*" -prune -exec rm -rf {} \; 2>/dev/null || true
+          done
+
       - name: Build (PyInstaller) Windows
         if: runner.os == 'Windows'
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --name crush `
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name crush `
             --icon crush.ico `
             --collect-all PySide6 `
             --collect-all magic `
@@ -272,7 +290,7 @@ jobs:
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows-${{ github.ref_name }}.zip
+        run: Compress-Archive -Path dist\\crush.exe -DestinationPath crush-windows-${{ github.ref_name }}.zip
 
       - name: Upload release asset (Linux)
         if: runner.os == 'Linux'
