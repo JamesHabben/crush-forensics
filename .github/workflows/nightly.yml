@@ -302,7 +302,7 @@ jobs:
             /tmp/crush_rw.dmg
           hdiutil attach /tmp/crush_rw.dmg -mountpoint /tmp/crush_vol
           ln -s /Applications "/tmp/crush_vol/Applications"
-          hdiutil detach /tmp/crush_vol
+          hdiutil detach /tmp/crush_vol -force
           hdiutil convert /tmp/crush_rw.dmg -format UDBZ -o "${MACOS_ARTIFACT_NAME}-${BUILD_ID}.dmg"
 
       - name: Package artifact (Windows)
