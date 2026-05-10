@@ -15,7 +15,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -214,7 +214,7 @@ jobs:
       - name: Build (PyInstaller) Windows
         if: runner.os == 'Windows'
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name crush `
+          python -m PyInstaller --noconfirm --clean --windowed --name crush `
             --icon crush.ico `
             --collect-all PySide6 `
             --collect-all magic `
@@ -290,7 +290,7 @@ jobs:
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\\crush.exe -DestinationPath crush-windows-${{ github.ref_name }}.zip
+        run: Compress-Archive -Path dist\\crush\\* -DestinationPath crush-windows-${{ github.ref_name }}.zip
 
       - name: Upload release asset (Linux)
         if: runner.os == 'Linux'
