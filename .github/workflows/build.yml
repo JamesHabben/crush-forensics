@@ -279,14 +279,14 @@ jobs:
       - name: Package artifact (macOS → DMG)
         if: runner.os == 'macOS'
         run: |
-          mkdir -p /tmp/dmg-src
-          ditto dist/crush.app /tmp/dmg-src/crush.app
-          ln -s /Applications /tmp/dmg-src/Applications
-          hdiutil create \
-            -volname "Crush ${{ github.ref_name }}" \
-            -srcfolder /tmp/dmg-src \
-            -ov -format UDBZ \
-            "${MACOS_ARTIFACT}"
+          hdiutil create -volname "Crush ${{ github.ref_name }}" \
+            -srcfolder dist/crush.app \
+            -ov -format UDRW -fs HFS+ \
+            /tmp/crush_rw.dmg
+          hdiutil attach /tmp/crush_rw.dmg -mountpoint /tmp/crush_vol
+          ln -s /Applications "/tmp/crush_vol/Applications"
+          hdiutil detach /tmp/crush_vol
+          hdiutil convert /tmp/crush_rw.dmg -format UDBZ -o "${MACOS_ARTIFACT}"
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'

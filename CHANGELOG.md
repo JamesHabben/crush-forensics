@@ -25,6 +25,18 @@ All notable changes to Crush will be documented in this file.
 - **Paste & Decode — inline result** — decoded output appears in the same window instead of a separate tab.
 - **macOS badge** — README updated to reflect source-only macOS support (no working pre-built executable).
 
+### Build / Distribution
+
+- **Native packages** — release and nightly builds now produce platform-native artifacts instead of plain archives:
+  - Linux → AppImage (self-contained, no installation required)
+  - macOS Apple Silicon → DMG with drag-to-Applications layout (`macos-latest`)
+  - macOS Intel → DMG (`macos-15-intel`; replaces deprecated `macos-13`)
+  - Windows → ZIP folder
+- **macOS DMG size** — switched to `ditto` (preserves `.framework` symlinks correctly) and `UDBZ` compression; artifact size reduced from ~1.4 GB to ~250 MB.
+- **Unused Qt modules excluded** — `QtWebEngineCore`, `Qt3D*`, `QtQml`, `QtQuick`, `QtMultimedia`, `QtBluetooth`, and several other unused modules are stripped from all bundles, significantly reducing build size.
+- **Application icon** — the Crush icon is now set as the window icon on all platforms at runtime (`setWindowIcon`); Linux bundles embed a pre-rendered 256×256 PNG; macOS bundles include `.icns`; Windows executables include `.ico`.
+- **Wayland support** — `setDesktopFileName("crush")` is called at startup so GNOME and other Wayland compositors can associate the correct icon and app-id with the running window.
+
 ### Testing
 
 - **Forensic timestamp/atime preservation** — new tests verify that `DirectoryVFS`, `ZipVFS`, `TarVFS`, `SQLiteParser`, `RealmParser`, and `LeveldbParser` do not modify mtime, ctime, or atime of source evidence files.
