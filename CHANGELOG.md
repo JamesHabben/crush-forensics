@@ -2,6 +2,27 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Open External (Default) broken in AppImage** — `QDesktopServices.openUrl` inherited the AppImage-modified `LD_LIBRARY_PATH`, causing `xdg-open` to fail silently on Linux; a global URL handler now strips AppImage environment variables before invoking `xdg-open`, fixing local file opens, directory opens, and HTTP/HTTPS links (e.g. About dialog, format info links).
+- **SQL editor fixed height** — the SQL input in the SQLite table viewer (and Realm DB via embedded table viewer) was pinned to a fixed height and could not grow when the table panel below was made smaller; it now has a minimum height of 6 lines and expands freely with the splitter.
+
+### Build / Distribution
+
+- **Native packages** — release and nightly builds now produce platform-native artifacts:
+  - Linux → AppImage (self-contained, no installation required)
+  - macOS Apple Silicon → ZIP (`macos-latest`)
+  - macOS Intel → ZIP (`macos-15-intel`; replaces deprecated `macos-13`)
+  - Windows → ZIP
+- **macOS bundle size** — switched to `ditto` (preserves `.framework` symlinks correctly); artifact size significantly reduced.
+- **Unused Qt modules excluded** — `QtWebEngineCore`, `Qt3D*`, `QtQml`, `QtQuick`, `QtMultimedia`, `QtBluetooth`, and several other unused modules are stripped from all bundles, significantly reducing build size.
+- **Application icon** — the Crush icon is now set as the window icon on all platforms at runtime (`setWindowIcon`); Linux bundles embed a pre-rendered 256×256 PNG; macOS bundles include `.icns`; Windows executables include `.ico`.
+- **Wayland support** — `setDesktopFileName("crush")` is called at startup so GNOME and other Wayland compositors can associate the correct icon and app-id with the running window.
+
+---
+
 ## [0.8.0] — 2026-05-10
 
 ### New Features
@@ -24,18 +45,6 @@ All notable changes to Crush will be documented in this file.
 - **BLOB Inspector — non-blocking** — opens as a non-modal window; multiple inspectors can be open simultaneously.
 - **Paste & Decode — inline result** — decoded output appears in the same window instead of a separate tab.
 - **macOS badge** — README updated to reflect source-only macOS support (no working pre-built executable).
-
-### Build / Distribution
-
-- **Native packages** — release and nightly builds now produce platform-native artifacts instead of plain archives:
-  - Linux → AppImage (self-contained, no installation required)
-  - macOS Apple Silicon → DMG with drag-to-Applications layout (`macos-latest`)
-  - macOS Intel → DMG (`macos-15-intel`; replaces deprecated `macos-13`)
-  - Windows → ZIP folder
-- **macOS DMG size** — switched to `ditto` (preserves `.framework` symlinks correctly) and `UDBZ` compression; artifact size reduced from ~1.4 GB to ~250 MB.
-- **Unused Qt modules excluded** — `QtWebEngineCore`, `Qt3D*`, `QtQml`, `QtQuick`, `QtMultimedia`, `QtBluetooth`, and several other unused modules are stripped from all bundles, significantly reducing build size.
-- **Application icon** — the Crush icon is now set as the window icon on all platforms at runtime (`setWindowIcon`); Linux bundles embed a pre-rendered 256×256 PNG; macOS bundles include `.icns`; Windows executables include `.ico`.
-- **Wayland support** — `setDesktopFileName("crush")` is called at startup so GNOME and other Wayland compositors can associate the correct icon and app-id with the running window.
 
 ### Testing
 

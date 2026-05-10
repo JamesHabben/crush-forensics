@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
         if choice == QMessageBox.StandardButton.Yes:
             target = Path(dest)
             open_path = target.parent if target.is_file() else target
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(open_path)))
+            self._open_local_file(open_path)
 
     def _on_export_failed(self, message: str) -> None:
         if hasattr(self, "_export_progress"):
@@ -686,7 +686,7 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes,
         )
         if choice == QMessageBox.StandardButton.Yes:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(dest).parent)))
+            self._open_local_file(Path(dest).parent)
 
     def _on_logarchive_failed(self, message: str) -> None:
         if hasattr(self, "_logarchive_progress"):
@@ -850,7 +850,7 @@ class MainWindow(QMainWindow):
     def _open_external_mode(self, node: VFSNode, vfs: VFS, mode: str) -> None:
         if node.is_dir:
             if isinstance(vfs, DirectoryVFS) and Path(node.path).exists():
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(node.path))))
+                self._open_local_file(Path(node.path))
             else:
                 QMessageBox.information(
                     self,
@@ -865,7 +865,7 @@ class MainWindow(QMainWindow):
         if mode == "choose":
             self._open_external_with_app(path)
         else:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            self._open_local_file(path)
 
     def _paste_decode(self) -> None:
         from crush.ui.paste_decode_dialog import PasteDecodeDialog
@@ -944,6 +944,26 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_logger"):
                 self._logger.error("Open external failed: %s", exc)
             return None
+
+    def _open_local_file(self, path: str | Path) -> None:
+        """Open *path* with the system default app.
+
+        On Linux, QDesktopServices.openUrl inherits the AppImage-modified
+        LD_LIBRARY_PATH and usually fails silently.  Use xdg-open directly
+        with a cleaned environment instead.
+        """
+        if sys.platform.startswith("linux"):
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")}
+            try:
+                subprocess.Popen(["xdg-open", str(path)], env=env,
+                                 close_fds=True,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return
+            except Exception as exc:
+                self._logger.warning("xdg-open failed (%s), falling back to QDesktopServices", exc)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _open_external_with_app(self, path: Path) -> None:
         title = "Choose application"
