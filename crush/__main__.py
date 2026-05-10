@@ -3,7 +3,7 @@ import os
 import sys
 
 
-def _install_xdg_url_handler(app: "QApplication") -> None:  # type: ignore[name-defined]
+def _install_xdg_url_handler(app) -> None:  # type: ignore[no-untyped-def]
     """On Linux, replace Qt's QDesktopServices URL handler with one that strips
     AppImage-injected LD_LIBRARY_PATH before calling xdg-open.  Without this,
     xdg-open inherits the AppImage library paths and silently fails to open both
@@ -30,7 +30,7 @@ def _install_xdg_url_handler(app: "QApplication") -> None:  # type: ignore[name-
 
     handler = _XdgHandler(app)
     for scheme in ("http", "https", "file"):
-        QDesktopServices.setUrlHandler(scheme, handler, "open")
+        QDesktopServices.setUrlHandler(scheme, handler, b"open")
 
 
 def _icon_path() -> str:
