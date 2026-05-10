@@ -33,10 +33,10 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
             echo "MACOS_UL_BINARY=unifiedlog_iterator-aarch64-apple-darwin" >> $GITHUB_ENV
-            echo "MACOS_ARTIFACT=crush-macos-${{ github.ref_name }}.dmg" >> $GITHUB_ENV
+            echo "MACOS_ARTIFACT=crush-macos-${{ github.ref_name }}.zip" >> $GITHUB_ENV
           else
             echo "MACOS_UL_BINARY=unifiedlog_iterator-x86_64-apple-darwin" >> $GITHUB_ENV
-            echo "MACOS_ARTIFACT=crush-macos-intel-${{ github.ref_name }}.dmg" >> $GITHUB_ENV
+            echo "MACOS_ARTIFACT=crush-macos-intel-${{ github.ref_name }}.zip" >> $GITHUB_ENV
           fi
 
       - name: Install system deps (Linux)
@@ -276,17 +276,9 @@ jobs:
           ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run AppDir \
             crush-linux-${{ github.ref_name }}.AppImage
 
-      - name: Package artifact (macOS → DMG)
+      - name: Package artifact (macOS → ZIP)
         if: runner.os == 'macOS'
-        run: |
-          hdiutil create -volname "Crush ${{ github.ref_name }}" \
-            -srcfolder dist/crush.app \
-            -ov -format UDRW -fs HFS+ \
-            /tmp/crush_rw.dmg
-          hdiutil attach /tmp/crush_rw.dmg -mountpoint /tmp/crush_vol
-          ln -s /Applications "/tmp/crush_vol/Applications"
-          hdiutil detach /tmp/crush_vol -force
-          hdiutil convert /tmp/crush_rw.dmg -format UDBZ -o "${MACOS_ARTIFACT}"
+        run: ditto -c -k --sequesterRsrc dist/crush.app "${MACOS_ARTIFACT}"
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
