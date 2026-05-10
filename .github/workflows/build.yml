@@ -110,6 +110,10 @@ jobs:
             | Select-Object -First 1 `
             | Copy-Item -Destination "crush\bin\unifiedlog_iterator\unifiedlog_iterator-x86_64-pc-windows-msvc.exe"
 
+      - name: Generate icon (Linux → crush_icon_256.png)
+        if: runner.os == 'Linux'
+        run: rsvg-convert -w 256 -h 256 crush/resources/icons/crush_icon_128.svg -o crush_icon_256.png
+
       - name: Generate icon (macOS → crush.icns)
         if: runner.os == 'macOS'
         run: QT_QPA_PLATFORM=offscreen python scripts/make_icons.py
@@ -127,8 +131,31 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --name crush \
             --collect-all PySide6 \
             --collect-all magic \
+            --exclude-module PySide6.QtWebEngineCore \
+            --exclude-module PySide6.QtWebEngineWidgets \
+            --exclude-module PySide6.QtWebEngineQuick \
+            --exclude-module PySide6.QtQml \
+            --exclude-module PySide6.QtQuick \
+            --exclude-module PySide6.QtQuick3D \
+            --exclude-module PySide6.Qt3DAnimation \
+            --exclude-module PySide6.Qt3DCore \
+            --exclude-module PySide6.Qt3DExtras \
+            --exclude-module PySide6.Qt3DInput \
+            --exclude-module PySide6.Qt3DLogic \
+            --exclude-module PySide6.Qt3DRender \
+            --exclude-module PySide6.QtMultimedia \
+            --exclude-module PySide6.QtMultimediaWidgets \
+            --exclude-module PySide6.QtBluetooth \
+            --exclude-module PySide6.QtNfc \
+            --exclude-module PySide6.QtSensors \
+            --exclude-module PySide6.QtPositioning \
+            --exclude-module PySide6.QtRemoteObjects \
+            --exclude-module PySide6.QtSerialPort \
+            --exclude-module PySide6.QtDataVisualization \
+            --exclude-module PySide6.QtCharts \
             --add-data "crush/data/formats.db:data" \
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
+            --add-data "crush_icon_256.png:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu:crush/bin/unifiedlog_iterator/" \
             crush/__main__.py
 
@@ -139,6 +166,28 @@ jobs:
             --icon crush.icns \
             --collect-all PySide6 \
             --collect-all magic \
+            --exclude-module PySide6.QtWebEngineCore \
+            --exclude-module PySide6.QtWebEngineWidgets \
+            --exclude-module PySide6.QtWebEngineQuick \
+            --exclude-module PySide6.QtQml \
+            --exclude-module PySide6.QtQuick \
+            --exclude-module PySide6.QtQuick3D \
+            --exclude-module PySide6.Qt3DAnimation \
+            --exclude-module PySide6.Qt3DCore \
+            --exclude-module PySide6.Qt3DExtras \
+            --exclude-module PySide6.Qt3DInput \
+            --exclude-module PySide6.Qt3DLogic \
+            --exclude-module PySide6.Qt3DRender \
+            --exclude-module PySide6.QtMultimedia \
+            --exclude-module PySide6.QtMultimediaWidgets \
+            --exclude-module PySide6.QtBluetooth \
+            --exclude-module PySide6.QtNfc \
+            --exclude-module PySide6.QtSensors \
+            --exclude-module PySide6.QtPositioning \
+            --exclude-module PySide6.QtRemoteObjects \
+            --exclude-module PySide6.QtSerialPort \
+            --exclude-module PySide6.QtDataVisualization \
+            --exclude-module PySide6.QtCharts \
             --add-data "crush/data/formats.db:data" \
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}:crush/bin/unifiedlog_iterator/" \
@@ -151,6 +200,28 @@ jobs:
             --icon crush.ico `
             --collect-all PySide6 `
             --collect-all magic `
+            --exclude-module PySide6.QtWebEngineCore `
+            --exclude-module PySide6.QtWebEngineWidgets `
+            --exclude-module PySide6.QtWebEngineQuick `
+            --exclude-module PySide6.QtQml `
+            --exclude-module PySide6.QtQuick `
+            --exclude-module PySide6.QtQuick3D `
+            --exclude-module PySide6.Qt3DAnimation `
+            --exclude-module PySide6.Qt3DCore `
+            --exclude-module PySide6.Qt3DExtras `
+            --exclude-module PySide6.Qt3DInput `
+            --exclude-module PySide6.Qt3DLogic `
+            --exclude-module PySide6.Qt3DRender `
+            --exclude-module PySide6.QtMultimedia `
+            --exclude-module PySide6.QtMultimediaWidgets `
+            --exclude-module PySide6.QtBluetooth `
+            --exclude-module PySide6.QtNfc `
+            --exclude-module PySide6.QtSensors `
+            --exclude-module PySide6.QtPositioning `
+            --exclude-module PySide6.QtRemoteObjects `
+            --exclude-module PySide6.QtSerialPort `
+            --exclude-module PySide6.QtDataVisualization `
+            --exclude-module PySide6.QtCharts `
             --add-data "crush/data/formats.db;data" `
             --add-data "crush/resources/icons/crush_icon_128.svg;crush/resources/icons/" `
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-pc-windows-msvc.exe;crush/bin/unifiedlog_iterator/" `
@@ -182,7 +253,7 @@ jobs:
           Categories=Utility;Security;
           EOF
 
-          rsvg-convert -w 256 -h 256 crush/resources/icons/crush_icon_128.svg -o AppDir/crush.png
+          cp crush_icon_256.png AppDir/crush.png
 
           ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run AppDir \
             crush-linux-${{ github.ref_name }}.AppImage

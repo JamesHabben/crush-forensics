@@ -5,11 +5,13 @@ import sys
 
 def _icon_path() -> str:
     if getattr(sys, "frozen", False):
-        base = sys._MEIPASS  # type: ignore[attr-defined]
-    else:
-        base = os.path.dirname(__file__)
-        return os.path.join(base, "resources", "icons", "crush_icon_128.svg")
-    return os.path.join(base, "crush", "resources", "icons", "crush_icon_128.svg")
+        base = os.path.join(sys._MEIPASS, "crush", "resources", "icons")  # type: ignore[attr-defined]
+        for name in ("crush_icon_256.png", "crush_icon_128.svg"):
+            p = os.path.join(base, name)
+            if os.path.exists(p):
+                return p
+        return ""
+    return os.path.join(os.path.dirname(__file__), "resources", "icons", "crush_icon_128.svg")
 
 
 def main() -> None:
@@ -26,6 +28,7 @@ def main() -> None:
     app.setApplicationName("Crush")
     app.setApplicationVersion(crush.display_version())
     app.setOrganizationName("Crush DFIR")
+    app.setDesktopFileName("crush")  # Wayland app-id → taskbar icon association
     icon_path = _icon_path()
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
