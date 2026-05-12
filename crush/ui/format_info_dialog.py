@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from crush.ui import open_url as _open_link
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -90,7 +91,7 @@ class FormatInfoDialog(QDialog):
             if fmt.links:
                 for label, url in fmt.links:
                     link_lbl = QLabel(f'<a href="{url}">{label}</a>')
-                    link_lbl.setOpenExternalLinks(True)
+                    link_lbl.linkActivated.connect(_open_link)
                     link_lbl.setTextInteractionFlags(
                         Qt.TextInteractionFlag.TextBrowserInteraction
                     )

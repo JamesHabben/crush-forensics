@@ -28,7 +28,7 @@ All notable changes to Crush will be documented in this file.
 ### New Features
 
 - **Recent files menu** — *File → Open Recent* lists the last 10 opened files, archives, and folders (full path shown, persisted across sessions); includes a *Clear Recent* option.
-- **Filter history** — the filesystem panel filter field remembers the last 30 used filters (persisted across sessions); click the field to browse history, or type to narrow by substring. Filter applies on Enter; picking from the dropdown applies immediately.
+- **Filter history*b* — the filesystem panel filter field remembers the last 30 used filters (persisted across sessions); click the field to browse history, or type to narrow by substring. Filter applies on Enter; picking from the dropdown applies immediately.
 - **LevelDB viewer** — LevelDB databases are parsed in a dedicated viewer:
   - *Overview* — all `MANIFEST-*` files (active one labelled *(current)*), comparator, sequence number, and files by level.
   - *Files* — per-file summary with size, key ranges, and live/deleted/unknown counts; deleted files highlighted red.

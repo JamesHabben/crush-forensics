@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 import crush
+from crush.ui import open_url as _open_link
 
 _ABOUT_HTML = f"""\
 <h2>Crush {crush.display_version()}</h2>
@@ -158,8 +159,8 @@ class AboutDialog(QDialog):
         about_layout = QVBoxLayout(about_widget)
         about_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         about_label = QLabel(_ABOUT_HTML)
-        about_label.setOpenExternalLinks(True)
         about_label.setWordWrap(True)
+        about_label.linkActivated.connect(_open_link)
         about_label.setTextFormat(Qt.TextFormat.RichText)
         about_layout.addWidget(about_label)
         about_layout.addStretch()
@@ -167,7 +168,8 @@ class AboutDialog(QDialog):
 
         # --- Acknowledgements tab ---
         ack_browser = QTextBrowser()
-        ack_browser.setOpenExternalLinks(True)
+        ack_browser.setOpenExternalLinks(False)
+        ack_browser.anchorClicked.connect(lambda url: _open_link(url.toString()))
         ack_browser.setHtml(_ack_html(ack_browser))
         tabs.addTab(ack_browser, "Acknowledgements")
 

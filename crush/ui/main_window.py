@@ -14,7 +14,7 @@ import shutil
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings, QTimer
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QPalette, QColor, QAction
+from PySide6.QtGui import QCloseEvent, QPalette, QColor, QAction
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
@@ -946,24 +946,8 @@ class MainWindow(QMainWindow):
             return None
 
     def _open_local_file(self, path: str | Path) -> None:
-        """Open *path* with the system default app.
-
-        On Linux, QDesktopServices.openUrl inherits the AppImage-modified
-        LD_LIBRARY_PATH and usually fails silently.  Use xdg-open directly
-        with a cleaned environment instead.
-        """
-        if sys.platform.startswith("linux"):
-            env = {k: v for k, v in os.environ.items()
-                   if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")}
-            try:
-                subprocess.Popen(["xdg-open", str(path)], env=env,
-                                 close_fds=True,
-                                 stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
-                return
-            except Exception as exc:
-                self._logger.warning("xdg-open failed (%s), falling back to QDesktopServices", exc)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        from crush.ui import open_url
+        open_url(QUrl.fromLocalFile(str(path)).toString())
 
     def _open_external_with_app(self, path: Path) -> None:
         title = "Choose application"
