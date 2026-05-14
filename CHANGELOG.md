@@ -11,6 +11,8 @@ All notable changes to Crush will be documented in this file.
 
 ### Bug Fixes
 
+- **SQL editor — run selected query** — selecting part of the SQL and pressing Run (or F5) was incorrectly rejected with *"Only SELECT and PRAGMA queries are allowed"*; the Qt paragraph separator (U+2029) had been dropped from the `replace()` call, causing newlines to be inserted between every character and mangling the query before the `startswith` check. Fixed by restoring `.replace("", "\n")`.
+
 - **Filter history — Enter applies typed text** — pressing Enter after typing a filter string was incorrectly committing the top history entry (most recently used filter) instead of the typed text; switching from `UnfilteredPopupCompletion` to `PopupCompletion` fixes this so the popup only shows history entries that **contain** the typed text, and Enter applies what was typed.
 
 - **Open External (Default) broken in AppImage** — `QDesktopServices.openUrl` inherited the AppImage-modified `LD_LIBRARY_PATH`, causing `xdg-open` to fail silently on Linux; a global URL handler now strips AppImage environment variables before invoking `xdg-open`, fixing local file opens, directory opens, and HTTP/HTTPS links (e.g. About dialog, format info links).

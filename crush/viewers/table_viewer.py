@@ -1275,7 +1275,7 @@ class TableViewer(QWidget):
 
     def _run_sql(self) -> None:
         cursor = self._sql_input.textCursor()
-        selected = cursor.selectedText().replace("", "\n").strip()
+        selected = cursor.selectedText().replace(" ", "\n").strip()
         sql = selected if selected else self._sql_input.toPlainText().strip()
         if not sql:
             self._sql_status.setStyleSheet("color: red;")
