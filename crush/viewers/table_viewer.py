@@ -6,12 +6,13 @@ from __future__ import annotations
 from typing import Any
 
 import csv
+import re
 import sqlite3
 import struct
 from collections import Counter
 from pathlib import Path
 
-from PySide6.QtCore import QRegularExpression, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import QRegularExpression, QSortFilterProxyModel, QStringListModel, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -23,11 +24,13 @@ from PySide6.QtGui import (
     QStandardItemModel,
     QSyntaxHighlighter,
     QTextCharFormat,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -136,15 +139,179 @@ class _SqlHighlighter(QSyntaxHighlighter):
 
 
 class _SqlEditor(QPlainTextEdit):
-    """Plain-text SQL editor that emits run_requested on F5."""
+    """Plain-text SQL editor with F5 run and context-aware identifier autocomplete."""
 
     run_requested = Signal()
+
+    # After FROM/JOIN/INTO/UPDATE/TABLE and before any clause-breaking keyword
+    # → complete table names only.
+    _TABLE_CTX_RX = re.compile(r"\b(FROM|JOIN|INTO|UPDATE|TABLE)\b", re.IGNORECASE)
+    _BREAK_CTX_RX = re.compile(
+        r"\b(SELECT|SET|WHERE|ON|HAVING|LIMIT|OFFSET|ORDER|GROUP|AND|OR|CASE|WHEN|THEN|ELSE)\b",
+        re.IGNORECASE,
+    )
+    # FROM/JOIN table_name [AS] alias  → captures (table_name, as_alias, bare_alias)
+    _ALIAS_RX = re.compile(
+        r"\b(?:FROM|JOIN)\s+(\w+)(?:\s+AS\s+(\w+)|\s+(\w+))?",
+        re.IGNORECASE,
+    )
+    _ALIAS_KW = frozenset({
+        "ON", "WHERE", "SET", "LEFT", "RIGHT", "INNER", "OUTER", "CROSS",
+        "NATURAL", "JOIN", "HAVING", "GROUP", "ORDER", "LIMIT", "OFFSET",
+        "UNION", "INTERSECT", "EXCEPT", "SELECT", "AND", "OR", "NOT",
+        "AS", "FROM", "INTO", "UPDATE", "TABLE",
+    })
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._completer: QCompleter | None = None
+        self._completer_model: QStringListModel | None = None
+        self._schema: dict[str, list[str]] = {}
+
+    def set_schema(self, schema: dict[str, list[str]]) -> None:
+        """Set the DB schema for context-aware autocomplete. schema = {table: [col, ...]}."""
+        self._schema = schema
+        if not schema:
+            return
+        all_words = sorted(
+            set(list(schema.keys()) + [c for cols in schema.values() for c in cols])
+        )
+        self._completer_model = QStringListModel(all_words, self)
+        if self._completer is not None:
+            self._completer.setParent(None)
+        self._completer = QCompleter(self._completer_model, self)
+        self._completer.setWidget(self)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._completer.activated.connect(self._insert_completion)
+
+    def _get_context(self) -> tuple[str, str, str]:
+        """Return (mode, prefix, table_name).
+
+        mode 'table'  → complete table/view names only (after FROM/JOIN/…)
+        mode 'column' → complete columns of table_name (dot notation: table.col)
+        mode 'any'    → complete tables + all columns
+        """
+        text = self.toPlainText()
+        pos = self.textCursor().position()
+
+        start = pos
+        while start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
+            start -= 1
+        prefix = text[start:pos]
+
+        # Dot notation: users.na or alias.na → complete columns of resolved table
+        if start > 0 and text[start - 1] == ".":
+            tbl_end = start - 1
+            tbl_start = tbl_end
+            while tbl_start > 0 and (text[tbl_start - 1].isalnum() or text[tbl_start - 1] == "_"):
+                tbl_start -= 1
+            identifier = text[tbl_start:tbl_end]
+            # Resolve alias (e.g. 'o' → 'orders') using FROM/JOIN declarations in the text
+            aliases = self._parse_aliases(text)
+            table_name = aliases.get(identifier.lower(), identifier)
+            return "column", prefix, table_name
+
+        # FROM/JOIN context: last table-keyword has no clause-breaking keyword after it
+        before = text[:start]
+        last_tbl_kw = None
+        for m in self._TABLE_CTX_RX.finditer(before):
+            last_tbl_kw = m
+        if last_tbl_kw and not self._BREAK_CTX_RX.search(before[last_tbl_kw.end():]):
+            return "table", prefix, ""
+
+        return "any", prefix, ""
+
+    def _parse_aliases(self, text: str) -> dict[str, str]:
+        """Return {alias_lower: table_name} for all FROM/JOIN references in text."""
+        result: dict[str, str] = {}
+        for m in self._ALIAS_RX.finditer(text):
+            table_name = m.group(1)
+            alias = m.group(2) or m.group(3)
+            if alias and alias.upper() not in self._ALIAS_KW:
+                result[alias.lower()] = table_name
+        return result
+
+    def _words_for_context(self, mode: str, table_name: str) -> list[str]:
+        if mode == "column":
+            cols = self._schema.get(table_name)
+            if cols is None:
+                for t, c in self._schema.items():
+                    if t.lower() == table_name.lower():
+                        cols = c
+                        break
+            return sorted(cols or [])
+        if mode == "table":
+            return sorted(self._schema.keys())
+        return sorted(
+            set(list(self._schema.keys()) + [c for cols in self._schema.values() for c in cols])
+        )
+
+    def _insert_completion(self, completion: str) -> None:
+        cursor = self.textCursor()
+        text = self.toPlainText()
+        pos = cursor.position()
+        start = pos
+        while start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
+            start -= 1
+        cursor.setPosition(start)
+        cursor.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        cursor.insertText(completion)
+        self.setTextCursor(cursor)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_F5:
             self.run_requested.emit()
+            return
+
+        # Let the completer popup consume its own navigation keys
+        if self._completer and self._completer.popup().isVisible():
+            if event.key() in (
+                Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Backtab,
+            ):
+                event.ignore()
+                return
+
+        super().keyPressEvent(event)
+
+        if not self._completer or not self._schema:
+            return
+
+        mode, prefix, table_name = self._get_context()
+
+        if not prefix:
+            self._completer.popup().hide()
+            return
+
+        words = self._words_for_context(mode, table_name)
+        if not words:
+            self._completer.popup().hide()
+            return
+
+        assert self._completer_model is not None
+        self._completer_model.setStringList(words)
+        self._completer.setCompletionPrefix(prefix)
+        self._completer.popup().setCurrentIndex(
+            self._completer.completionModel().index(0, 0)
+        )
+
+        if self._completer.completionCount() == 0:
+            self._completer.popup().hide()
+            return
+
+        # Show popup only when user typed an identifier char or used backspace
+        ch = event.text()
+        if (ch and (ch.isalnum() or ch == "_")) or event.key() == Qt.Key.Key_Backspace:
+            rect = self.cursorRect()
+            rect.setWidth(
+                self._completer.popup().sizeHintForColumn(0)
+                + self._completer.popup().verticalScrollBar().sizeHint().width()
+            )
+            self._completer.complete(rect)
         else:
-            super().keyPressEvent(event)
+            self._completer.popup().hide()
 
 
 _WAL_MAGIC = (0x377F0682, 0x377F0683)
@@ -712,6 +879,7 @@ class TableViewer(QWidget):
         summary = ", ".join(parts)
         self._row_count_label.setText(f"({summary})")
         self._sql_status.setText(summary)
+        self._refresh_sql_completions()
 
     def _load_db_structure(self) -> None:
         """Show all schema objects (tables, views, indexes, triggers) with structural info."""
@@ -918,8 +1086,19 @@ class TableViewer(QWidget):
         self._sql_status.setText("Double-click a row to open the raw page in the hex viewer")
 
     def _on_table_double_clicked(self, index: object) -> None:
-        """Double-click handler: open WAL frame page bytes in the hex viewer."""
-        if self._table_combo.currentText() != self._wal_label:
+        """Double-click handler: navigate to table from summary, or open WAL page in hex viewer."""
+        current = self._table_combo.currentText()
+
+        if current == self._summary_label:
+            src_row = self._proxy_model.mapToSource(
+                self._proxy_model.index(index.row(), 0)  # type: ignore[union-attr]
+            ).row()
+            name_item = self._source_model.item(src_row, 0)
+            if name_item and self._table_combo.findText(name_item.text()) >= 0:
+                self._table_combo.setCurrentText(name_item.text())
+            return
+
+        if current != self._wal_label:
             return
         if self._db_path is None or self._wal_page_size == 0:
             return
@@ -1072,6 +1251,27 @@ class TableViewer(QWidget):
             )
             self._db_conn.row_factory = sqlite3.Row
         return self._db_conn
+
+    def _refresh_sql_completions(self) -> None:
+        """Populate the SQL editor autocomplete with the full DB schema."""
+        conn = self._ensure_db()
+        if conn is None:
+            return
+        schema: dict[str, list[str]] = {}
+        try:
+            objects = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name"
+            ).fetchall()
+            for row in objects:
+                name = row["name"]
+                try:
+                    col_rows = conn.execute(f"PRAGMA table_info([{name}])").fetchall()
+                    schema[name] = [c["name"] for c in col_rows]
+                except Exception:
+                    schema[name] = []
+        except Exception:
+            pass
+        self._sql_input.set_schema(schema)
 
     def _run_sql(self) -> None:
         cursor = self._sql_input.textCursor()

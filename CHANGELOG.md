@@ -4,7 +4,14 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+### Improvements
+
+- **SQLite table viewer — summary double-click** — double-clicking a table row in the *Summary* tab now navigates directly to that table in the table viewer.
+- **SQLite table viewer — SQL autocomplete** — the SQL editor now offers context-aware identifier completion: table and view names appear after `FROM`, `JOIN`, `LEFT JOIN`, and related keywords; column names appear after `table.` or `alias.` dot notation (aliases declared in `FROM`/`JOIN` clauses are resolved automatically); all tables and columns are offered in other positions (e.g. `SELECT`, `WHERE`).
+
 ### Bug Fixes
+
+- **Filter history — Enter applies typed text** — pressing Enter after typing a filter string was incorrectly committing the top history entry (most recently used filter) instead of the typed text; switching from `UnfilteredPopupCompletion` to `PopupCompletion` fixes this so the popup only shows history entries that **contain** the typed text, and Enter applies what was typed.
 
 - **Open External (Default) broken in AppImage** — `QDesktopServices.openUrl` inherited the AppImage-modified `LD_LIBRARY_PATH`, causing `xdg-open` to fail silently on Linux; a global URL handler now strips AppImage environment variables before invoking `xdg-open`, fixing local file opens, directory opens, and HTTP/HTTPS links (e.g. About dialog, format info links).
 - **SQL editor fixed height** — the SQL input in the SQLite table viewer (and Realm DB via embedded table viewer) was pinned to a fixed height and could not grow when the table panel below was made smaller; it now has a minimum height of 6 lines and expands freely with the splitter.

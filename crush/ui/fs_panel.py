@@ -127,7 +127,7 @@ class FilesystemPanel(QWidget):
         _completer = QCompleter(self._filter_history_model, self._filter)
         _completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         _completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        _completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        _completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         _completer.activated.connect(self._on_filter_return)
         self._filter.setCompleter(_completer)
         layout.addWidget(self._filter)
