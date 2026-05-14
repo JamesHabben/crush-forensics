@@ -31,6 +31,12 @@ CI runs all three on every push. A pull request should pass all three before rev
 
 **Nightly builds** run automatically at 02:00 UTC via `nightly.yml` and produce pre-release artifacts for Linux, Windows and MacOS. The `__build__` field in `crush/__init__.py` is stamped by CI with the date and short commit SHA (e.g. `20260425-nightly-a3f9c12`); this string appears in **Help → About**. The field is empty in source checkouts — that is intentional.
 
+## Adding a parser or viewer
+
+To add support for a new file format, see the [Developer Guide](crush/docs/developer-guide.md).
+It covers the full parser and viewer architecture, step-by-step implementation, the `VFS` API,
+the `ParseResult` contract, registration, and a checklist of every file you need to touch.
+
 ## Submitting changes
 
 - Open an issue first for significant changes so we can agree on the approach before you write code.
