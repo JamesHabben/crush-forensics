@@ -20,10 +20,10 @@ def main() -> None:
     from PySide6.QtWidgets import QApplication
     from crush.ui.main_window import MainWindow
     app = QApplication(sys.argv)
-    # On Windows the native style partially ignores QPalette for menus, causing
-    # the menu background/text colors to conflict with the app theme.  Fusion is
-    # Qt's cross-platform style that honours QPalette fully on every OS.
-    if sys.platform.startswith("win"):
+    # The native style on Windows and macOS partially ignores QPalette, causing
+    # tab backgrounds, close buttons, and tree branch arrows to ignore the app
+    # theme.  Fusion is Qt's cross-platform style that honours QPalette fully.
+    if sys.platform.startswith("win") or sys.platform == "darwin":
         app.setStyle("Fusion")
     app.setApplicationName("Crush")
     app.setApplicationVersion(crush.display_version())

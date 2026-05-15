@@ -401,10 +401,12 @@ class TableViewer(QWidget):
         data: dict[str, Any],
         parent: QWidget | None = None,
         show_db_tabs: bool = True,
+        summary_nav_table: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._data = data
         self._show_db_tabs = show_db_tabs
+        self._summary_nav_table = summary_nav_table
         self._col_ts_formats: dict[int, str] = {}
         db_path_value = data.get("__db_path") if isinstance(data, dict) else None
         if isinstance(db_path_value, str) and db_path_value:
@@ -450,6 +452,7 @@ class TableViewer(QWidget):
                 else:
                     if table_names:
                         self._load_table(table_names[0])
+                    self._refresh_sql_completions()
             else:
                 if table_names:
                     self._load_table(table_names[0])
@@ -1089,7 +1092,7 @@ class TableViewer(QWidget):
         """Double-click handler: navigate to table from summary, or open WAL page in hex viewer."""
         current = self._table_combo.currentText()
 
-        if current == self._summary_label:
+        if current in (self._summary_label, self._summary_nav_table):
             src_row = self._proxy_model.mapToSource(
                 self._proxy_model.index(index.row(), 0)  # type: ignore[union-attr]
             ).row()

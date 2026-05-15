@@ -338,7 +338,7 @@ class RealmViewer(QWidget):
         tmp = _create_realm_sqlite(table_data, inactive_table_data or None)
         if tmp:
             viewer_data["__db_path"] = str(tmp)
-        return TableViewer(viewer_data, parent, show_db_tabs=False)
+        return TableViewer(viewer_data, parent, show_db_tabs=False, summary_nav_table="Summary")
 
     def _build_top_refs_tab(
         self, top_refs: dict[str, Any], parent: QWidget

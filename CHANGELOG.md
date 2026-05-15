@@ -6,10 +6,22 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **Geek theme** — a new *View → Theme → Geek* option applies a phosphor-green-on-black terminal aesthetic; the selection persists across sessions.
+- **Purple theme** — a new *View → Theme → Purple* option applies a synthwave lavender-on-deep-purple aesthetic; the selection persists across sessions.
+- **Ocean theme** — a new *View → Theme → Ocean* option applies a cyan-on-deep-navy aesthetic inspired by the app's namesake sea turtle; the selection persists across sessions.
+- **Rainbow theme** — a new *View → Theme → Rainbow* option animates the entire UI palette through the full colour spectrum using a 50 ms timer; switching to any other theme stops the animation.
+
 - **SQLite table viewer — summary double-click** — double-clicking a table row in the *Summary* tab now navigates directly to that table in the table viewer.
 - **SQLite table viewer — SQL autocomplete** — the SQL editor now offers context-aware identifier completion: table and view names appear after `FROM`, `JOIN`, `LEFT JOIN`, and related keywords; column names appear after `table.` or `alias.` dot notation (aliases declared in `FROM`/`JOIN` clauses are resolved automatically); all tables and columns are offered in other positions (e.g. `SELECT`, `WHERE`).
 
 ### Bug Fixes
+
+- **Realm viewer — SQL autocomplete missing** — the SQL editor in the Realm viewer had no autocompletion because the schema-refresh call was gated behind the SQLite-specific `show_db_tabs` flag; completions are now populated from the embedded temp database regardless of that flag.
+- **Realm viewer — double-click summary row does not navigate** — double-clicking a table row in the Realm viewer's Summary tab did nothing; the handler now also recognises the Realm viewer's own summary table as a navigation source, matching the behaviour in the SQLite viewer.
+
+- **macOS — tab close buttons invisible** — on macOS the native Qt style rendered tab close buttons in a position that was clickable but not visible; switching to the Fusion style (already used on Windows for the same reason) makes them render correctly.
+- **macOS — tabs dark in light mode** — the native macOS Qt style ignores QPalette for tab backgrounds, causing the tab bar to stay dark regardless of the selected theme; Fusion style honours QPalette fully and tabs now reflect the active light/dark theme.
+- **macOS — file-tree expand/collapse arrows barely visible in light mode** — the native macOS Qt style drew branch indicators in a colour with insufficient contrast against the light background; with Fusion style and explicit `Mid`/`Dark`/`Shadow` palette roles the arrows are clearly visible in both themes.
 
 - **SQL editor — run selected query** — selecting part of the SQL and pressing Run (or F5) was incorrectly rejected with *"Only SELECT and PRAGMA queries are allowed"*; the Qt paragraph separator (U+2029) had been dropped from the `replace()` call, causing newlines to be inserted between every character and mangling the query before the `startswith` check. Fixed by restoring `.replace("", "\n")`.
 

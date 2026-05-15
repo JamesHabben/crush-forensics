@@ -428,6 +428,10 @@ class MainWindow(QMainWindow):
         theme_menu.addAction("System default", self._set_theme_system)
         theme_menu.addAction("Light", self._set_theme_light)
         theme_menu.addAction("Dark", self._set_theme_dark)
+        theme_menu.addAction("Geek", self._set_theme_geek)
+        theme_menu.addAction("Purple", self._set_theme_purple)
+        theme_menu.addAction("Ocean", self._set_theme_ocean)
+        theme_menu.addAction("Rainbow", self._set_theme_rainbow)
 
         tools_menu = menu.addMenu("Tools")
         tools_menu.addAction("Paste & Decode…", self._paste_decode)
@@ -1289,6 +1293,7 @@ class MainWindow(QMainWindow):
         self._log_view.ensureCursorVisible()
 
     def _set_theme_system(self) -> None:
+        self._stop_rainbow_timer()
         app = QApplication.instance()
         if app is None:
             return
@@ -1359,7 +1364,12 @@ class MainWindow(QMainWindow):
                 self._logger.warning("Failed to read hex bytes for %s: %s", node.path, exc)
             return None
 
+    def _stop_rainbow_timer(self) -> None:
+        if hasattr(self, "_rainbow_timer"):
+            self._rainbow_timer.stop()
+
     def _set_theme_light(self) -> None:
+        self._stop_rainbow_timer()
         app = QApplication.instance()
         if app is None:
             return
@@ -1368,6 +1378,7 @@ class MainWindow(QMainWindow):
         self._logger.info("Theme set to light")
 
     def _set_theme_dark(self) -> None:
+        self._stop_rainbow_timer()
         app = QApplication.instance()
         if app is None:
             return
@@ -1394,6 +1405,9 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.ColorRole.MenuBar, QColor(248, 249, 251))
         if hasattr(QPalette.ColorRole, "MenuBarText"):
             pal.setColor(QPalette.ColorRole.MenuBarText, QColor(25, 25, 25))
+        pal.setColor(QPalette.ColorRole.Mid, QColor(160, 164, 170))
+        pal.setColor(QPalette.ColorRole.Dark, QColor(190, 194, 200))
+        pal.setColor(QPalette.ColorRole.Shadow, QColor(120, 124, 130))
         pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
         pal.setColor(QPalette.ColorRole.Highlight, QColor(56, 120, 255))
         pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
@@ -1403,6 +1417,14 @@ class MainWindow(QMainWindow):
         theme = self._settings.value("theme", "light")
         if theme == "dark":
             self._set_theme_dark()
+        elif theme == "geek":
+            self._set_theme_geek()
+        elif theme == "purple":
+            self._set_theme_purple()
+        elif theme == "ocean":
+            self._set_theme_ocean()
+        elif theme == "rainbow":
+            self._set_theme_rainbow()
         elif theme == "system":
             self._set_theme_system()
         else:
@@ -1482,9 +1504,183 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.ColorRole.MenuBar, QColor(32, 34, 37))
         if hasattr(QPalette.ColorRole, "MenuBarText"):
             pal.setColor(QPalette.ColorRole.MenuBarText, QColor(220, 220, 220))
+        pal.setColor(QPalette.ColorRole.Mid, QColor(65, 68, 74))
+        pal.setColor(QPalette.ColorRole.Dark, QColor(20, 22, 25))
+        pal.setColor(QPalette.ColorRole.Shadow, QColor(10, 10, 12))
         pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
         pal.setColor(QPalette.ColorRole.Highlight, QColor(64, 128, 255))
         pal.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+        return pal
+
+    def _set_theme_geek(self) -> None:
+        self._stop_rainbow_timer()
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(self._geek_palette())
+        self._settings.setValue("theme", "geek")
+        self._logger.info("Theme set to geek")
+
+    def _geek_palette(self) -> QPalette:
+        green = QColor(0, 204, 68)       # phosphor green
+        green_dim = QColor(0, 140, 46)   # dimmed green for secondary elements
+        green_dark = QColor(0, 60, 20)   # very dark green for backgrounds
+        black = QColor(4, 10, 4)         # near-black with a green tint
+        pal = QPalette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(8, 16, 8))
+        pal.setColor(QPalette.ColorRole.WindowText, green)
+        pal.setColor(QPalette.ColorRole.Base, black)
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor(10, 22, 10))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(0, 30, 10))
+        pal.setColor(QPalette.ColorRole.ToolTipText, green)
+        pal.setColor(QPalette.ColorRole.Text, green)
+        pal.setColor(QPalette.ColorRole.Button, QColor(10, 22, 10))
+        pal.setColor(QPalette.ColorRole.ButtonText, green)
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, QColor(8, 16, 8))
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, green)
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, QColor(8, 16, 8))
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, green)
+        pal.setColor(QPalette.ColorRole.Mid, green_dim)
+        pal.setColor(QPalette.ColorRole.Dark, green_dark)
+        pal.setColor(QPalette.ColorRole.Shadow, QColor(0, 30, 10))
+        pal.setColor(QPalette.ColorRole.BrightText, QColor(0, 255, 100))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 180, 60))
+        pal.setColor(QPalette.ColorRole.HighlightedText, black)
+        return pal
+
+    def _set_theme_purple(self) -> None:
+        self._stop_rainbow_timer()
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(self._purple_palette())
+        self._settings.setValue("theme", "purple")
+        self._logger.info("Theme set to purple")
+
+    def _purple_palette(self) -> QPalette:
+        lavender = QColor(190, 130, 255)    # bright lavender for primary text
+        violet = QColor(130, 80, 200)       # dimmed violet for secondary elements
+        deep = QColor(40, 10, 70)           # deep purple for backgrounds
+        black = QColor(12, 6, 20)           # near-black with purple tint
+        pal = QPalette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(20, 10, 36))
+        pal.setColor(QPalette.ColorRole.WindowText, lavender)
+        pal.setColor(QPalette.ColorRole.Base, black)
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor(22, 12, 38))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(30, 15, 50))
+        pal.setColor(QPalette.ColorRole.ToolTipText, lavender)
+        pal.setColor(QPalette.ColorRole.Text, lavender)
+        pal.setColor(QPalette.ColorRole.Button, QColor(28, 14, 48))
+        pal.setColor(QPalette.ColorRole.ButtonText, lavender)
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, QColor(20, 10, 36))
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, lavender)
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, QColor(20, 10, 36))
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, lavender)
+        pal.setColor(QPalette.ColorRole.Mid, violet)
+        pal.setColor(QPalette.ColorRole.Dark, deep)
+        pal.setColor(QPalette.ColorRole.Shadow, QColor(8, 4, 16))
+        pal.setColor(QPalette.ColorRole.BrightText, QColor(220, 160, 255))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(150, 80, 230))
+        pal.setColor(QPalette.ColorRole.HighlightedText, black)
+        return pal
+
+    def _set_theme_ocean(self) -> None:
+        self._stop_rainbow_timer()
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(self._ocean_palette())
+        self._settings.setValue("theme", "ocean")
+        self._logger.info("Theme set to ocean")
+
+    def _ocean_palette(self) -> QPalette:
+        cyan = QColor(0, 210, 200)          # sunlit ocean surface — primary text
+        cyan_dim = QColor(0, 140, 140)      # deeper water — secondary elements
+        navy = QColor(0, 30, 60)            # deep ocean — backgrounds
+        black = QColor(2, 10, 20)           # abyss — near-black with ocean tint
+        pal = QPalette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(4, 18, 38))
+        pal.setColor(QPalette.ColorRole.WindowText, cyan)
+        pal.setColor(QPalette.ColorRole.Base, black)
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor(6, 22, 44))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(0, 24, 48))
+        pal.setColor(QPalette.ColorRole.ToolTipText, cyan)
+        pal.setColor(QPalette.ColorRole.Text, cyan)
+        pal.setColor(QPalette.ColorRole.Button, QColor(6, 24, 48))
+        pal.setColor(QPalette.ColorRole.ButtonText, cyan)
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, QColor(4, 18, 38))
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, cyan)
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, QColor(4, 18, 38))
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, cyan)
+        pal.setColor(QPalette.ColorRole.Mid, cyan_dim)
+        pal.setColor(QPalette.ColorRole.Dark, navy)
+        pal.setColor(QPalette.ColorRole.Shadow, QColor(0, 10, 24))
+        pal.setColor(QPalette.ColorRole.BrightText, QColor(100, 240, 255))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 160, 180))
+        pal.setColor(QPalette.ColorRole.HighlightedText, black)
+        return pal
+
+    def _set_theme_rainbow(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._settings.setValue("theme", "rainbow")
+        self._logger.info("Theme set to rainbow")
+        if not hasattr(self, "_rainbow_timer"):
+            self._rainbow_timer = QTimer(self)
+            self._rainbow_timer.timeout.connect(self._step_rainbow)
+            self._rainbow_hue = 0.0
+        self._rainbow_timer.start(50)
+
+    def _step_rainbow(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._rainbow_hue = (self._rainbow_hue + 0.004) % 1.0
+        app.setPalette(self._rainbow_palette(self._rainbow_hue))
+
+    def _rainbow_palette(self, hue: float) -> QPalette:
+        text = QColor.fromHsvF(hue, 0.85, 1.0)
+        dim = QColor.fromHsvF((hue + 0.05) % 1.0, 0.6, 0.55)
+        bg = QColor.fromHsvF(hue, 0.25, 0.09)
+        base = QColor.fromHsvF(hue, 0.18, 0.06)
+        highlight = QColor.fromHsvF((hue + 0.5) % 1.0, 0.9, 0.95)
+        pal = QPalette()
+        pal.setColor(QPalette.ColorRole.Window, bg)
+        pal.setColor(QPalette.ColorRole.WindowText, text)
+        pal.setColor(QPalette.ColorRole.Base, base)
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor.fromHsvF(hue, 0.2, 0.10))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, bg)
+        pal.setColor(QPalette.ColorRole.ToolTipText, text)
+        pal.setColor(QPalette.ColorRole.Text, text)
+        pal.setColor(QPalette.ColorRole.Button, QColor.fromHsvF(hue, 0.20, 0.11))
+        pal.setColor(QPalette.ColorRole.ButtonText, text)
+        if hasattr(QPalette.ColorRole, "Menu"):
+            pal.setColor(QPalette.ColorRole.Menu, bg)
+        if hasattr(QPalette.ColorRole, "MenuText"):
+            pal.setColor(QPalette.ColorRole.MenuText, text)
+        if hasattr(QPalette.ColorRole, "MenuBar"):
+            pal.setColor(QPalette.ColorRole.MenuBar, bg)
+        if hasattr(QPalette.ColorRole, "MenuBarText"):
+            pal.setColor(QPalette.ColorRole.MenuBarText, text)
+        pal.setColor(QPalette.ColorRole.Mid, dim)
+        pal.setColor(QPalette.ColorRole.Dark, QColor.fromHsvF(hue, 0.30, 0.07))
+        pal.setColor(QPalette.ColorRole.Shadow, QColor.fromHsvF(hue, 0.20, 0.04))
+        pal.setColor(QPalette.ColorRole.BrightText, QColor.fromHsvF((hue + 0.08) % 1.0, 1.0, 1.0))
+        pal.setColor(QPalette.ColorRole.Highlight, highlight)
+        pal.setColor(QPalette.ColorRole.HighlightedText, base)
         return pal
 
 
