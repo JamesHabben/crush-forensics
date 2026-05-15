@@ -13,12 +13,12 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-_logger = logging.getLogger(__name__)
-
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
 from crush.third_party.ccl_segb import ccl_segb1, ccl_segb2
 from crush.third_party.ccl_segb.ccl_segb_common import decode_cocoa_time
+
+_logger = logging.getLogger(__name__)
 
 _COLUMNS_V1 = [
     "Index", "Offset", "State",
@@ -323,6 +323,7 @@ def _parse_protobuf(data: bytes) -> dict[int, Any]:
         wire_type = tag & 0x7
         if field_num == 0 or field_num >= (1 << 29):
             break
+        val: Any
         if wire_type == 0:  # varint
             val, pos = _read_varint(data, pos)
             if val is None:
