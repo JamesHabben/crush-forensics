@@ -276,8 +276,8 @@ def test_realm_blob_leaf_decoding() -> None:
     result = _read_blob_leaf(raw, COL_OFF, len(raw), expected_rows=2)
     assert result is not None
     assert len(result) == 2
-    assert result[0] == "<blob 2B: dead>"
-    assert result[1] == "<blob 3B: beefff>"
+    assert result[0] == ("<blob 2B: dead>", b"\xde\xad")
+    assert result[1] == ("<blob 3B: beefff>", b"\xbe\xef\xff")
 
 
 def test_realm_string_leaf_rejects_blob_offsets() -> None:
@@ -659,3 +659,146 @@ def test_render_protobuf_bytes_value() -> None:
     assert "2:" in result           # field number present
     assert "…" in result            # truncation marker for > 32 bytes
     assert "00010203" in result     # hex content starts correctly
+
+
+# ---------------------------------------------------------------------------
+# SEGB protobuf decoder tests
+# ---------------------------------------------------------------------------
+
+def _varint(v: int) -> bytes:
+    """Encode a single unsigned varint."""
+    out = []
+    while v > 127:
+        out.append((v & 0x7F) | 0x80)
+        v >>= 7
+    out.append(v)
+    return bytes(out)
+
+
+def _proto_field(field_num: int, wire_type: int, payload: bytes) -> bytes:
+    return _varint((field_num << 3) | wire_type) + payload
+
+
+def test_parse_protobuf_varint_field() -> None:
+    """Basic varint field is decoded correctly."""
+    from crush.parsers.segb_parser import _parse_protobuf
+    data = _proto_field(2, 0, _varint(42))
+    result = _parse_protobuf(data)
+    assert result[2] == 42
+
+
+def test_parse_protobuf_string_field() -> None:
+    """Length-delimited UTF-8 field is decoded as str."""
+    from crush.parsers.segb_parser import _parse_protobuf
+    s = b"com.apple.Preferences"
+    data = _proto_field(2, 2, _varint(len(s)) + s)
+    result = _parse_protobuf(data)
+    assert result[2] == "com.apple.Preferences"
+
+
+def test_parse_protobuf_repeated_fields() -> None:
+    """Same field number appearing twice is collected into a list."""
+    from crush.parsers.segb_parser import _parse_protobuf
+    data = _proto_field(1, 0, _varint(10)) + _proto_field(1, 0, _varint(20))
+    result = _parse_protobuf(data)
+    assert result[1] == [10, 20]
+
+
+def test_parse_protobuf_high_field_number() -> None:
+    """Field numbers above 200 (old hard limit) are now parsed correctly."""
+    from crush.parsers.segb_parser import _parse_protobuf
+    data = _proto_field(750, 0, _varint(99))
+    result = _parse_protobuf(data)
+    assert 750 in result
+    assert result[750] == 99
+
+
+def test_parse_protobuf_multiple_fields() -> None:
+    """Multiple different field numbers are all decoded."""
+    from crush.parsers.segb_parser import _parse_protobuf
+    s = b"hello"
+    data = (
+        _proto_field(1, 0, _varint(7))
+        + _proto_field(2, 2, _varint(len(s)) + s)
+        + _proto_field(300, 0, _varint(1))
+    )
+    result = _parse_protobuf(data)
+    assert result[1] == 7
+    assert result[2] == "hello"
+    assert result[300] == 1
+
+
+def test_proto_to_json_basic() -> None:
+    """Simple protobuf payload serialises to valid JSON."""
+    import json
+    from crush.parsers.segb_parser import _proto_to_json
+    s = b"com.apple.test"
+    data = _proto_field(2, 2, _varint(len(s)) + s)
+    j = _proto_to_json(data)
+    obj = json.loads(j)
+    assert obj["2"] == "com.apple.test"
+
+
+def test_proto_to_json_repeated_fields_become_array() -> None:
+    """Repeated fields are stored as JSON arrays."""
+    import json
+    from crush.parsers.segb_parser import _proto_to_json
+    data = _proto_field(1, 0, _varint(10)) + _proto_field(1, 0, _varint(20))
+    obj = json.loads(_proto_to_json(data))
+    assert obj["1"] == [10, 20]
+
+
+def test_proto_to_json_always_valid_json() -> None:
+    """Garbage input always returns valid (empty) JSON, never raises."""
+    import json
+    from crush.parsers.segb_parser import _proto_to_json
+    for bad in (b"", b"\xff\xff\xff", b"\x00" * 20):
+        result = _proto_to_json(bad)
+        obj = json.loads(result)   # must not raise
+        assert isinstance(obj, dict)
+
+
+def test_render_proto_payload_skips_undecodable_blobs() -> None:
+    """Binary blobs that cannot be sub-parsed are omitted from display."""
+    from crush.parsers.segb_parser import _render_proto_payload
+    binary = b"\xde\xad\xbe\xef"
+    data = _proto_field(5, 2, _varint(len(binary)) + binary)
+    result = _render_proto_payload(data)
+    # field 5 should be absent (undecodable blob → None → skipped)
+    assert "5" not in result
+
+
+def test_render_proto_payload_repeated_fields() -> None:
+    """Repeated fields appear in the rendered output."""
+    from crush.parsers.segb_parser import _render_proto_payload
+    data = _proto_field(3, 0, _varint(1)) + _proto_field(3, 0, _varint(2))
+    result = _render_proto_payload(data)
+    assert result  # non-empty
+    assert "3" in result
+
+
+def test_create_segb_sqlite_payload_columns() -> None:
+    """SQLite DB has both Payload (rendered text) and Payload JSON columns."""
+    import json
+    import sqlite3
+    from crush.parsers.segb_parser import _create_segb_sqlite, _COLUMNS_V1
+    s = b"com.apple.test"
+    raw = _proto_field(2, 2, _varint(len(s)) + s)
+    rendered = "2: \"com.apple.test\""
+    rows = [
+        [0, 0, "Current", "2024-01-01", "2024-01-01", 0, 0, True,
+         len(raw), "com.apple.test", "", "", (rendered, raw)],
+    ]
+    path = _create_segb_sqlite(_COLUMNS_V1, rows)
+    assert path is not None
+    conn = sqlite3.connect(str(path))
+    cols = [r[1] for r in conn.execute('PRAGMA table_info("SEGB")').fetchall()]
+    assert "Payload" in cols
+    assert "Payload JSON" in cols
+    payload_val = conn.execute('SELECT "Payload" FROM SEGB').fetchone()[0]
+    assert payload_val == rendered
+    payload_json = conn.execute('SELECT "Payload JSON" FROM SEGB').fetchone()[0]
+    obj = json.loads(payload_json)
+    assert obj.get("2") == "com.apple.test"
+    conn.close()
+    path.unlink(missing_ok=True)

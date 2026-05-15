@@ -6,42 +6,29 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
-- **Geek theme** — a new *View → Theme → Geek* option applies a phosphor-green-on-black terminal aesthetic; the selection persists across sessions.
-- **Purple theme** — a new *View → Theme → Purple* option applies a synthwave lavender-on-deep-purple aesthetic; the selection persists across sessions.
-- **Ocean theme** — a new *View → Theme → Ocean* option applies a cyan-on-deep-navy aesthetic inspired by the app's namesake sea turtle; the selection persists across sessions.
-- **Rainbow theme** — a new *View → Theme → Rainbow* option animates the entire UI palette through the full colour spectrum using a 50 ms timer; switching to any other theme stops the animation.
-- **Custom theme snapshot** — while rainbow is running a *⏸ Snapshot* button appears in the status bar; clicking it pauses the animation, prompts for a name, and saves the current colour as a named custom theme entry in *View → Theme*; the theme persists across restarts; cancelling the dialog resumes the animation.
-
-- **SQLite table viewer — summary double-click** — double-clicking a table row in the *Summary* tab now navigates directly to that table in the table viewer.
-- **SQLite table viewer — SQL autocomplete** — the SQL editor now offers context-aware identifier completion: table and view names appear after `FROM`, `JOIN`, `LEFT JOIN`, and related keywords; column names appear after `table.` or `alias.` dot notation (aliases declared in `FROM`/`JOIN` clauses are resolved automatically); all tables and columns are offered in other positions (e.g. `SELECT`, `WHERE`).
+- **New themes** — *Geek* (phosphor-green terminal), *Purple* (synthwave), and *Ocean* (cyan/navy) added under *View → Theme*; all persist across sessions.
+- **Rainbow theme + custom snapshot** — *View → Theme → Rainbow* cycles the UI palette through the full colour spectrum; a *⏸ Snapshot* button in the status bar lets you pause, name, and save the current hue as a permanent custom theme entry.
+- **SEGB / Biome viewer** — complete forensic overhaul of the SEGB v1/v2 parser:
+  - Protobuf payloads decoded automatically: Cocoa timestamps shown as ISO datetimes, nested messages expanded inline, full field-number range supported (up to 2²⁹−1), repeated fields collected into arrays.
+  - Backing SQLite database created on open with autocomplete-enabled SQL editor. `Payload` column shows human-readable text; `Payload JSON` column enables `json_extract("Payload JSON", '$.N')` field queries (nested: `$.N.M`, repeated: `$.N[i]`).
+  - Raw protobuf bytes always accessible via Blob Inspector on double-click.
+- **Realm / SQLite viewers** — BLOB cells now expose raw bytes to the Blob Inspector on double-click; SQL autocomplete and summary-tab navigation work in the Realm viewer.
+- **SQLite viewer — SQL autocomplete** — context-aware completion for table/view names after `FROM`/`JOIN` and column names after dot notation; aliases resolved automatically.
+- **SQLite viewer — summary navigation** — double-clicking a table row in the Summary tab jumps directly to that table.
 
 ### Bug Fixes
 
-- **Realm viewer — SQL autocomplete missing** — the SQL editor in the Realm viewer had no autocompletion because the schema-refresh call was gated behind the SQLite-specific `show_db_tabs` flag; completions are now populated from the embedded temp database regardless of that flag.
-- **Realm viewer — double-click summary row does not navigate** — double-clicking a table row in the Realm viewer's Summary tab did nothing; the handler now also recognises the Realm viewer's own summary table as a navigation source, matching the behaviour in the SQLite viewer.
-
-- **macOS — tab close buttons invisible** — on macOS the native Qt style rendered tab close buttons in a position that was clickable but not visible; switching to the Fusion style (already used on Windows for the same reason) makes them render correctly.
-- **macOS — tabs dark in light mode** — the native macOS Qt style ignores QPalette for tab backgrounds, causing the tab bar to stay dark regardless of the selected theme; Fusion style honours QPalette fully and tabs now reflect the active light/dark theme.
-- **macOS — file-tree expand/collapse arrows barely visible in light mode** — the native macOS Qt style drew branch indicators in a colour with insufficient contrast against the light background; with Fusion style and explicit `Mid`/`Dark`/`Shadow` palette roles the arrows are clearly visible in both themes.
-
-- **SQL editor — run selected query** — selecting part of the SQL and pressing Run (or F5) was incorrectly rejected with *"Only SELECT and PRAGMA queries are allowed"*; the Qt paragraph separator (U+2029) had been dropped from the `replace()` call, causing newlines to be inserted between every character and mangling the query before the `startswith` check. Fixed by restoring `.replace("", "\n")`.
-
-- **Filter history — Enter applies typed text** — pressing Enter after typing a filter string was incorrectly committing the top history entry (most recently used filter) instead of the typed text; switching from `UnfilteredPopupCompletion` to `PopupCompletion` fixes this so the popup only shows history entries that **contain** the typed text, and Enter applies what was typed.
-
-- **Open External (Default) broken in AppImage** — `QDesktopServices.openUrl` inherited the AppImage-modified `LD_LIBRARY_PATH`, causing `xdg-open` to fail silently on Linux; a global URL handler now strips AppImage environment variables before invoking `xdg-open`, fixing local file opens, directory opens, and HTTP/HTTPS links (e.g. About dialog, format info links).
-- **SQL editor fixed height** — the SQL input in the SQLite table viewer (and Realm DB via embedded table viewer) was pinned to a fixed height and could not grow when the table panel below was made smaller; it now has a minimum height of 6 lines and expands freely with the splitter.
+- **macOS rendering** — tab close buttons, tab colours, and file-tree expand arrows all rendered incorrectly with the native Qt style; switching to Fusion style (already used on Windows) fixes all three.
+- **SQL editor — run selected query** — running a selection was rejected with *"Only SELECT queries allowed"* due to a Unicode paragraph-separator stripping bug; fixed.
+- **Filter history — Enter key** — pressing Enter committed the top history suggestion instead of the typed text; fixed by switching completion mode.
+- **AppImage — Open External broken** — `xdg-open` failed silently because AppImage environment variables leaked into the subprocess; stripped before invocation.
+- **SQL editor — fixed height** — the SQL input could not grow when the panel below was resized; now expands freely with a 6-line minimum.
 
 ### Build / Distribution
 
-- **Native packages** — release and nightly builds now produce platform-native artifacts:
-  - Linux → AppImage (self-contained, no installation required)
-  - macOS Apple Silicon → ZIP (`macos-latest`)
-  - macOS Intel → ZIP (`macos-15-intel`; replaces deprecated `macos-13`)
-  - Windows → ZIP
-- **macOS bundle size** — switched to `ditto` (preserves `.framework` symlinks correctly); artifact size significantly reduced.
-- **Unused Qt modules excluded** — `QtWebEngineCore`, `Qt3D*`, `QtQml`, `QtQuick`, `QtMultimedia`, `QtBluetooth`, and several other unused modules are stripped from all bundles, significantly reducing build size.
-- **Application icon** — the Crush icon is now set as the window icon on all platforms at runtime (`setWindowIcon`); Linux bundles embed a pre-rendered 256×256 PNG; macOS bundles include `.icns`; Windows executables include `.ico`.
-- **Wayland support** — `setDesktopFileName("crush")` is called at startup so GNOME and other Wayland compositors can associate the correct icon and app-id with the running window.
+- **Native packages** — Linux AppImage, macOS ZIP (Apple Silicon + Intel), Windows ZIP produced by CI.
+- **Bundle size** — unused Qt modules stripped; macOS artifacts use `ditto` to preserve framework symlinks.
+- **Application icon** — window icon set at runtime on all platforms; Wayland app-id registered via `setDesktopFileName`.
 
 ---
 

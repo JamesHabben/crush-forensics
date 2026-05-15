@@ -527,7 +527,7 @@ def _read_blob_leaf(
     col_offset: int,
     file_size: int,
     expected_rows: int | None = None,
-) -> list[str | None] | None:
+) -> list[str | tuple[str, bytes] | None] | None:
     """Parse a Realm binary/blob-column leaf node at *col_offset*.
 
     Blob columns use the same 3-entry ref-array structure as strings, but the
@@ -595,7 +595,7 @@ def _read_blob_leaf(
             if byte_i < len(null_payload):
                 null_bits[i] = bool((null_payload[byte_i] >> bit_i) & 1)
 
-    results: list[str | None] = []
+    results: list[str | tuple[str, bytes] | None] = []
     for i in range(row_count):
         if null_bits[i]:
             results.append(None)
@@ -606,7 +606,8 @@ def _read_blob_leaf(
             results.append(None)
             continue
         chunk = blob[start:end]
-        results.append(f"<blob {len(chunk)}B: {chunk[:16].hex()}" + ("…" if len(chunk) > 16 else "") + ">")
+        preview = f"<blob {len(chunk)}B: {chunk[:16].hex()}" + ("…" if len(chunk) > 16 else "") + ">"
+        results.append((preview, chunk))
 
     return results
 

@@ -1082,6 +1082,7 @@ class MainWindow(QMainWindow):
                 result.sub_nodes,  # type: ignore[union-attr]
                 merged,
                 result.text_index,  # type: ignore[union-attr]
+                result.viewer_hints,  # type: ignore[union-attr]
             )
         except Exception:
             return result

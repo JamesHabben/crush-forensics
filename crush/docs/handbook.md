@@ -40,6 +40,23 @@ All panels are dockable and can be floated, resized, or hidden via **View** menu
 
 ---
 
+## Themes
+
+Choose a colour theme under **View → Theme**. The selection persists across sessions.
+
+| Theme | Description |
+|---|---|
+| **Light** | Default light palette |
+| **Dark** | Default dark palette |
+| **Geek** | Phosphor-green on black — terminal aesthetic |
+| **Purple** | Synthwave lavender on deep purple |
+| **Ocean** | Cyan on deep navy |
+| **Rainbow** | Animates the full colour spectrum continuously |
+
+**Custom theme snapshot:** while Rainbow is running, a *⏸ Snapshot* button appears in the status bar. Click it to pause the animation, enter a name, and save the current hue as a named custom theme entry in *View → Theme*. The saved theme persists across restarts.
+
+---
+
 ## Filesystem Panel
 
 The left panel shows the loaded archive or folder as a tree.
@@ -99,7 +116,7 @@ The table dropdown at the top switches between database tables, views, and four 
 
 #### Generated views
 
-**Summary (generated)** — the default view when a database is opened. Lists every table and view with its row count. The status line shows the full schema object count (tables, views, indexes, triggers) at a glance.
+**Summary (generated)** — the default view when a database is opened. Lists every table and view with its row count. The status line shows the full schema object count (tables, views, indexes, triggers) at a glance. Double-click any row to navigate directly to that table.
 
 **DB Structure (generated)** — lists all schema objects (tables, views, indexes, triggers) with structural details:
 
@@ -148,6 +165,7 @@ The SQL bar below the toolbar accepts any `SELECT`, `WITH`, or `PRAGMA` statemen
 | Execute query | Click **Run** or press **F5** |
 | Execute selected text only | Highlight a fragment in the SQL editor and press **F5** or click **Run** — only the selection is sent |
 | Syntax highlighting | Keywords, strings, numbers, and comments are highlighted; colours adapt to the active light/dark theme |
+| Autocomplete | Press **Tab** or **Ctrl+Space** — table and view names are suggested after `FROM`/`JOIN`; column names are suggested after `table.` dot notation; aliases are resolved automatically |
 | Resize SQL vs. results | Drag the splitter between the SQL editor and the results table |
 
 Status feedback appears below the input field: red on error (with the error message), default colour on success.
@@ -315,6 +333,33 @@ Decodes Android Binary XML (ABX) format used in Android system and app settings 
 
 Decodes Apple SEGB v1 and v2 files from the Biome framework. Shows timestamped records from app usage, screen time, Siri interaction, and location-adjacent signals.
 
+Protobuf payloads are decoded automatically: Cocoa timestamps are shown as ISO datetimes, nested messages are expanded inline, and repeated fields are collected into arrays. Double-clicking a Payload cell opens the raw protobuf bytes in the Blob Inspector.
+
+A backing SQLite database is created on open so you can query records using the built-in SQL editor (with autocomplete). Two payload columns are available:
+
+| Column | Content |
+|---|---|
+| `Payload` | Human-readable rendered text |
+| `Payload JSON` | Protobuf fields as JSON for `json_extract` queries |
+
+Example queries:
+
+```sql
+-- All records where field 2 (bundle ID) matches
+SELECT * FROM SEGB WHERE json_extract("Payload JSON", '$.2') = 'com.apple.Preferences';
+
+-- Extract timestamp (field 1) and type (field 2) for every record
+SELECT "Index", json_extract("Payload JSON", '$.1') AS ts,
+                json_extract("Payload JSON", '$.2') AS type
+FROM SEGB;
+
+-- Nested field (field 6, sub-field 1)
+SELECT json_extract("Payload JSON", '$.6.1') FROM SEGB;
+
+-- Repeated field — first occurrence of field 9
+SELECT json_extract("Payload JSON", '$.9[0]') FROM SEGB;
+```
+
 ### Realm Database Viewer
 
 Opens `.realm` files in a tabbed view:
@@ -337,6 +382,8 @@ SELECT a.title, e.name
 FROM class_Article a
 JOIN class_ArticleEDP e ON a.edp = e._objkey
 ```
+
+The SQL editor supports autocomplete (table names, column names, aliases). Double-clicking a row in the Summary view navigates directly to that table. BLOB column cells expose raw bytes in the Blob Inspector on double-click.
 
 The temporary file is deleted automatically when the viewer is closed.
 

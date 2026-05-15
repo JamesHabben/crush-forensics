@@ -644,6 +644,15 @@ class TableViewer(QWidget):
                     cell = QStandardItem(f"<BLOB {len(blob):,} B>")
                     cell.setForeground(Qt.GlobalColor.blue)
                     cell.setData(blob, Qt.ItemDataRole.UserRole)
+                elif (
+                    isinstance(val, tuple) and len(val) == 2
+                    and isinstance(val[0], str) and isinstance(val[1], (bytes, bytearray))
+                ):
+                    display, raw = val[0], val[1] if isinstance(val[1], bytes) else bytes(val[1])
+                    cell = QStandardItem(display)
+                    cell.setData(raw, Qt.ItemDataRole.UserRole)
+                    if row_color:
+                        cell.setForeground(row_color)
                 else:
                     cell = QStandardItem(str(val))
                     if row_color:
@@ -1089,7 +1098,7 @@ class TableViewer(QWidget):
         self._sql_status.setText("Double-click a row to open the raw page in the hex viewer")
 
     def _on_table_double_clicked(self, index: object) -> None:
-        """Double-click handler: navigate to table from summary, or open WAL page in hex viewer."""
+        """Double-click handler: navigate to table from summary, open WAL page in hex viewer, or inspect bytes cell."""
         current = self._table_combo.currentText()
 
         if current in (self._summary_label, self._summary_nav_table):
@@ -1102,6 +1111,12 @@ class TableViewer(QWidget):
             return
 
         if current != self._wal_label:
+            source = self._proxy_model.mapToSource(index)
+            item = self._source_model.item(source.row(), source.column())
+            if item is not None:
+                blob = _coerce_blob(item.data(Qt.ItemDataRole.UserRole))
+                if blob is not None:
+                    self._preview_blob(blob)
             return
         if self._db_path is None or self._wal_page_size == 0:
             return
