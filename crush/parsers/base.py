@@ -31,6 +31,7 @@ class ParseResult:
     sub_nodes: list[VFSNode] = field(default_factory=list)   # Enables cascading
     metadata: dict[str, Any] = field(default_factory=dict)   # Shown in properties panel
     text_index: str = ""               # Plaintext for the search index
+    viewer_hints: dict[str, Any] = field(default_factory=dict)  # Kwargs forwarded to viewer constructor
 
 
 class AbstractParser(ABC):

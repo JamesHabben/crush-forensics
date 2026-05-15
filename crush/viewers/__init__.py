@@ -17,7 +17,7 @@ def _register_builtin_viewers() -> None:
     from crush.viewers.realm_viewer import RealmViewer
     from crush.viewers.leveldb_viewer import LevelDbViewer
 
-    ViewerRegistry.register("table", lambda r, n, v, p: TableViewer(r.data, p))
+    ViewerRegistry.register("table", lambda r, n, v, p: TableViewer(r.data, p, **r.viewer_hints))
     ViewerRegistry.register("tree", lambda r, n, v, p: TreeViewer(r.data, p))
     ViewerRegistry.register("hex", lambda r, n, v, p: HexViewer(r.data, p))
     ViewerRegistry.register("text", lambda r, n, v, p: TextView(r.data, p))

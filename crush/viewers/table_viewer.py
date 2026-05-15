@@ -644,6 +644,15 @@ class TableViewer(QWidget):
                     cell = QStandardItem(f"<BLOB {len(blob):,} B>")
                     cell.setForeground(Qt.GlobalColor.blue)
                     cell.setData(blob, Qt.ItemDataRole.UserRole)
+                elif (
+                    isinstance(val, tuple) and len(val) == 2
+                    and isinstance(val[0], str) and isinstance(val[1], (bytes, bytearray))
+                ):
+                    display, raw = val[0], val[1] if isinstance(val[1], bytes) else bytes(val[1])
+                    cell = QStandardItem(display)
+                    cell.setData(raw, Qt.ItemDataRole.UserRole)
+                    if row_color:
+                        cell.setForeground(row_color)
                 else:
                     cell = QStandardItem(str(val))
                     if row_color:

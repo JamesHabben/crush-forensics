@@ -606,7 +606,8 @@ def _read_blob_leaf(
             results.append(None)
             continue
         chunk = blob[start:end]
-        results.append(f"<blob {len(chunk)}B: {chunk[:16].hex()}" + ("…" if len(chunk) > 16 else "") + ">")
+        preview = f"<blob {len(chunk)}B: {chunk[:16].hex()}" + ("…" if len(chunk) > 16 else "") + ">"
+        results.append((preview, chunk))
 
     return results
 

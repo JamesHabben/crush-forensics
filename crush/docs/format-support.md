@@ -59,10 +59,16 @@ Limitations
 
 ### SEGB (Biome)
 - Parses SEGB v1/v2 records into the Table Viewer.
+- Protobuf payloads decoded automatically: Cocoa timestamps shown as ISO datetimes, nested messages expanded inline, repeated fields collected into arrays. Full protobuf field number range (up to 2²⁹−1) is supported.
+- A backing SQLite database is created on open, enabling SQL queries via the built-in editor with autocomplete. The `Payload` column holds human-readable rendered text; `Payload JSON` holds the same data as JSON for `json_extract` queries:
+  - Single field: `json_extract("Payload JSON", '$.2')` → value of field 2
+  - Nested field: `json_extract("Payload JSON", '$.6.1')` → sub-field 1 of field 6
+  - Repeated field: `json_extract("Payload JSON", '$.9[0]')` → first occurrence of field 9
+- Double-clicking a Payload cell always opens the raw protobuf bytes in the Blob Inspector.
 
 Limitations
 - Record parsing is best-effort; some records may show a warning.
-- Record payloads are shown as hex previews only (no semantic decoding yet).
+- Payloads that cannot be decoded as protobuf are stored as raw bytes accessible via the Blob Inspector.
 
 ### LevelDB
 - Parses LevelDB directories and displays records in the Table Viewer.
@@ -74,6 +80,9 @@ Limitations
 ### Realm Database
 - Parses `.realm` files and opens them in the Realm Viewer.
 - Extracts: file header metadata, schema/class list, top-ref comparison across header slots, and table/column data.
+- SQL queries run against a temporary SQLite representation of the data; the SQL editor supports autocomplete.
+- Double-clicking a Summary row navigates directly to that table.
+- BLOB column cells expose raw bytes in the Blob Inspector on double-click.
 
 Limitations
 - Realm file format is undocumented; parsing is best-effort and may not cover all versions.
