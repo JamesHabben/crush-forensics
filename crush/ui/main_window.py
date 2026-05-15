@@ -393,6 +393,13 @@ class MainWindow(QMainWindow):
         self._no_integrity_label.setVisible(True)
         self._status.addPermanentWidget(self._no_integrity_label)
 
+        self._rainbow_snapshot_btn = QPushButton("⏸  Snapshot")
+        self._rainbow_snapshot_btn.setToolTip("Pause rainbow and save this colour as a custom theme")
+        self._rainbow_snapshot_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rainbow_snapshot_btn.setVisible(False)
+        self._rainbow_snapshot_btn.clicked.connect(self._snapshot_rainbow)
+        self._status.addPermanentWidget(self._rainbow_snapshot_btn)
+
         self._build_menus()
 
     def _build_menus(self) -> None:
@@ -432,6 +439,9 @@ class MainWindow(QMainWindow):
         theme_menu.addAction("Purple", self._set_theme_purple)
         theme_menu.addAction("Ocean", self._set_theme_ocean)
         theme_menu.addAction("Rainbow", self._set_theme_rainbow)
+        theme_menu.addSeparator()
+        self._custom_theme_action = theme_menu.addAction("", self._set_theme_custom)
+        self._custom_theme_action.setVisible(False)
 
         tools_menu = menu.addMenu("Tools")
         tools_menu.addAction("Paste & Decode…", self._paste_decode)
@@ -1367,6 +1377,8 @@ class MainWindow(QMainWindow):
     def _stop_rainbow_timer(self) -> None:
         if hasattr(self, "_rainbow_timer"):
             self._rainbow_timer.stop()
+        if hasattr(self, "_rainbow_snapshot_btn"):
+            self._rainbow_snapshot_btn.setVisible(False)
 
     def _set_theme_light(self) -> None:
         self._stop_rainbow_timer()
@@ -1414,6 +1426,10 @@ class MainWindow(QMainWindow):
         return pal
 
     def _apply_saved_theme(self) -> None:
+        saved_name = self._settings.value("custom_theme_name", "", type=str)
+        if saved_name:
+            self._custom_theme_action.setText(saved_name)
+            self._custom_theme_action.setVisible(True)
         theme = self._settings.value("theme", "light")
         if theme == "dark":
             self._set_theme_dark()
@@ -1425,6 +1441,8 @@ class MainWindow(QMainWindow):
             self._set_theme_ocean()
         elif theme == "rainbow":
             self._set_theme_rainbow()
+        elif theme == "custom":
+            self._set_theme_custom()
         elif theme == "system":
             self._set_theme_system()
         else:
@@ -1643,6 +1661,7 @@ class MainWindow(QMainWindow):
             self._rainbow_timer.timeout.connect(self._step_rainbow)
             self._rainbow_hue = 0.0
         self._rainbow_timer.start(50)
+        self._rainbow_snapshot_btn.setVisible(True)
 
     def _step_rainbow(self) -> None:
         app = QApplication.instance()
@@ -1682,6 +1701,36 @@ class MainWindow(QMainWindow):
         pal.setColor(QPalette.ColorRole.Highlight, highlight)
         pal.setColor(QPalette.ColorRole.HighlightedText, base)
         return pal
+
+    def _snapshot_rainbow(self) -> None:
+        self._stop_rainbow_timer()
+        hue = getattr(self, "_rainbow_hue", 0.0)
+        name, ok = QInputDialog.getText(
+            self, "Save Custom Theme", "Name for your theme:", text="My Theme"
+        )
+        if ok and name.strip():
+            name = name.strip()
+            self._settings.setValue("custom_theme_hue", hue)
+            self._settings.setValue("custom_theme_name", name)
+            self._custom_theme_action.setText(name)
+            self._custom_theme_action.setVisible(True)
+            app = QApplication.instance()
+            if app:
+                app.setPalette(self._rainbow_palette(hue))
+            self._settings.setValue("theme", "custom")
+            self._logger.info("Custom theme '%s' saved (hue=%.3f)", name, hue)
+        else:
+            self._rainbow_timer.start(50)
+            self._rainbow_snapshot_btn.setVisible(True)
+
+    def _set_theme_custom(self) -> None:
+        self._stop_rainbow_timer()
+        hue = self._settings.value("custom_theme_hue", 0.0, type=float)
+        app = QApplication.instance()
+        if app:
+            app.setPalette(self._rainbow_palette(hue))
+        self._settings.setValue("theme", "custom")
+        self._logger.info("Theme set to custom")
 
 
 def _format_size(size: int) -> str:

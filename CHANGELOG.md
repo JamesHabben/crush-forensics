@@ -10,6 +10,7 @@ All notable changes to Crush will be documented in this file.
 - **Purple theme** — a new *View → Theme → Purple* option applies a synthwave lavender-on-deep-purple aesthetic; the selection persists across sessions.
 - **Ocean theme** — a new *View → Theme → Ocean* option applies a cyan-on-deep-navy aesthetic inspired by the app's namesake sea turtle; the selection persists across sessions.
 - **Rainbow theme** — a new *View → Theme → Rainbow* option animates the entire UI palette through the full colour spectrum using a 50 ms timer; switching to any other theme stops the animation.
+- **Custom theme snapshot** — while rainbow is running a *⏸ Snapshot* button appears in the status bar; clicking it pauses the animation, prompts for a name, and saves the current colour as a named custom theme entry in *View → Theme*; the theme persists across restarts; cancelling the dialog resumes the animation.
 
 - **SQLite table viewer — summary double-click** — double-clicking a table row in the *Summary* tab now navigates directly to that table in the table viewer.
 - **SQLite table viewer — SQL autocomplete** — the SQL editor now offers context-aware identifier completion: table and view names appear after `FROM`, `JOIN`, `LEFT JOIN`, and related keywords; column names appear after `table.` or `alias.` dot notation (aliases declared in `FROM`/`JOIN` clauses are resolved automatically); all tables and columns are offered in other positions (e.g. `SELECT`, `WHERE`).
