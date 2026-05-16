@@ -24,6 +24,7 @@ import pytest
 from crush.core.vfs import DirectoryVFS, TarVFS, VFSNode, ZipVFS
 from crush.parsers.plist_parser import PlistParser
 from crush.parsers.realm_parser import RealmParser
+from crush.parsers.segb_parser import SegbParser
 from crush.parsers.sqlite_parser import SQLiteParser
 from crush.tests.conftest import FIXTURES_DIR
 
@@ -679,3 +680,91 @@ def test_leveldb_parse_is_reproducible(tmp_path: Path) -> None:
         assert rec1["state"] == rec2["state"]
         assert rec1["user_key_bytes"] == rec2["user_key_bytes"]
         assert rec1["value_bytes"] == rec2["value_bytes"]
+
+
+# ---------------------------------------------------------------------------
+# SEGB parser forensic tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="SegbParser must not alter the content of the source file",
+)
+def test_segb_parser_does_not_modify_source(segb_fixture: Path) -> None:
+    digest_before = _sha256_file(segb_fixture)
+
+    vfs = DirectoryVFS(segb_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == segb_fixture.name)
+    SegbParser().parse(node, vfs)
+
+    assert _sha256_file(segb_fixture) == digest_before, "SegbParser modified the source file"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="SegbParser must not change mtime or ctime of source files",
+)
+def test_segb_parser_does_not_change_timestamps(segb_fixture: Path) -> None:
+    ts_before = _timestamps(segb_fixture)
+
+    vfs = DirectoryVFS(segb_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == segb_fixture.name)
+    SegbParser().parse(node, vfs)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(segb_fixture), "SegbParser")
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="SegbParser must not create any sibling files next to the evidence",
+)
+def test_segb_parse_creates_no_sibling_files(segb_fixture: Path) -> None:
+    files_before = set(segb_fixture.parent.iterdir())
+
+    vfs = DirectoryVFS(segb_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == segb_fixture.name)
+    SegbParser().parse(node, vfs)
+
+    new_files = set(segb_fixture.parent.iterdir()) - files_before
+    assert new_files == set(), f"Parser left unexpected files next to evidence: {new_files}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="chmod semantics differ on Windows")
+@pytest.mark.forensic(
+    category="Read-only Media",
+    desc="SegbParser must succeed when evidence directory is 0o555 and file is 0o444",
+)
+def test_segb_parser_works_on_readonly_media(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    segb = evidence_dir / "minimal.segb2"
+    segb.write_bytes((FIXTURES_DIR / "minimal.segb2").read_bytes())
+
+    segb.chmod(0o444)
+    evidence_dir.chmod(0o555)
+    try:
+        vfs = DirectoryVFS(evidence_dir)
+        node = next(c for c in vfs.root().children if c.name == "minimal.segb2")
+        result = SegbParser().parse(node, vfs)
+        assert result.viewer_type == "table"
+    finally:
+        evidence_dir.chmod(0o755)
+        segb.chmod(0o644)
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Parsing the same SEGB file twice must produce structurally identical results",
+)
+def test_segb_parse_is_reproducible(segb_fixture: Path) -> None:
+    vfs = DirectoryVFS(segb_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == segb_fixture.name)
+    parser = SegbParser()
+
+    r1 = parser.parse(node, vfs)
+    r2 = parser.parse(node, vfs)
+
+    assert r1.viewer_type == r2.viewer_type
+    assert r1.metadata == r2.metadata
+    assert r1.data["SEGB"]["columns"] == r2.data["SEGB"]["columns"]
+    assert len(r1.data["SEGB"]["rows"]) == len(r2.data["SEGB"]["rows"])

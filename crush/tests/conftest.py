@@ -157,6 +157,15 @@ def tar_fixture(tmp_path: Path) -> Path:
     return dst
 
 
+@pytest.fixture
+def segb_fixture(tmp_path: Path) -> Path:
+    """Writable copy of minimal.segb2 placed in tmp_path."""
+    src = FIXTURES_DIR / "minimal.segb2"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
 # ---------------------------------------------------------------------------
 # Forensic report: collect results during the run
 # ---------------------------------------------------------------------------
