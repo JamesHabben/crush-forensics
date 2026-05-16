@@ -770,6 +770,61 @@ FORMATS: list[dict[str, Any]] = [
         "status": "reviewed",
     },
     {
+        "name": "JPEG XL Image",
+        "short_name": "JPEG XL",
+        "category": "document",
+        "forensic_relevance": (
+            "Next-generation image format standardised as ISO/IEC 18181 (2022). "
+            "Supports both lossy and lossless compression with significantly better "
+            "efficiency than JPEG; lossless JPEG transcoding (bit-exact round-trip) is "
+            "a first-class feature. "
+            "Two container variants exist with distinct magic sequences: the bare "
+            "codestream (\\xff\\x0a at offset 0) and the ISOBMFF/JXL container "
+            "(12-byte signature starting with \\x00\\x00\\x00\\x0c\\x4a\\x58\\x4c at "
+            "offset 0), which supports EXIF, XMP, and multiple frames. "
+            "Adoption is growing in high-end cameras, Apple ecosystem (iOS 17+, "
+            "macOS Sonoma+), and some Android OEMs. "
+            "iOS ProRAW JPEG XL files may embed full DNG data in a JXL container. "
+            "Forensically relevant: timestamp and GPS metadata in EXIF boxes, "
+            "lossless re-encoding makes tampering detection harder than with JPEG, "
+            "and the format's novelty means older tools may fail to parse it."
+        ),
+        "platforms": ["iOS", "macOS", "Android", "Windows"],
+        "parser_class": None,
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\xff\x0a",
+                "description": "JPEG XL naked codestream signature",
+            },
+            {
+                "offset": 0,
+                "value": b"\x00\x00\x00\x0c\x4a\x58\x4c\x20\x0d\x0a\x87\x0a",
+                "description": "JPEG XL ISOBMFF/JXL container signature",
+            },
+        ],
+        "extensions": [".jxl"],
+        "links": [
+            (
+                "JPEG XL — official specification overview",
+                "https://jpeg.org/jpegxl/",
+            ),
+            (
+                "ISO/IEC 18181 — JPEG XL standard",
+                "https://www.iso.org/standard/77977.html",
+            ),
+            (
+                "JPEG XL container format (libjxl wiki)",
+                "https://github.com/libjxl/libjxl/blob/main/doc/format_overview.md",
+            ),
+            (
+                "JPEG XL file format overview (Library of Congress)",
+                "https://www.loc.gov/preservation/digital/formats/fdd/fdd000538.shtml",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
         "name": "iOS Crash Report",
         "short_name": "IPS / crash",
         "category": "log",
