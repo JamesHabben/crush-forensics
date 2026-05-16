@@ -79,32 +79,7 @@ def _element_to_dict(el: Any) -> dict[str, Any]:
 
 def _looks_like_plist_xml(peek_bytes: bytes) -> bool:
     text = peek_bytes[:2048].decode("utf-8", errors="ignore")
-    i = 0
-    while True:
-        lt = text.find("<", i)
-        if lt == -1:
-            return False
-        if lt + 1 >= len(text):
-            return False
-        nxt = text[lt + 1]
-        if nxt in ("?", "!"):
-            gt = text.find(">", lt + 1)
-            if gt == -1:
-                return False
-            i = gt + 1
-            continue
-        j = lt + 1
-        name_chars: list[str] = []
-        while j < len(text):
-            ch = text[j]
-            if ch.isspace() or ch in (">", "/"):
-                break
-            name_chars.append(ch)
-            j += 1
-        if not name_chars:
-            return False
-        tag = "".join(name_chars).split(":")[-1].lower()
-        return tag == "plist"
+    return "<plist" in text.lower()
 
 
 def _local_tag(el: Any) -> str:

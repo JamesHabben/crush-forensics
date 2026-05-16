@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from crush.core.magic import XML_PLIST_SIG, _looks_like_plist_xml
+
 
 def _resolve_db_path() -> Path:
     # PyInstaller extracts data files to sys._MEIPASS when frozen
@@ -78,6 +80,8 @@ class FormatDatabase:
             pattern: bytes = row["pattern"]
             end = offset + len(pattern)
             if len(peek_bytes) >= end and peek_bytes[offset:end] == pattern:
+                if pattern == XML_PLIST_SIG and not _looks_like_plist_xml(peek_bytes):
+                    continue
                 return self._row_to_match(row)
 
         return None

@@ -2,6 +2,14 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **XML plist — files with DOCTYPE opened in hex viewer** — the parser registry peeked only 64 bytes, too few to reach the `<plist>` root tag past Apple's standard DOCTYPE declaration (~150 bytes); peek size raised to 256 bytes so `PlistParser` correctly claims `.plist` files with an XML preamble.
+- **XML plist — plist root-tag detection simplified** — the previous logic navigated past `<?…?>` and `<!…>` blocks by searching for their closing `>`, which failed silently when those blocks extended past the peek window; replaced with a direct `<plist` substring search, which is simpler and equally unambiguous.
+- **Format label — XML files (SVG, XHTML, …) misidentified as "XML plist"** — `FormatDatabase.identify()` matched any file starting with `<?xml` against the XML plist entry without verifying the root tag; it now calls `_looks_like_plist_xml()` as an additional guard before returning that match.
+
 ## [0.9.0] — 2026-05-16
 
 ### New Features
