@@ -787,7 +787,7 @@ def test_create_segb_sqlite_payload_columns() -> None:
     rendered = "2: \"com.apple.test\""
     rows = [
         [0, 0, "Current", "2024-01-01", "2024-01-01", 0, 0, True,
-         len(raw), "com.apple.test", "", "", (rendered, raw)],
+         len(raw), (rendered, raw)],
     ]
     path = _create_segb_sqlite(_COLUMNS_V1, rows)
     assert path is not None
