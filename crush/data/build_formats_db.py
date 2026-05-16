@@ -2135,10 +2135,15 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": "SegbParser",
         "magic": [
             {
+                "offset": 0,
+                "value": b"\x53\x45\x47\x42",
+                "description": "SEGB v2 signature at offset 0 (32-byte header)",
+            },
+            {
                 "offset": 52,
                 "value": b"\x53\x45\x47\x42",
                 "description": "SEGB v1 signature at offset 52 (within 56-byte header)",
-            }
+            },
         ],
         "extensions": [],
         "links": [

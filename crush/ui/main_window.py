@@ -14,7 +14,7 @@ import shutil
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings, QTimer
-from PySide6.QtGui import QCloseEvent, QPalette, QColor, QAction
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QPalette, QColor, QAction
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
@@ -248,6 +248,76 @@ class _ExportLogarchiveWorker(QObject):
         self.finished.emit(str(self._dest_path))
 
 
+class _ExportMultiWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        entries: list,  # list of (VFSNode, VFS, str) — (node, vfs, virtual_path)
+        dest_dir: str,
+        integrity: bool,
+        filter_text: str,
+    ) -> None:
+        super().__init__()
+        self._entries = entries
+        self._dest_dir = Path(dest_dir)
+        self._integrity = integrity
+        self._filter_text = filter_text
+        self._hash_lines: list[str] = []
+        self._logger = logging.getLogger(__name__)
+
+    def run(self) -> None:
+        try:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            export_root = self._dest_dir / f"crush-export-{stamp}"
+            export_root.mkdir(parents=True, exist_ok=True)
+            for node, vfs, virtual_path in self._entries:
+                rel = virtual_path.lstrip("/\\")
+                target = export_root / Path(rel)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                self._export_file(node, vfs, target, rel)
+            self._write_hashes_file(export_root, stamp)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(str(export_root))
+
+    def _export_file(self, node: VFSNode, vfs: VFS, target: Path, rel_path: str) -> None:
+        if not self._integrity:
+            with vfs.open(node) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            return
+        import hashlib
+        hasher = hashlib.sha256()
+        total = 0
+        with vfs.open(node) as src, open(target, "wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                hasher.update(chunk)
+                total += len(chunk)
+        digest = hasher.hexdigest()
+        self._hash_lines.append(f"{digest}  {total}  {rel_path}")
+        self._logger.info("INTEGRITY export sha256=%s  size=%d  path=%s", digest, total, target)
+
+    def _write_hashes_file(self, export_root: Path, stamp: str) -> None:
+        if not self._integrity or not self._hash_lines:
+            return
+        header = [
+            "# crush filtered export",
+            f"# filter: {self._filter_text}",
+            f"# exported: {stamp}",
+            f"# files: {len(self._hash_lines)}",
+            "",
+        ]
+        (export_root / "crush-export-hashes.txt").write_text(
+            "\n".join(header + self._hash_lines) + "\n", encoding="utf-8"
+        )
+
+
 def _safe_name(name: str) -> str:
     cleaned = name.replace("/", "_").replace("\\", "_").strip()
     if cleaned in {"", ".", ".."}:
@@ -298,6 +368,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.open_requested.connect(self._open_node_mode)
         self._fs_panel.open_external_requested.connect(self._open_external_mode)
         self._fs_panel.export_requested.connect(self._export_node)
+        self._fs_panel.export_multi_requested.connect(self._export_multi_nodes)
         self._fs_panel.export_logarchive_requested.connect(self._export_logarchive_node)
         self._fs_panel.close_source_requested.connect(self._close_source)
         self._fs_panel.background_status.connect(self._on_background_status)
@@ -611,6 +682,40 @@ class MainWindow(QMainWindow):
 
         self._export_thread = QThread(self)
         self._export_worker = _ExportWorker(vfs, node, dest_dir, self.session.integrity_mode)
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._on_export_thread_finished)
+        self._export_thread.start()
+
+    def _export_multi_nodes(self, entries: list, filter_text: str) -> None:
+        if not entries:
+            return
+        dest_dir = QFileDialog.getExistingDirectory(self, "Export filtered results to folder")
+        if not dest_dir:
+            return
+        if self._thread_is_running(getattr(self, "_export_thread", None)):
+            QMessageBox.information(self, "Export", "An export is already running.")
+            return
+        n = len(entries)
+        self._status.showMessage(f"Exporting {n} file{'s' if n != 1 else ''}…")
+        self._logger.info("Multi-export: %d files, filter=%r -> %s", n, filter_text, dest_dir)
+        self._export_progress = QProgressDialog(
+            f"Exporting {n} file{'s' if n != 1 else ''}…", None, 0, 0, self
+        )
+        self._export_progress.setWindowTitle("Export filtered results")
+        self._export_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self._export_progress.setCancelButton(None)
+        self._export_progress.setMinimumDuration(0)
+        self._export_progress.show()
+        self._export_thread = QThread(self)
+        self._export_worker = _ExportMultiWorker(
+            entries, dest_dir, self.session.integrity_mode, filter_text
+        )
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
         self._export_worker.finished.connect(self._on_export_finished)
@@ -1092,8 +1197,13 @@ class MainWindow(QMainWindow):
         try:
             from crush.core.format_db import FormatDatabase
             from crush.ui.format_info_dialog import FormatInfoDialog
-            peek = vfs.peek(node)
+            peek = vfs.peek(node, 2048)
             fmt = FormatDatabase.get().identify(peek, node.name)
+            if fmt is None:
+                from crush.core.magic import detect_fast_label
+                label = detect_fast_label(peek, node.path or node.name)
+                if label:
+                    fmt = FormatDatabase.get().by_short_name(label)
             dlg = FormatInfoDialog(node, fmt, self)
             dlg.exec()
             # Also update the Properties panel
@@ -1185,6 +1295,12 @@ class MainWindow(QMainWindow):
             self._spinner_timer.start()
 
     def _sync_dock_titlebar(self, dock: QDockWidget, floating: bool) -> None:
+        # On Wayland the compositor owns window decorations and resize handles for
+        # floating windows. Installing a custom title bar removes those, leaving the
+        # dock unable to resize and triggering a mouse-grab warning. Skip it and let
+        # the WM do the right thing.
+        if QGuiApplication.platformName() == "wayland":
+            return
         if floating:
             dock.setTitleBarWidget(_DockTitleBar(dock.windowTitle(), dock))
         else:

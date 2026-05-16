@@ -12,7 +12,7 @@ import struct
 from collections import Counter
 from pathlib import Path
 
-from PySide6.QtCore import QRegularExpression, QSortFilterProxyModel, QStringListModel, Qt, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QRegularExpression, QSortFilterProxyModel, QStringListModel, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -61,6 +61,17 @@ from crush.core.sqlite_wal import (
 )
 from crush.core.ts_decode import TS_FORMATS as _TS_FORMATS
 from crush.core.ts_decode import decode_ts as _decode_ts
+
+
+_MAX_COL_WIDTH = 400
+
+
+def _cap_columns(view: QTableView) -> None:
+    """Clamp every column to _MAX_COL_WIDTH so wide cells don't force horizontal scrolling."""
+    header = view.horizontalHeader()
+    for col in range(view.model().columnCount()):
+        if header.sectionSize(col) > _MAX_COL_WIDTH:
+            header.resizeSection(col, _MAX_COL_WIDTH)
 
 
 def _wal_diag(db_path: "str | None", parser_diag: str = "") -> str:
@@ -554,14 +565,34 @@ class TableViewer(QWidget):
         self._table_view.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         self._table_view.verticalHeader().setDefaultSectionSize(22)
         self._table_view.doubleClicked.connect(self._on_table_double_clicked)
+        self._table_view.viewport().installEventFilter(self)
+
+        # Cell detail panel — shown below the table, updates on selection
+        cell_detail = QWidget()
+        cell_detail_layout = QVBoxLayout(cell_detail)
+        cell_detail_layout.setContentsMargins(4, 2, 4, 2)
+        cell_detail_layout.setSpacing(2)
+        self._cell_detail_label = QLabel("—  No cell selected")
+        self._cell_detail_label.setStyleSheet("color: gray; font-size: 11px;")
+        cell_detail_layout.addWidget(self._cell_detail_label)
+        self._cell_detail_view = QPlainTextEdit()
+        self._cell_detail_view.setReadOnly(True)
+        self._cell_detail_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        cell_detail_layout.addWidget(self._cell_detail_view, stretch=1)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(sql_bar)
         splitter.addWidget(self._table_view)
+        splitter.addWidget(cell_detail)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([140, 500])
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([140, 500, 80])
         layout.addWidget(splitter, stretch=1)
+
+        self._table_view.selectionModel().currentChanged.connect(
+            self._on_current_cell_changed
+        )
 
     def _load_table(self, table_name: str) -> None:
         """Populate the model with the selected table's data."""
@@ -697,7 +728,7 @@ class TableViewer(QWidget):
         if show_prev_ref:
             prev_ref_count = self._inject_prev_ref_rows(table_name, columns, _append_row)
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
         table_meta = self._data.get(table_name, {}) if isinstance(self._data, dict) else {}
         was_truncated = isinstance(table_meta, dict) and table_meta.get("truncated", False)
         total = len(rows)
@@ -877,7 +908,7 @@ class TableViewer(QWidget):
                 count_item.setData(count, Qt.ItemDataRole.UserRole)
             self._source_model.appendRow([name_item, type_item, count_item])
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
 
         def _c(key: str) -> int:
             return counts.get(key, 0)
@@ -945,7 +976,7 @@ class TableViewer(QWidget):
             info_item.setEditable(False)
             self._source_model.appendRow([name_item, type_item, info_item])
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
         total = self._source_model.rowCount()
         word = "object" if total == 1 else "objects"
         self._row_count_label.setText(f"({total} schema {word})")
@@ -1085,7 +1116,7 @@ class TableViewer(QWidget):
                 _item(str(f["offset"]),                  f["offset"]),
             ])
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
 
 
         counts = Counter(f["status"] for f in frames)
@@ -1105,7 +1136,10 @@ class TableViewer(QWidget):
             src_row = self._proxy_model.mapToSource(
                 self._proxy_model.index(index.row(), 0)  # type: ignore[union-attr]
             ).row()
-            name_item = self._source_model.item(src_row, 0)
+            # _summary_label rows are built by _load_summary (no "Row" prefix col → name at col 0).
+            # _summary_nav_table rows go through _load_table which prepends a "Row" col → name at col 1.
+            name_col = 0 if current == self._summary_label else 1
+            name_item = self._source_model.item(src_row, name_col)
             if name_item and self._table_combo.findText(name_item.text()) >= 0:
                 self._table_combo.setCurrentText(name_item.text())
             return
@@ -1115,8 +1149,14 @@ class TableViewer(QWidget):
             item = self._source_model.item(source.row(), source.column())
             if item is not None:
                 blob = _coerce_blob(item.data(Qt.ItemDataRole.UserRole))
+                display_val = item.text()
                 if blob is not None:
-                    self._preview_blob(blob)
+                    is_blob_placeholder = display_val.startswith("<BLOB ") and display_val.endswith(" B>")
+                    decoded = display_val if not is_blob_placeholder and display_val else None
+                    self._preview_blob(blob, display_text=decoded)
+                elif display_val:
+                    # SQL result cells: no raw bytes, but display text is the decoded content
+                    self._preview_blob(display_val.encode("utf-8", errors="replace"), display_text=display_val)
             return
         if self._db_path is None or self._wal_page_size == 0:
             return
@@ -1242,7 +1282,7 @@ class TableViewer(QWidget):
         hint_desc.setEditable(False)
         self._source_model.appendRow([hint_item, hint_value, hint_desc])
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
         self._row_count_label.setText(f"({len(_PRAGMA_CATALOG)} settings)")
         self._sql_input.setPlainText("PRAGMA integrity_check;")
         self._sql_status.setText("")
@@ -1358,7 +1398,7 @@ class TableViewer(QWidget):
                 items.append(cell)
             self._source_model.appendRow(items)
 
-        self._table_view.resizeColumnsToContents()
+        self._resize_and_cap()
         row_word = "row" if len(rows) == 1 else "rows"
         self._row_count_label.setText(f"({len(rows):,} {row_word})")
 
@@ -1427,10 +1467,13 @@ class TableViewer(QWidget):
             rows = sorted({i.row() for i in self._table_view.selectedIndexes()})
             self._copy_rows(rows)
         elif action == blob_preview:
+            display_str = str(display_val) if display_val is not None else ""
+            is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
+            decoded = display_str if (blob_bytes is not None and not is_blob_placeholder and display_str) else None
             if blob_bytes is not None:
-                self._preview_blob(blob_bytes)
+                self._preview_blob(blob_bytes, display_text=decoded)
             elif has_display:
-                self._preview_blob(str(display_val).encode("utf-8", errors="replace"))
+                self._preview_blob(display_str.encode("utf-8", errors="replace"))
         elif action == blob_hex:
             if blob_bytes is not None:
                 self._open_blob_hex(blob_bytes)
@@ -1547,8 +1590,50 @@ class TableViewer(QWidget):
         except Exception as exc:
             self._sql_status.setText(str(exc))
 
-    def _preview_blob(self, blob: bytes) -> None:
-        BlobInspector(blob, self).show()
+    def _preview_blob(self, blob: bytes, *, display_text: str | None = None) -> None:
+        BlobInspector(blob, self, display_text=display_text).show()
+
+    def _resize_and_cap(self) -> None:
+        self._table_view.resizeColumnsToContents()
+        _cap_columns(self._table_view)
+
+    def _on_current_cell_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        if not current.isValid():
+            self._cell_detail_label.setText("—  No cell selected")
+            self._cell_detail_view.setPlainText("")
+            return
+
+        col = current.column()
+        col_name = self._proxy_model.headerData(col, Qt.Orientation.Horizontal) or ""
+        row_num = current.row() + 1
+        self._cell_detail_label.setText(f"Row {row_num}  ·  {col_name}")
+
+        display_val = self._proxy_model.data(current, Qt.ItemDataRole.DisplayRole)
+        blob = self._proxy_model.data(current, Qt.ItemDataRole.UserRole)
+        blob_bytes = _coerce_blob(blob)
+
+        display_str = str(display_val) if display_val is not None else ""
+        is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
+        if not is_blob_placeholder and display_str:
+            self._cell_detail_view.setPlainText(display_str)
+        elif blob_bytes is not None:
+            try:
+                self._cell_detail_view.setPlainText(blob_bytes.decode("utf-8"))
+            except UnicodeDecodeError:
+                preview = blob_bytes[:256].hex(" ", 1)
+                if len(blob_bytes) > 256:
+                    preview += f"\n… ({len(blob_bytes):,} B total — use Inspect Cell for full view)"
+                self._cell_detail_view.setPlainText(preview)
+        else:
+            self._cell_detail_view.setPlainText(display_str)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:  # type: ignore[union-attr]
+                hbar = self._table_view.horizontalScrollBar()
+                hbar.setValue(hbar.value() - event.angleDelta().y() // 2)  # type: ignore[union-attr]
+                return True
+        return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event: object) -> None:  # type: ignore[override]
         if hasattr(event, "matches") and event.matches(QKeySequence.StandardKey.Copy):
@@ -1629,10 +1714,17 @@ class _BlobViewerEdit(QPlainTextEdit):
 
 
 class BlobInspector(QDialog):
-    def __init__(self, blob: bytes, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        blob: bytes,
+        parent: QWidget | None = None,
+        *,
+        display_text: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._blob = blob
+        self._display_text = display_text
         self._build_ui()
         self._apply_view()
 
@@ -1649,8 +1741,7 @@ class BlobInspector(QDialog):
 
         top_layout.addWidget(QLabel("Open as:"))
         self._format = QComboBox()
-        self._format = QComboBox()
-        self._format.addItems([
+        base_formats = [
             "Auto",
             "Hex",
             "UTF-8 text",
@@ -1662,7 +1753,11 @@ class BlobInspector(QDialog):
             "Protobuf (schema-less)",
             "Android Binary XML (ABX)",
             "Image (PNG / JPEG / GIF)",
-        ])
+        ]
+        if self._display_text is not None:
+            self._format.addItems(["Decoded (from table)"] + base_formats)
+        else:
+            self._format.addItems(base_formats)
         self._format.currentIndexChanged.connect(self._apply_view)
         top_layout.addWidget(self._format)
 
@@ -1696,6 +1791,12 @@ class BlobInspector(QDialog):
 
     def _apply_view(self) -> None:
         fmt = self._format.currentText()
+
+        if fmt == "Decoded (from table)":
+            self._stack.setCurrentIndex(0)
+            self._copy_btn.setEnabled(True)
+            self._viewer.setPlainText(self._display_text or "")
+            return
 
         if fmt == "Image (PNG / JPEG / GIF)":
             self._show_image(self._blob)

@@ -82,6 +82,16 @@ class FormatDatabase:
 
         return None
 
+    def by_short_name(self, short_name: str) -> FormatMatch | None:
+        """Look up format metadata by short_name (e.g. 'SEGB', 'SQLite')."""
+        if self._conn is None:
+            return None
+        row = self._conn.execute(
+            "SELECT * FROM formats WHERE short_name = ? LIMIT 1",
+            (short_name,),
+        ).fetchone()
+        return self._row_to_match(row) if row else None
+
     def by_parser_class(self, class_name: str) -> FormatMatch | None:
         """Look up format metadata for a parser that successfully handled a file."""
         if self._conn is None:

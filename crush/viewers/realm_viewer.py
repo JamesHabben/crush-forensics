@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QLabel,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from crush.viewers.tree_viewer import TreeViewer
 from crush.viewers.hex_viewer import HexViewer
-from crush.viewers.table_viewer import BlobInspector, TableViewer
+from crush.viewers.table_viewer import BlobInspector, TableViewer, _cap_columns
 
 
 class FreeDataViewer(QWidget):
@@ -89,6 +89,8 @@ class FreeDataViewer(QWidget):
         self._table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.resizeColumnsToContents()
+        _cap_columns(self._table)
+        self._table.viewport().installEventFilter(self)
         self._table.selectionModel().currentRowChanged.connect(self._on_row_changed)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
@@ -117,6 +119,14 @@ class FreeDataViewer(QWidget):
         row = current.row()
         if 0 <= row < len(self._blocks):
             self._hex.set_data(self._blocks[row]["bytes"])
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                hbar = self._table.horizontalScrollBar()
+                hbar.setValue(hbar.value() - event.angleDelta().y() // 2)
+                return True
+        return super().eventFilter(watched, event)
 
     def _on_context_menu(self, pos) -> None:
         index = self._table.indexAt(pos)

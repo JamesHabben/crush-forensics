@@ -13,6 +13,7 @@ import time
 from PySide6.QtCore import QModelIndex, QSettings, QStringListModel, Qt, Signal, QSortFilterProxyModel, QTimer
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCompleter,
     QLineEdit,
     QMenu,
@@ -66,6 +67,7 @@ class FilesystemPanel(QWidget):
     open_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     open_external_requested = Signal(object, object, str)  # (VFSNode, VFS, mode)
     export_requested = Signal(object, object)  # (VFSNode, VFS)
+    export_multi_requested = Signal(object, str)  # (list[(VFSNode, VFS, str)], filter_text)
     export_logarchive_requested = Signal(object, object)  # (VFSNode, VFS)
     format_info_requested = Signal(object, object)  # (VFSNode, VFS)
     close_source_requested = Signal(object)  # (VFS)
@@ -162,6 +164,7 @@ class FilesystemPanel(QWidget):
         self._search_view.setColumnWidth(0, 160)
         self._search_view.setColumnWidth(1, 200)
         self._search_view.setColumnWidth(2, 65)
+        self._search_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._search_view.doubleClicked.connect(self._on_search_double_click)
         self._search_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._search_view.customContextMenuRequested.connect(self._on_search_context_menu)
@@ -344,8 +347,45 @@ class FilesystemPanel(QWidget):
             return
         self._show_context_menu(node, vfs, self._tree.viewport().mapToGlobal(pos))
 
+    def _collect_result_entries(self, rows: object) -> list[tuple[VFSNode, VFS, str]]:
+        """Return (node, vfs, virtual_path) for each file row in rows (skips dirs)."""
+        entries: list[tuple[VFSNode, VFS, str]] = []
+        for row in rows:
+            name_item = self._search_model.item(row, 0)
+            path_item = self._search_model.item(row, 1)
+            if name_item is None:
+                continue
+            node: VFSNode | None = name_item.data(_ROLE_NODE)
+            vfs: VFS | None = name_item.data(_ROLE_VFS)
+            if not node or not vfs or node.is_dir:
+                continue
+            virtual_path = path_item.text() if path_item else node.name
+            entries.append((node, vfs, virtual_path))
+        return entries
+
     def _on_search_context_menu(self, pos: object) -> None:
         index = self._search_view.indexAt(pos)
+        global_pos = self._search_view.viewport().mapToGlobal(pos)
+
+        selected_rows = sorted({idx.row() for idx in self._search_view.selectedIndexes()})
+        selected_entries = self._collect_result_entries(selected_rows)
+
+        if len(selected_entries) > 1:
+            all_entries = self._collect_result_entries(range(self._search_model.rowCount()))
+            menu = QMenu(self)
+            export_sel = menu.addAction(f"Export {len(selected_entries)} selected files…")
+            export_all = None
+            if len(all_entries) > len(selected_entries):
+                menu.addSeparator()
+                export_all = menu.addAction(f"Export all {len(all_entries)} results…")
+            action = menu.exec(global_pos)
+            filter_text = self._filter.text().strip()
+            if action == export_sel:
+                self.export_multi_requested.emit(selected_entries, filter_text)
+            elif export_all is not None and action == export_all:
+                self.export_multi_requested.emit(all_entries, filter_text)
+            return
+
         if not index.isValid():
             return
         item = self._search_model.itemFromIndex(index.siblingAtColumn(0))
@@ -355,9 +395,7 @@ class FilesystemPanel(QWidget):
         vfs: VFS | None = item.data(_ROLE_VFS)
         if not node or not vfs:
             return
-        self._show_context_menu(
-            node, vfs, self._search_view.viewport().mapToGlobal(pos), from_search=True
-        )
+        self._show_context_menu(node, vfs, global_pos, from_search=True)
 
     def _show_context_menu(
         self,

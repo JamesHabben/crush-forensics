@@ -25,7 +25,6 @@ _COLUMNS_V1 = [
     "Timestamp1", "Timestamp2",
     "CRC Stored", "CRC Calc", "CRC Passed",
     "Payload Size",
-    "Bundle ID", "Stream ID", "Payload Timestamp",
     "Payload",
 ]
 
@@ -35,7 +34,6 @@ _COLUMNS_V2 = [
     "Trailer Offset", "Entry End Offset",
     "CRC Stored", "CRC Calc", "CRC Passed",
     "Payload Size",
-    "Bundle ID", "Stream ID", "Payload Timestamp",
     "Payload",
 ]
 
@@ -224,7 +222,6 @@ def _read_v1(stream: BytesIO) -> tuple[list[str], list[list[Any]], str]:
     try:
         for idx, entry in enumerate(ccl_segb1.read_segb1_stream(stream)):
             try:
-                bundle_id, stream_id, payload_ts = _extract_proto_fields(entry.data)
                 rendered = _render_proto_payload(entry.data)
                 rows.append([
                     idx,
@@ -236,9 +233,6 @@ def _read_v1(stream: BytesIO) -> tuple[list[str], list[list[Any]], str]:
                     entry.actual_crc,
                     entry.crc_passed,
                     len(entry.data),
-                    bundle_id,
-                    stream_id,
-                    payload_ts,
                     (rendered, entry.data),
                 ])
             except Exception as exc:
@@ -255,7 +249,6 @@ def _read_v2(stream: BytesIO) -> tuple[list[str], list[list[Any]], str]:
     try:
         for idx, entry in enumerate(ccl_segb2.read_segb2_stream(stream)):
             try:
-                bundle_id, stream_id, payload_ts = _extract_proto_fields(entry.data)
                 rendered = _render_proto_payload(entry.data)
                 rows.append([
                     idx,
@@ -268,9 +261,6 @@ def _read_v2(stream: BytesIO) -> tuple[list[str], list[list[Any]], str]:
                     entry.actual_crc,
                     entry.crc_passed,
                     len(entry.data),
-                    bundle_id,
-                    stream_id,
-                    payload_ts,
                     (rendered, entry.data),
                 ])
             except Exception as exc:
@@ -360,33 +350,6 @@ def _parse_protobuf(data: bytes) -> dict[int, Any]:
         else:
             result[field_num] = val
     return result
-
-
-def _extract_proto_fields(payload: bytes) -> tuple[str, str, str]:
-    """Return (bundle_id, stream_id, payload_timestamp_str) from a protobuf payload."""
-    try:
-        fields = _parse_protobuf(payload)
-    except Exception:
-        return "", "", ""
-
-    bundle_id = fields.get(2, "")
-    if not isinstance(bundle_id, str):
-        bundle_id = ""
-
-    stream_id = fields.get(3, "")
-    if not isinstance(stream_id, str):
-        stream_id = ""
-
-    ts_val = fields.get(1)
-    if isinstance(ts_val, float) and -1e10 < ts_val < 1e10:
-        try:
-            payload_ts = _fmt_ts(decode_cocoa_time(ts_val))
-        except Exception:
-            payload_ts = ""
-    else:
-        payload_ts = ""
-
-    return bundle_id, stream_id, payload_ts
 
 
 def _looks_like_cocoa_ts(val: float) -> bool:
