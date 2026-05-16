@@ -2,37 +2,53 @@
 
 All notable changes to Crush will be documented in this file.
 
-## [Unreleased]
+## [0.9.0] — 2026-05-16
 
-### Improvements
+### New Features
 
-- **Table viewers — wide-column usability** — columns are now capped at 400 px after auto-sizing so a single long cell can no longer force the table far off-screen; holding **Shift** while scrolling moves the table horizontally. Applies to SQLite, SEGB, and Realm viewers.
-- **Table viewers — cell detail panel** — a collapsible pane below the table shows the full content of the currently selected cell and updates live on click or keyboard navigation. Decoded text (e.g. SEGB protobuf payload) is shown where available; binary BLOBs fall back to a UTF-8 decode or a hex preview with a byte-count hint. Applies to SQLite, SEGB, and Realm viewers.
-- **BLOB Inspector — "Decoded (from table)" view** — when opening the BLOB Inspector on a cell that has a decoded display (e.g. SEGB protobuf payload), a *Decoded (from table)* option is inserted at the top of the format dropdown and selected by default, showing the human-readable content immediately. Raw bytes are always preserved, so switching to *Protobuf (schema-less)*, *Hex*, or any other format mode continues to work correctly on the original binary data.
-
-- **New themes** — *Geek* (phosphor-green terminal), *Purple* (synthwave), and *Ocean* (cyan/navy) added under *View → Theme*; all persist across sessions.
-- **Rainbow theme + custom snapshot** — *View → Theme → Rainbow* cycles the UI palette through the full colour spectrum; a *⏸ Snapshot* button in the status bar lets you pause, name, and save the current hue as a permanent custom theme entry.
 - **SEGB / Biome viewer** — complete forensic overhaul of the SEGB v1/v2 parser:
   - Protobuf payloads decoded automatically: Cocoa timestamps shown as ISO datetimes, nested messages expanded inline, full field-number range supported (up to 2²⁹−1), repeated fields collected into arrays.
   - Backing SQLite database created on open with autocomplete-enabled SQL editor. `Payload` column shows human-readable text; `Payload JSON` column enables `json_extract("Payload JSON", '$.N')` field queries (nested: `$.N.M`, repeated: `$.N[i]`).
   - Raw protobuf bytes always accessible via Blob Inspector on double-click.
-- **Realm / SQLite viewers** — BLOB cells now expose raw bytes to the Blob Inspector on double-click; SQL autocomplete and summary-tab navigation work in the Realm viewer.
+- **New themes** — *Geek* (phosphor-green terminal), *Purple* (synthwave), and *Ocean* (cyan/navy) added under *View → Theme*; all persist across sessions.
+- **Rainbow theme + custom snapshot** — *View → Theme → Rainbow* cycles the UI palette through the full colour spectrum; a *⏸ Snapshot* button in the status bar lets you pause, name, and save the current hue as a permanent custom theme entry.
+
+### Improvements
+
+- **Table viewers — cell detail panel** — a collapsible pane below the table shows the full content of the currently selected cell and updates live on click or keyboard navigation. Decoded text (e.g. SEGB protobuf payload) is shown where available; binary BLOBs fall back to a UTF-8 decode or a hex preview with a byte-count hint. Applies to SQLite, SEGB, and Realm viewers.
+- **Table viewers — wide-column usability** — columns are now capped at 400 px after auto-sizing so a single long cell can no longer force the table far off-screen; holding **Shift** while scrolling moves the table horizontally. Applies to SQLite, SEGB, and Realm viewers.
+- **BLOB Inspector — "Decoded (from table)" view** — when opening the BLOB Inspector on a cell that has a decoded display (e.g. SEGB protobuf payload), a *Decoded (from table)* option is inserted at the top of the format dropdown and selected by default, showing the human-readable content immediately. Raw bytes are always preserved, so switching to *Protobuf (schema-less)*, *Hex*, or any other format mode continues to work correctly on the original binary data.
 - **SQLite viewer — SQL autocomplete** — context-aware completion for table/view names after `FROM`/`JOIN` and column names after dot notation; aliases resolved automatically.
 - **SQLite viewer — summary navigation** — double-clicking a table row in the Summary tab jumps directly to that table.
+- **Realm / SQLite viewers** — BLOB cells now expose raw bytes to the Blob Inspector on double-click; SQL autocomplete and summary-tab navigation work in the Realm viewer.
 
 ### Bug Fixes
 
-- **macOS rendering** — tab close buttons, tab colours, and file-tree expand arrows all rendered incorrectly with the native Qt style; switching to Fusion style (already used on Windows) fixes all three.
-- **SQL editor — run selected query** — running a selection was rejected with *"Only SELECT queries allowed"* due to a Unicode paragraph-separator stripping bug; fixed. Affects SQLite, SEGB, and Realm viewers.
-- **Realm viewer — summary double-click navigation** — double-clicking a table row in the Summary tab did not navigate to that table; fixed (the "Row" prefix column shifted the name to column 1 while the handler always read column 0).
-- **AppImage — missing execute permission** — the nightly CI pipeline uploaded the AppImage as an artifact and re-downloaded it without restoring the execute bit, causing file managers to open it as a disk image instead of running it; fixed by adding `chmod +x` in the release job.
+**SEGB / Biome**
+
 - **SEGB viewer — spurious Bundle ID / Stream ID / Payload Timestamp columns removed** — these columns appeared empty for most entries because the field number mapping was based on incorrect assumptions about the SEGB protobuf schema; removed to avoid misleading analysts. The full protobuf payload remains accessible via the `Payload` and `Payload JSON` columns.
-- **Table viewers — Inspect Cell / double-click inconsistency on decoded columns** — double-clicking a SEGB payload cell sent raw bytes to the BLOB Inspector while right-click *Inspect Cell…* sent the decoded text string; choosing *Protobuf (schema-less)* in the inspector then produced garbage because it tried to parse the text as wire format. Both paths now always send raw bytes and pass the decoded text separately as the *Decoded (from table)* default view.
-- **Linux / Wayland — floating dock panels could not be resized** — undocking a panel on Wayland triggered a *"mouse grab only for popup windows"* warning and the panel had no resize handles; caused by the custom dock title bar added in a previous release, which prevents the Wayland compositor from providing its own decorations. On Wayland the custom title bar is now skipped so the window manager handles move and resize natively.
+- **SEGB — Inspect Cell / double-click inconsistency on decoded columns** — double-clicking a payload cell sent raw bytes to the BLOB Inspector while right-click *Inspect Cell…* sent the decoded text string; choosing *Protobuf (schema-less)* in the inspector then produced garbage because it tried to parse the text as wire format. Both paths now always send raw bytes and pass the decoded text separately as the *Decoded (from table)* default view.
 - **Show Format Info — SEGB files reported as Unknown** — right-clicking a SEGB file and choosing *Show Format Info* always reported "Unknown format": (a) the format lookup only peeked 32 bytes, too few to reach the SEGB v1 magic at offset 52; (b) SEGB v2 (magic at offset 0) had no entry in `formats.db`. Both are fixed; a `detect_fast_label` fallback is also applied so format detection is consistent with the filesystem panel.
-- **Filter history — Enter key** — pressing Enter committed the top history suggestion instead of the typed text; fixed by switching completion mode.
-- **AppImage — Open External broken** — `xdg-open` failed silently because AppImage environment variables leaked into the subprocess; stripped before invocation.
+
+**SQL Editor**
+
+- **SQL editor — run selected query** — running a selection was rejected with *"Only SELECT queries allowed"* due to a Unicode paragraph-separator stripping bug; fixed. Affects SQLite, SEGB, and Realm viewers.
 - **SQL editor — fixed height** — the SQL input could not grow when the panel below was resized; now expands freely with a 6-line minimum.
+
+**Realm**
+
+- **Realm viewer — summary double-click navigation** — double-clicking a table row in the Summary tab did not navigate to that table; fixed (the "Row" prefix column shifted the name to column 1 while the handler always read column 0).
+
+**Platform / UI**
+
+- **macOS rendering** — tab close buttons, tab colours, and file-tree expand arrows all rendered incorrectly with the native Qt style; switching to Fusion style (already used on Windows) fixes all three.
+- **Linux / Wayland — floating dock panels could not be resized** — undocking a panel on Wayland triggered a *"mouse grab only for popup windows"* warning and the panel had no resize handles; caused by the custom dock title bar added in a previous release, which prevents the Wayland compositor from providing its own decorations. On Wayland the custom title bar is now skipped so the window manager handles move and resize natively.
+- **Filter history — Enter key** — pressing Enter committed the top history suggestion instead of the typed text; fixed by switching completion mode.
+
+**AppImage**
+
+- **AppImage — missing execute permission** — the nightly CI pipeline uploaded the AppImage as an artifact and re-downloaded it without restoring the execute bit, causing file managers to open it as a disk image instead of running it; fixed by adding `chmod +x` in the release job.
+- **AppImage — Open External broken** — `xdg-open` failed silently because AppImage environment variables leaked into the subprocess; stripped before invocation.
 
 ### Build / Distribution
 
