@@ -1888,7 +1888,7 @@ FORMATS: list[dict[str, Any]] = [
             "bpylist, plutil -p (macOS), and Mushy."
         ),
         "platforms": ["iOS", "macOS"],
-        "parser_class": "BplistParser",
+        "parser_class": "PlistParser",
         "magic": [
             {
                 "offset": 0,
@@ -1987,7 +1987,7 @@ FORMATS: list[dict[str, Any]] = [
             "Absent metadata on institutional documents is itself a fraud indicator."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
-        "parser_class": "PdfParser",
+        "parser_class": "PDFParser",
         "magic": [
             {
                 "offset": 0,
@@ -2538,7 +2538,7 @@ FORMATS: list[dict[str, Any]] = [
             "Standard ZIP limited to 4GB — ZIP64 extension required for larger archives."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
-        "parser_class": "ZipParser",
+        "parser_class": None,
         "magic": [
             {
                 "offset": 0,

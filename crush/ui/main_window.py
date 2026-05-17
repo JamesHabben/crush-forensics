@@ -14,7 +14,7 @@ import shutil
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings, QTimer
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QPalette, QColor, QAction
+from PySide6.QtGui import QCloseEvent, QPalette, QColor, QAction, QGuiApplication
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
@@ -112,6 +112,7 @@ class _DockTitleBar(QWidget):
     def __init__(self, title: str, dock: QDockWidget) -> None:
         super().__init__(dock)
         self._dock = dock
+        self._drag_pos: object = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
         layout.setSpacing(6)
@@ -125,10 +126,23 @@ class _DockTitleBar(QWidget):
 
     def mousePressEvent(self, event: object) -> None:  # type: ignore[override]
         if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
-            if self._dock.isFloating() and self._dock.windowHandle() is not None:
-                self._dock.windowHandle().startSystemMove()
+            if self._dock.isFloating():
+                self._drag_pos = event.globalPosition().toPoint()  # type: ignore[union-attr]
                 return
         super().mousePressEvent(event)  # type: ignore[arg-type]
+
+    def mouseMoveEvent(self, event: object) -> None:  # type: ignore[override]
+        if self._drag_pos is not None and hasattr(event, "globalPosition"):
+            new_pos = event.globalPosition().toPoint()  # type: ignore[union-attr]
+            delta = new_pos - self._drag_pos  # type: ignore[operator]
+            self._dock.move(self._dock.pos() + delta)
+            self._drag_pos = new_pos
+            return
+        super().mouseMoveEvent(event)  # type: ignore[arg-type]
+
+    def mouseReleaseEvent(self, event: object) -> None:  # type: ignore[override]
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)  # type: ignore[arg-type]
 
     def _dock_back(self) -> None:
         mw = self._dock.parent()
@@ -1295,11 +1309,19 @@ class MainWindow(QMainWindow):
             self._spinner_timer.start()
 
     def _sync_dock_titlebar(self, dock: QDockWidget, floating: bool) -> None:
-        # On Wayland the compositor owns window decorations and resize handles for
-        # floating windows. Installing a custom title bar removes those, leaving the
-        # dock unable to resize and triggering a mouse-grab warning. Skip it and let
-        # the WM do the right thing.
-        if QGuiApplication.platformName() == "wayland":
+        # On Wayland (native or XWayland) the compositor owns window decorations
+        # including resize handles. A custom title bar strips them entirely.
+        _on_wayland = (
+            QGuiApplication.platformName() == "wayland"
+            or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+            or bool(os.environ.get("WAYLAND_DISPLAY"))
+        )
+        if _on_wayland:
+            if floating:
+                dock.setWindowFlag(Qt.WindowType.Window, True)
+                dock.show()
+            else:
+                dock.setWindowFlag(Qt.WindowType.Window, False)
             return
         if floating:
             dock.setTitleBarWidget(_DockTitleBar(dock.windowTitle(), dock))

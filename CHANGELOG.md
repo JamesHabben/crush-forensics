@@ -4,8 +4,19 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+### New Features
+
+- **Plist / tree viewer — BLOB inspector** — right-clicking any field in the plist tree viewer now shows "Inspect BLOB…"; for raw `bytes` values the bytes are passed through directly, for dicts and lists the subtree is serialized to XML plist first, and for scalars the value is wrapped in a plist envelope — consistent with the BLOB inspector behavior in the SQLite, Realm, SEGB, and LevelDB viewers.
+
+### Improvements
+
+- **BLOB inspector — NSKeyedArchiver deserialization** — the "Plist / bplist" format option in the BLOB inspector now goes through the full `deserialise_NsKeyedArchiver` path (same as the file parser), so SQLite BLOBs and nested plist data values that contain NSKeyedArchiver payloads show the decoded object graph instead of the raw `$objects`/`$top` internal structure.
+- **Plist / tree viewer — string and list BLOB serialization** — when opening the BLOB inspector on a plain string field, the value is now passed as raw UTF-8 (no XML plist envelope, no surrounding quotes); list/tuple subtrees that cannot be plist-serialized fall back to newline-joined items rather than Python's `repr()` notation with brackets and inner quotes.
+
 ### Bug Fixes
 
+- **Floating dock panels — cannot resize on Wayland** — floating `QDockWidget` windows used the `Qt::Tool` window type, which on KDE/GNOME Wayland compositors is drawn without resize handles; switching to `Qt::Window` when floating gives the panel full compositor decorations including borders.
+- **Floating dock panels — move/resize broken after first interaction** — the custom title bar called `startSystemMove()` for dragging, which fails on Wayland after a resize because the compositor no longer tracks an active button press; replaced with manual delta-based dragging on non-Wayland, and the Wayland/XWayland check now also covers `XDG_SESSION_TYPE` and `WAYLAND_DISPLAY` environment variables to correctly catch XWayland sessions.
 - **XML plist — files with DOCTYPE opened in hex viewer** — the parser registry peeked only 64 bytes, too few to reach the `<plist>` root tag past Apple's standard DOCTYPE declaration (~150 bytes); peek size raised to 256 bytes so `PlistParser` correctly claims `.plist` files with an XML preamble.
 - **XML plist — plist root-tag detection simplified** — the previous logic navigated past `<?…?>` and `<!…>` blocks by searching for their closing `>`, which failed silently when those blocks extended past the peek window; replaced with a direct `<plist` substring search, which is simpler and equally unambiguous.
 - **Format label — XML files (SVG, XHTML, …) misidentified as "XML plist"** — `FormatDatabase.identify()` matched any file starting with `<?xml` against the XML plist entry without verifying the root tag; it now calls `_looks_like_plist_xml()` as an additional guard before returning that match.

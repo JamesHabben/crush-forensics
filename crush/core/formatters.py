@@ -26,7 +26,22 @@ def try_base64_text(blob: bytes) -> str | None:
 def try_plist_text(blob: bytes) -> str | None:
     try:
         import plistlib
+        from io import BytesIO
         obj = plistlib.loads(blob)
+        if isinstance(obj, dict) and obj.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
+            try:
+                from crush.third_party.ccl_bplist import (
+                    load as bplist_load,
+                    deserialise_NsKeyedArchiver,
+                    NSKeyedArchiver_common_objects_convertor,
+                    set_object_converter,
+                )
+                from typing import cast, Any as _Any
+                cast(_Any, set_object_converter)(NSKeyedArchiver_common_objects_convertor)
+                raw = cast(_Any, bplist_load)(BytesIO(blob))
+                obj = cast(_Any, deserialise_NsKeyedArchiver)(raw)
+            except Exception:
+                pass
         return pretty_object(obj)
     except Exception:
         return None
