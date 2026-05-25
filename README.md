@@ -44,6 +44,17 @@ Supported viewers (more planned):
 → [User Handbook](crush/docs/handbook.md)
 → [Format Support & Parser Limitations](crush/docs/format-support.md)
 
+## Blog & Deep Dives
+
+Technical write-ups on the crush viewers — forensic background, workflow, and what to look for:
+
+| Viewer | Post |
+|--------|------|
+| SQLite | [What Hides in the WAL — SQLite Forensics with crush](https://bebinary4n6.blogspot.com/2026/05/what-hides-in-wal-sqlite-forensics-with.html) |
+| RealmDB | [Object by Object — RealmDB Forensics with crush](https://bebinary4n6.blogspot.com/2026/05/object-by-object-realmdb-forensics-with.html) |
+| LevelDB | [Reading the CURRENT — LevelDB Forensics with crush](https://bebinary4n6.blogspot.com/2026/05/reading-current-leveldb-forensics-with.html) |
+| SEGB / Biome | [Beyond the C — SEGB and Biome Forensics with crush](https://bebinary4n6.blogspot.com/2026/05/beyond-c-segb-and-biome-forensics-with.html) |
+
 ## Screenshots
 
 Android ABX (Linux)

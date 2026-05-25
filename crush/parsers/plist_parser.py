@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import logging
 import plistlib
 from typing import Any, cast
 
@@ -19,7 +20,7 @@ _XML_PLIST_SIG = b"<?xml"
 
 
 class PlistParser(AbstractParser):
-    SUPPORTED_EXTENSIONS = [".plist"]
+    SUPPORTED_EXTENSIONS = [".plist", ".sfl", ".archive"]
     DISPLAY_NAME = "Property list (plist)"
 
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:
@@ -37,14 +38,17 @@ class PlistParser(AbstractParser):
                 _set_object_converter = cast(Any, set_object_converter)
                 _bplist_load = cast(Any, bplist_load)
                 _deserialize = cast(Any, deserialise_NsKeyedArchiver)
-                _set_object_converter(NSKeyedArchiver_common_objects_convertor)
+                _set_object_converter(_nska_converter)
                 data = _bplist_load(BytesIO(raw))
                 if isinstance(data, dict) and data.get("$archiver") in ("NSKeyedArchiver", "NRKeyedArchiver"):
                     try:
                         data = _deserialize(data)
                         fmt = "binary (NSKeyedArchiver)"
-                    except Exception:
-                        pass
+                    except Exception as nska_exc:
+                        fmt = "binary (NSKeyedArchiver — deserialization failed)"
+                        logging.getLogger(__name__).warning(
+                            "NSKeyedArchiver deserialization failed for %s: %s", node.path, nska_exc
+                        )
             else:
                 fmt = "XML"
                 data = plistlib.loads(raw)
@@ -55,7 +59,6 @@ class PlistParser(AbstractParser):
                 text_index=_flatten_text(data),
             )
         except Exception as exc:
-            import logging
             logging.getLogger(__name__).warning("Plist parse error for %s: %s", node.path, exc)
             try:
                 raw_bytes = vfs.read(node)
@@ -70,6 +73,34 @@ class PlistParser(AbstractParser):
                     "File size": f"{node.size:,} B",
                 },
             )
+
+
+def _nska_converter(obj: Any) -> Any:
+    """Wrapper around ccl_bplist's converter adding NSData, NSNull and NSDateComponents."""
+    result = cast(Any, NSKeyedArchiver_common_objects_convertor)(obj)
+    if result is not obj or not isinstance(obj, dict):
+        return result
+    classname = ""
+    class_meta = obj.get("$class")
+    if isinstance(class_meta, dict):
+        classname = class_meta.get("$classname", "")
+    if classname in ("NSData", "NSMutableData"):
+        return obj.get("NS.data", b"")
+    if classname == "NSNull":
+        return None
+    if classname == "NSDateComponents":
+        _COMPONENT_LABELS = [
+            ("NS.year", "year"), ("NS.month", "month"), ("NS.day", "day"),
+            ("NS.hour", "hour"), ("NS.minute", "min"), ("NS.second", "sec"),
+            ("NS.weekday", "weekday"), ("NS.weekOfYear", "week"),
+        ]
+        parts = [
+            f"{label}={obj[field]}"
+            for field, label in _COMPONENT_LABELS
+            if field in obj and obj[field] not in (None, -1)
+        ]
+        return f"NSDateComponents({', '.join(parts)})"
+    return result
 
 
 def _flatten_text(obj: Any, max_chars: int = 4000) -> str:

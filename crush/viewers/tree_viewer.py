@@ -3,6 +3,7 @@
 """Tree viewer — displays plist, XML, and other hierarchical data."""
 from __future__ import annotations
 
+import plistlib
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+_USER_ROLE = Qt.ItemDataRole.UserRole
 
 
 class TreeViewer(QWidget):
@@ -95,20 +98,28 @@ class TreeViewer(QWidget):
         type_name = type(obj).__name__
 
         if isinstance(obj, dict):
+            # Strip NSKeyedArchiver class metadata; surface classname in Type column
+            class_meta = obj.get("$class")
+            classname = (
+                class_meta.get("$classname", "") if isinstance(class_meta, dict) else ""
+            )
+            display_obj = {k: v for k, v in obj.items() if k not in ("$class", "$classes", "$classname")}
             key_item = QStandardItem(str(key))
-            val_item = QStandardItem(f"({len(obj)} keys)")
-            type_item = QStandardItem("dict")
+            val_item = QStandardItem(f"({len(display_obj)} keys)")
+            type_item = QStandardItem(classname if classname else "dict")
+            key_item.setData(obj, _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
             parent.appendRow([key_item, val_item, type_item])
-            for k, v in obj.items():
+            for k, v in display_obj.items():
                 self._build_items(key_item, v, str(k))
 
         elif isinstance(obj, (list, tuple)):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(f"({len(obj)} items)")
             type_item = QStandardItem(type_name)
+            key_item.setData(obj, _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -120,6 +131,7 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(f"<BLOB {len(obj):,} B>")
             type_item = QStandardItem("bytes")
+            key_item.setData(obj, _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -129,10 +141,24 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(str(obj))
             type_item = QStandardItem(type_name)
+            key_item.setData(obj, _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
             parent.appendRow([key_item, val_item, type_item])
+
+    @staticmethod
+    def _make_blob(obj: Any) -> bytes:
+        if isinstance(obj, bytes):
+            return obj
+        if isinstance(obj, str):
+            return obj.encode("utf-8", errors="replace")
+        try:
+            return plistlib.dumps(obj, fmt=plistlib.FMT_XML)
+        except Exception:
+            if isinstance(obj, (list, tuple)):
+                return "\n".join(str(item) for item in obj).encode("utf-8", errors="replace")
+            return str(obj).encode("utf-8", errors="replace")
 
     def _apply_filter(self, text: str) -> None:
         """Show/hide rows whose key or value contains the search text."""
@@ -184,6 +210,17 @@ class TreeViewer(QWidget):
         val = val_item.text() if val_item is not None else ""
         return key, val
 
+    def _current_obj_and_key(self) -> tuple[Any, str]:
+        index = self._tree.currentIndex()
+        if not index.isValid():
+            return None, ""
+        row = index.row()
+        parent_index = index.parent()
+        key_item = self._model.itemFromIndex(self._model.index(row, 0, parent_index))
+        if key_item is None:
+            return None, ""
+        return key_item.data(_USER_ROLE), key_item.text()
+
     def _on_context_menu(self, pos: object) -> None:
         index = self._tree.indexAt(pos)
         if not index.isValid():
@@ -192,12 +229,18 @@ class TreeViewer(QWidget):
         key, val = self._current_key_value()
         if not key and not val:
             return
+        obj, _ = self._current_obj_and_key()
         menu = QMenu(self)
+        inspect_action = menu.addAction("Inspect BLOB…")
+        menu.addSeparator()
         copy_key = menu.addAction("Copy key")
         copy_value = menu.addAction("Copy value")
         copy_pair = menu.addAction("Copy key = value")
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
-        if action == copy_key:
+        if action == inspect_action:
+            from crush.viewers.table_viewer import BlobInspector
+            BlobInspector(self._make_blob(obj), self).show()
+        elif action == copy_key:
             QApplication.clipboard().setText(key)
         elif action == copy_value:
             QApplication.clipboard().setText(val)
