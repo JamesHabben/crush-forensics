@@ -238,9 +238,11 @@ Displays text files with line numbers, syntax highlighting, and search.
 
 Displays JPEG, PNG, GIF, BMP, WebP, TIFF, HEIC, HEIF, AVIF, and JPEG XL images. EXIF metadata (camera make/model, GPS coordinates, timestamp, ISO, aperture) is shown in the Properties panel when available.
 
-> **Forensic note:** HEIC and HEIF are common on iOS devices. A file labelled `HEIC` in the filesystem panel is identified by its container's `ftyp` brand — not by its extension. A `.mp4` or `.jpeg` file can be a HEIC container; Crush will detect and display it correctly regardless. Use `type:heic` in the filter field to find all HEIC files across an acquisition, including any with misleading extensions.
+> **Forensic note — HEIC/HEIF:** Common on iOS devices (default since iOS 11). A file labelled `HEIC` in the filesystem panel is identified by its ISOBMFF `ftyp` container brand — not by its extension. A `.mp4` or `.jpeg` file can be a HEIC container; Crush will detect and display it correctly regardless. Use `type:heic` in the filter field to find all HEIC files across an acquisition, including any with misleading extensions.
 >
 > **Current limitation:** HEIC/HEIF is a container format and can hold multiple images in a single file — burst frames, HDR primary + gain map, depth maps, and Live Photo previews. Crush currently displays only the primary image. Embedded secondary images (depth maps, HDR layers, burst frames) are not yet accessible.
+>
+> **Forensic note — AVIF:** Used by social media platforms (Netflix, YouTube, Discord) and increasingly on Android and modern browsers. AVIF files downloaded from social platforms frequently have EXIF metadata stripped server-side — the absence of GPS or device metadata in an AVIF is therefore a provenance indicator rather than a sign of camera origin. Like HEIC, AVIF is detected from the ISOBMFF `ftyp` brand (`avif` or `avis`), so `type:avif` finds AVIF content regardless of file extension.
 
 ### Media Viewer
 

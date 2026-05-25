@@ -31,6 +31,7 @@ dependencies = [
     "grpcio-tools>=1.62",
     "Pillow>=10.0",
     "pillow-heif>=0.13",
+    "pillow-jxl-plugin>=1.3",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +43,6 @@ dev = [
     "mypy>=1.10",
     "lxml-stubs>=0.5.1",
 ]
-jxl = ["pillow-jxl-plugin>=0.4"]
 
 [project.scripts]
 crush = "crush.__main__:main"
