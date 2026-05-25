@@ -77,7 +77,7 @@ class PlistParser(AbstractParser):
 
 def _nska_converter(obj: Any) -> Any:
     """Wrapper around ccl_bplist's converter adding NSData, NSNull and NSDateComponents."""
-    result = NSKeyedArchiver_common_objects_convertor(obj)
+    result = cast(Any, NSKeyedArchiver_common_objects_convertor)(obj)
     if result is not obj or not isinstance(obj, dict):
         return result
     classname = ""

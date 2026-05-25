@@ -4,10 +4,7 @@
 from __future__ import annotations
 
 import plistlib
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from crush.viewers.table_viewer import BlobInspector
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QStandardItem, QStandardItemModel
