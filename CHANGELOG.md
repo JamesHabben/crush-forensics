@@ -10,6 +10,10 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **NSKeyedArchiver — extended type converter** — added conversions for `NSData`/`NSMutableData` (→ `bytes`), `NSNull` (→ `None`), and `NSDateComponents` (→ readable string); implemented as a wrapper around the vendored ccl_bplist converter so the third-party file remains unmodified.
+- **NSKeyedArchiver — unknown custom classes** — when a deserialized dict still carries `$class`/`$classname` metadata (unknown class not handled by the converter), the tree viewer now shows the class name in the Type column and hides the internal `$class`/`$classes`/`$classname` keys, so only the actual data fields are visible.
+- **PlistParser — additional supported extensions** — `.sfl` and `.archive` added to `SUPPORTED_EXTENSIONS`; these files were already parsed correctly via magic-byte detection, the list now reflects reality.
+- **PlistParser — NSKeyedArchiver deserialization failure surfaced** — a failed `deserialise_NsKeyedArchiver` call was silently swallowed; the Format field in the Properties panel now reads `binary (NSKeyedArchiver — deserialization failed)` and a warning is logged, while the raw plist structure is still shown in the tree.
 - **BLOB inspector — NSKeyedArchiver deserialization** — the "Plist / bplist" format option in the BLOB inspector now goes through the full `deserialise_NsKeyedArchiver` path (same as the file parser), so SQLite BLOBs and nested plist data values that contain NSKeyedArchiver payloads show the decoded object graph instead of the raw `$objects`/`$top` internal structure.
 - **Plist / tree viewer — string and list BLOB serialization** — when opening the BLOB inspector on a plain string field, the value is now passed as raw UTF-8 (no XML plist envelope, no surrounding quotes); list/tuple subtrees that cannot be plist-serialized fall back to newline-joined items rather than Python's `repr()` notation with brackets and inner quotes.
 

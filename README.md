@@ -102,7 +102,7 @@ python scripts/download_unifiedlog_binaries.py
 4. Run Crush
 ```bash
 crush
-```gith
+```
 
 ### Alternative run command
 

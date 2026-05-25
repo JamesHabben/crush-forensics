@@ -101,15 +101,21 @@ class TreeViewer(QWidget):
         type_name = type(obj).__name__
 
         if isinstance(obj, dict):
+            # Strip NSKeyedArchiver class metadata; surface classname in Type column
+            class_meta = obj.get("$class")
+            classname = (
+                class_meta.get("$classname", "") if isinstance(class_meta, dict) else ""
+            )
+            display_obj = {k: v for k, v in obj.items() if k not in ("$class", "$classes", "$classname")}
             key_item = QStandardItem(str(key))
-            val_item = QStandardItem(f"({len(obj)} keys)")
-            type_item = QStandardItem("dict")
+            val_item = QStandardItem(f"({len(display_obj)} keys)")
+            type_item = QStandardItem(classname if classname else "dict")
             key_item.setData(obj, _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
             parent.appendRow([key_item, val_item, type_item])
-            for k, v in obj.items():
+            for k, v in display_obj.items():
                 self._build_items(key_item, v, str(k))
 
         elif isinstance(obj, (list, tuple)):
