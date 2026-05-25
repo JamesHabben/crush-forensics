@@ -3,12 +3,20 @@
 """Media viewer — audio and video playback via Qt Multimedia."""
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QBuffer, QIODeviceBase, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimedia import (
+    QAudio,
+    QAudioFormat,
+    QAudioOutput,
+    QAudioSink,
+    QMediaDevices,
+    QMediaPlayer,
+)
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -19,13 +27,59 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+_OGG_MAGIC = b"OggS"
+
+
+def _decode_ogg_to_pcm(data: bytes) -> tuple[bytes, int, int] | None:
+    """Decode OGG/Opus/Vorbis to interleaved signed-16-bit PCM.
+
+    Returns (pcm_bytes, sample_rate, channels) or None on failure.
+    PyAV bundles FFmpeg on Windows/macOS so no system codec is required.
+    """
+    try:
+        import av  # type: ignore
+    except ImportError:
+        return None
+    try:
+        container = av.open(io.BytesIO(data))
+        if not container.streams.audio:
+            return None
+        stream = container.streams.audio[0]
+        rate: int = stream.rate or 48000
+        channels: int = min(stream.channels or 1, 2)
+        layout = "mono" if channels == 1 else "stereo"
+        resampler = av.AudioResampler(format="s16", layout=layout, rate=rate)
+        chunks: list[bytes] = []
+        for frame in container.decode(stream):
+            for out in resampler.resample(frame):
+                chunks.append(bytes(out.planes[0]))
+        for out in resampler.resample(None):  # flush
+            chunks.append(bytes(out.planes[0]))
+        return b"".join(chunks), rate, channels
+    except Exception:
+        return None
+
 
 class MediaViewer(QWidget):
-    """Viewer for video and audio files using Qt Multimedia."""
+    """Viewer for video and audio files using Qt Multimedia.
+
+    OGG/Opus files are decoded via PyAV (bundled FFmpeg) and played through
+    QAudioSink — this bypasses platform codec limitations on macOS and Windows
+    where AVFoundation/Media Foundation do not support Opus.
+    """
 
     def __init__(self, data: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._tmp_path: str | None = None
+        # PCM backend state
+        self._using_pcm = False
+        self._sink: QAudioSink | None = None
+        self._buf: QBuffer | None = None
+        self._pcm_bpm = 0  # bytes per millisecond
+        self._pcm_duration_ms = 0
+        self._pcm_timer = QTimer()
+        self._pcm_timer.setInterval(200)
+        self._pcm_timer.timeout.connect(self._update_pcm_position)
         self._build_ui()
         self._load(data)
 
@@ -33,11 +87,11 @@ class MediaViewer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Video surface
+        # Video surface (hidden for audio-only PCM playback)
         self._video_widget = QVideoWidget()
         layout.addWidget(self._video_widget, stretch=1)
 
-        # Player + audio
+        # Qt player (used for video and non-OGG audio)
         self._player = QMediaPlayer()
         self._audio = QAudioOutput()
         self._player.setAudioOutput(self._audio)
@@ -66,27 +120,86 @@ class MediaViewer(QWidget):
 
         layout.addWidget(controls)
 
-        # Connect signals
+        # Qt player signals
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.playbackStateChanged.connect(self._on_state_changed)
 
     def _load(self, data: bytes) -> None:
-        # Write bytes to a temp file — QMediaPlayer needs a URL
+        if data[:4] == _OGG_MAGIC:
+            result = _decode_ogg_to_pcm(data)
+            if result is not None:
+                pcm, rate, channels = result
+                self._start_pcm(pcm, rate, channels)
+                return
+        # Qt multimedia path (video, MP3, M4A, …)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".media")
         tmp.write(data)
         tmp.close()
         self._tmp_path = tmp.name
         self._player.setSource(QUrl.fromLocalFile(self._tmp_path))
 
-    def _toggle_play(self) -> None:
-        if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self._player.pause()
-        else:
-            self._player.play()
+    def _start_pcm(self, pcm: bytes, rate: int, channels: int) -> None:
+        self._using_pcm = True
+        self._video_widget.hide()
+        bpm = rate * channels * 2 // 1000  # bytes per millisecond (s16)
+        self._pcm_bpm = bpm if bpm > 0 else 1
+        self._pcm_duration_ms = len(pcm) // self._pcm_bpm
+        self._position_slider.setRange(0, self._pcm_duration_ms)
+        self._time_label.setText(f"0:00 / {_ms_to_str(self._pcm_duration_ms)}")
 
-    def _seek(self, position: int) -> None:
-        self._player.setPosition(position)
+        fmt = QAudioFormat()
+        fmt.setSampleRate(rate)
+        fmt.setChannelCount(channels)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+
+        self._buf = QBuffer()
+        self._buf.setData(pcm)
+        self._buf.open(QIODeviceBase.OpenModeFlag.ReadOnly)
+
+        self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), fmt)
+        self._sink.setVolume(0.8)
+        self._sink.start(self._buf)  # pull mode
+        self._play_btn.setText("Pause")
+        self._pcm_timer.start()
+
+    # ------------------------------------------------------------------ #
+    # Controls                                                             #
+    # ------------------------------------------------------------------ #
+
+    def _toggle_play(self) -> None:
+        if self._using_pcm:
+            if self._sink is None:
+                return
+            if self._sink.state() == QAudio.State.ActiveState:
+                self._sink.suspend()
+                self._pcm_timer.stop()
+                self._play_btn.setText("Play")
+            else:
+                if self._buf and self._buf.atEnd():
+                    self._buf.seek(0)
+                self._sink.resume()
+                self._pcm_timer.start()
+                self._play_btn.setText("Pause")
+        else:
+            if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self._player.pause()
+            else:
+                self._player.play()
+
+    def _seek(self, position_ms: int) -> None:
+        if self._using_pcm and self._sink and self._buf:
+            was_active = self._sink.state() == QAudio.State.ActiveState
+            self._sink.suspend()
+            self._buf.seek(position_ms * self._pcm_bpm)
+            if was_active:
+                self._sink.resume()
+        else:
+            self._player.setPosition(position_ms)
+
+    # ------------------------------------------------------------------ #
+    # Qt player signal handlers                                           #
+    # ------------------------------------------------------------------ #
 
     def _on_position_changed(self, position: int) -> None:
         self._position_slider.setValue(position)
@@ -103,7 +216,30 @@ class MediaViewer(QWidget):
         else:
             self._play_btn.setText("Play")
 
+    # ------------------------------------------------------------------ #
+    # PCM timer handler                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _update_pcm_position(self) -> None:
+        if self._buf is None:
+            return
+        pos_ms = self._buf.pos() // self._pcm_bpm
+        self._position_slider.setValue(pos_ms)
+        self._time_label.setText(
+            f"{_ms_to_str(pos_ms)} / {_ms_to_str(self._pcm_duration_ms)}"
+        )
+        if self._buf.atEnd():
+            self._pcm_timer.stop()
+            self._play_btn.setText("Play")
+
+    # ------------------------------------------------------------------ #
+    # Cleanup                                                             #
+    # ------------------------------------------------------------------ #
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._pcm_timer.stop()
+        if self._sink is not None:
+            self._sink.stop()
         self._player.stop()
         if self._tmp_path and os.path.exists(self._tmp_path):
             os.unlink(self._tmp_path)

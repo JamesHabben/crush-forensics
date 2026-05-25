@@ -34,6 +34,7 @@ _IMAGE_TYPE_LABELS: frozenset[str] = frozenset({
 })
 _MEDIA_TYPE_LABELS: frozenset[str] = frozenset({
     "media", "mp4", "mov", "avi", "mkv", "mp3", "m4a", "aac", "wav", "flac",
+    "ogg", "opus",
 })
 
 

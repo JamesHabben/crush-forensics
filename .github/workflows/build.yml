@@ -133,6 +133,7 @@ jobs:
             --collect-all magic \
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
+            --collect-all av \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -170,6 +171,7 @@ jobs:
             --collect-all magic \
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
+            --collect-all av \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -224,6 +226,7 @@ jobs:
             --collect-all magic `
             --collect-all pillow_heif `
             --collect-all pillow_jxl `
+            --collect-all av `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
             --exclude-module PySide6.QtWebEngineQuick `

@@ -1768,9 +1768,9 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": None,
         "magic": [
             {
-                "offset": 0,
-                "value": b"\x4f\x67\x67\x53",
-                "description": "OggS capture pattern (Opus uses Ogg container)",
+                "offset": 28,
+                "value": b"\x4f\x70\x75\x73\x48\x65\x61\x64",
+                "description": "OpusHead codec identification (RFC 7845 §5.1, offset 28 in first Ogg page)",
             }
         ],
         "extensions": [".opus"],

@@ -69,10 +69,14 @@ class FormatDatabase:
 
         # 1. Magic bytes — fetch all patterns and test in Python
         #    (avoids SQL BLOB comparison portability issues)
+        #    Return the most specific match (longest pattern) so that e.g.
+        #    "OpusHead" at offset 28 beats the generic "OggS" at offset 0.
         cur = self._conn.execute(
             "SELECT f.*, m.offset, m.pattern "
             "FROM formats f JOIN magic_bytes m ON m.format_id = f.id"
         )
+        best_row = None
+        best_score = -1
         for row in cur:
             offset = row["offset"]
             if offset is None:
@@ -82,9 +86,12 @@ class FormatDatabase:
             if len(peek_bytes) >= end and peek_bytes[offset:end] == pattern:
                 if pattern == XML_PLIST_SIG and not _looks_like_plist_xml(peek_bytes):
                     continue
-                return self._row_to_match(row)
+                score = len(pattern)
+                if score > best_score:
+                    best_score = score
+                    best_row = row
 
-        return None
+        return self._row_to_match(best_row) if best_row is not None else None
 
     def by_short_name(self, short_name: str) -> FormatMatch | None:
         """Look up format metadata by short_name (e.g. 'SEGB', 'SQLite')."""

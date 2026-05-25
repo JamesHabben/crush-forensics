@@ -90,6 +90,9 @@ While the filter is active, the tree is replaced by a **flat search results list
 | `type:heic` | Matches only files identified as HEIC containers — including those with a `.mp4` or `.jpeg` extension |
 | `type:avif` | Matches AVIF image files |
 | `type:jxl` | Matches JPEG XL image files |
+| `type:media` | Matches **all** audio and video files — MP4, MOV, MP3, WAV, OGG, Opus, and more |
+| `type:opus` | Matches Opus voice notes (WhatsApp `.opus`, Telegram `.ogg`) detected by codec header |
+| `type:ogg` | Matches OGG Vorbis audio files |
 | `name:rubin type:sqlite` | AND — only files whose name contains `rubin` **and** whose type is SQLite |
 
 Multiple tokens are always AND-combined. The `type:` token matches against the format label in the Type column, which is detected from file content (magic bytes) — not from the file extension. This means a HEIC image named `photo.jpeg` will still match `type:heic`.
