@@ -28,6 +28,23 @@ from crush.core.session import Session
 from crush.core.vfs import VFS, VFSNode
 from crush.core.magic import detect_fast_label
 
+_IMAGE_TYPE_LABELS: frozenset[str] = frozenset({
+    "image", "heic", "heif", "avif", "jxl",
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif",
+})
+_MEDIA_TYPE_LABELS: frozenset[str] = frozenset({
+    "media", "mp4", "mov", "avi", "mkv", "mp3", "m4a", "aac", "wav", "flac",
+})
+
+
+def _type_matches(type_filter: str, type_label: str) -> bool:
+    label_lower = type_label.lower()
+    if type_filter == "image":
+        return label_lower in _IMAGE_TYPE_LABELS
+    if type_filter == "media":
+        return label_lower in _MEDIA_TYPE_LABELS
+    return type_filter in label_lower
+
 _ROLE_NODE = Qt.ItemDataRole.UserRole + 1
 _ROLE_VFS  = Qt.ItemDataRole.UserRole + 2
 _ROLE_LOADED = Qt.ItemDataRole.UserRole + 3
@@ -594,7 +611,7 @@ class FilesystemPanel(QWidget):
                 )
             else:
                 type_label = self._detect_type_label(node, vfs)
-                type_match = type_filter in type_label.lower()
+                type_match = _type_matches(type_filter, type_label)
         else:
             type_label = None
             type_match = True

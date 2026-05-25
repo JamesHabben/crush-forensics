@@ -3,8 +3,10 @@
 """Image viewer — displays image files with fit-to-window scaling and zoom."""
 from __future__ import annotations
 
+import io
+
 from PySide6.QtCore import Qt, QEvent, QPoint, QTimer
-from PySide6.QtGui import QPixmap, QResizeEvent, QCursor
+from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QCursor
 from PySide6.QtWidgets import (
     QLabel,
     QHBoxLayout,
@@ -17,8 +19,44 @@ from PySide6.QtWidgets import (
 )
 
 
+_exotic_registered = False
+
+
+def _ensure_exotic_formats() -> None:
+    """Register optional Pillow plugins for HEIF/HEIC/AVIF and JPEG XL (once)."""
+    global _exotic_registered
+    if _exotic_registered:
+        return
+    _exotic_registered = True
+    try:
+        import pillow_heif  # type: ignore[import-untyped]
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+    try:
+        import pillow_jxl  # type: ignore[import-untyped]  # noqa: F401
+    except ImportError:
+        pass
+
+
+def _pillow_decode(data: bytes) -> QPixmap | None:
+    """Decode image bytes via Pillow and return a QPixmap using raw pixel transfer."""
+    try:
+        import PIL.Image as PilImage  # type: ignore[import-untyped]
+        _ensure_exotic_formats()
+        img = PilImage.open(io.BytesIO(data))
+        img = img.convert("RGBA")
+        w, h = img.size
+        raw = img.tobytes("raw", "RGBA")
+        qimg = QImage(raw, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        px = QPixmap.fromImage(qimg)
+        return px if not px.isNull() else None
+    except Exception:
+        return None
+
+
 class ImageViewer(QWidget):
-    """Viewer for image files (JPEG, PNG, HEIC via Qt, etc.)."""
+    """Viewer for image files (JPEG, PNG, GIF, BMP, WebP, TIFF, HEIC, HEIF, AVIF, JXL)."""
 
     def __init__(self, data: bytes, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -100,11 +138,14 @@ class ImageViewer(QWidget):
     def _load(self, data: bytes) -> None:
         loaded = self._pixmap.loadFromData(data)
         if not loaded or self._pixmap.isNull():
+            px = _pillow_decode(data)
+            if px is not None:
+                self._pixmap = px
+                loaded = True
+        if not loaded or self._pixmap.isNull():
             self._image_label.setText("Unable to decode image.")
             return
-        # Ensure something is visible immediately
         self._set_scale(1.0)
-        # Defer fit until the viewport has a real size
         QTimer.singleShot(0, self._fit)
 
     def _fit(self) -> None:

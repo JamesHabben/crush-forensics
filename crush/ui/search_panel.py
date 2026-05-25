@@ -32,6 +32,7 @@ from crush.core.vfs import VFS, VFSNode
 _ROLE_NODE = Qt.ItemDataRole.UserRole + 1
 _ROLE_VFS = Qt.ItemDataRole.UserRole + 2
 _ROLE_SORT = Qt.ItemDataRole.UserRole + 3  # numeric sort value
+_ROLE_TYPE = Qt.ItemDataRole.UserRole + 4  # detected type key (from magic bytes)
 
 _SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"]
 
@@ -52,6 +53,58 @@ def _fmt_ts(ts: float) -> str:
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
+
+
+_ISOBMFF_IMAGE_BRANDS: frozenset[bytes] = frozenset({
+    b"heic", b"heix", b"hevc", b"hevx",
+    b"heim", b"heis", b"hevm", b"hevs",
+    b"mif1", b"msf1",
+    b"avif", b"avis",
+})
+
+
+def _detect_type(peek: bytes, ext: str) -> str:
+    """Return type key from magic bytes; fall back to extension."""
+    if len(peek) >= 4:
+        # JPEG / JPEG XL bare codestream
+        if peek[:3] == b"\xFF\xD8\xFF" or peek[:2] == b"\xFF\x0A":
+            return "image"
+        # PNG
+        if peek[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image"
+        # GIF
+        if peek[:6] in (b"GIF87a", b"GIF89a"):
+            return "image"
+        # BMP
+        if peek[:2] == b"BM":
+            return "image"
+        # TIFF
+        if peek[:4] in (b"II*\x00", b"MM\x00*"):
+            return "image"
+        # WebP
+        if len(peek) >= 12 and peek[:4] == b"RIFF" and peek[8:12] == b"WEBP":
+            return "image"
+        # HEIC / HEIF / AVIF (ISOBMFF ftyp box)
+        if len(peek) >= 12 and peek[4:8] == b"ftyp" and peek[8:12] in _ISOBMFF_IMAGE_BRANDS:
+            return "image"
+        # JPEG XL ISOBMFF container
+        if len(peek) >= 12 and peek[:12] == b"\x00\x00\x00\x0C\x4A\x58\x4C\x20\x0D\x0A\x87\x0A":
+            return "image"
+        # SQLite
+        if len(peek) >= 16 and peek[:16] == b"SQLite format 3\x00":
+            return "sqlite"
+        # Binary plist
+        if peek[:6] == b"bplist":
+            return "plist"
+        # PDF
+        if peek[:4] == b"%PDF":
+            return "pdf"
+    # Fall back to extension
+    ext_clean = ext.lstrip(".").lower()
+    for type_key, exts in _TYPE_EXTENSIONS.items():
+        if ext_clean in exts:
+            return type_key
+    return ""
 
 
 class SearchPanel(QWidget):
@@ -232,12 +285,15 @@ class SearchPanel(QWidget):
         self._model.removeRows(0, self._model.rowCount())
         for node in nodes:
             ext = Path(node.name).suffix.lower()
+            peek = self._vfs.peek(node, 20) if self._vfs else b""
+            detected_type = _detect_type(peek, ext)
             size_str = _fmt_size(node.size)
             ts_str = _fmt_ts(node.modified)
 
             name_item = QStandardItem(node.name)
             name_item.setData(node, _ROLE_NODE)
             name_item.setData(self._vfs, _ROLE_VFS)
+            name_item.setData(detected_type, _ROLE_TYPE)
             name_item.setEditable(False)
 
             path_item = QStandardItem(node.path)
@@ -309,18 +365,15 @@ class _SearchProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         if not self._type_filter:
             return True
-        ext_idx = self.sourceModel().index(source_row, 2, source_parent)
-        ext = (self.sourceModel().data(ext_idx) or "").lower().lstrip(".")
-        allowed = _TYPE_EXTENSIONS.get(self._type_filter)
-        if allowed is None:
-            return True
-        return ext in allowed
+        name_idx = self.sourceModel().index(source_row, 0, source_parent)
+        detected_type = self.sourceModel().data(name_idx, _ROLE_TYPE) or ""
+        return detected_type == self._type_filter
 
 
 # Map type-filter key → set of matching extensions
 _TYPE_EXTENSIONS: dict[str, set[str]] = {
     "sqlite":  {"db", "sqlite", "sqlite3", "db3"},
-    "image":   {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif"},
+    "image":   {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif", "avif", "jxl"},
     "media":   {"mp4", "mov", "avi", "mkv", "mp3", "m4a", "aac", "wav", "flac", "ogg"},
     "plist":   {"plist"},
     "json":    {"json"},

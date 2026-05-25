@@ -6,9 +6,13 @@ All notable changes to Crush will be documented in this file.
 
 ### New Features
 
+- **HEIC / HEIF / AVIF / JPEG XL image support** — the image viewer now renders HEIC, HEIF, AVIF, and JPEG XL files in addition to the existing formats. Qt's native decoder is tried first (fastest path, zero overhead for already-supported formats); if it cannot handle the format, Pillow decodes the image and transfers raw pixels directly to Qt — no intermediate PNG encode, minimising decode latency. EXIF metadata (GPS coordinates, device make/model, timestamp, ISO, aperture) is extracted from HEIC/HEIF containers and displayed in the Properties panel, consistent with existing JPEG/TIFF/PNG EXIF support. **Known limitation:** HEIC/HEIF is a multi-image container (burst frames, HDR layers, depth maps, Live Photo previews); only the primary image is currently shown.
 - **Plist / tree viewer — BLOB inspector** — right-clicking any field in the plist tree viewer now shows "Inspect BLOB…"; for raw `bytes` values the bytes are passed through directly, for dicts and lists the subtree is serialized to XML plist first, and for scalars the value is wrapped in a plist envelope — consistent with the BLOB inspector behavior in the SQLite, Realm, SEGB, and LevelDB viewers.
 
 ### Improvements
+
+- **Magic-byte type detection — HEIC / HEIF / AVIF / JXL** — the filesystem panel now returns format-specific type labels (`HEIC`, `HEIF`, `AVIF`, `JXL`) detected from the ISOBMFF `ftyp` brand and JXL container/codestream signatures, before falling through to the `filetype` library. Files with a misleading extension (e.g. a `.mp4` or `.jpeg` that is actually a HEIC container) are correctly identified and labelled by content.
+- **`type:image` search — full image category** — the filesystem panel `type:image` filter is now category-aware and matches all image formats — JPEG, PNG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, GIF, BMP — even when their specific type label (e.g. `HEIC`) does not literally contain the word `image`. Use `type:heic`, `type:avif`, or `type:jxl` to narrow to a specific format.
 
 - **NSKeyedArchiver — extended type converter** — added conversions for `NSData`/`NSMutableData` (→ `bytes`), `NSNull` (→ `None`), and `NSDateComponents` (→ readable string); implemented as a wrapper around the vendored ccl_bplist converter so the third-party file remains unmodified.
 - **NSKeyedArchiver — unknown custom classes** — when a deserialized dict still carries `$class`/`$classname` metadata (unknown class not handled by the converter), the tree viewer now shows the class name in the Type column and hides the internal `$class`/`$classes`/`$classname` keys, so only the actual data fields are visible.

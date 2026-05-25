@@ -9,11 +9,24 @@ from typing import Any
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
 
+# ISOBMFF brands that identify HEIF/HEIC/AVIF containers
+_ISOBMFF_IMAGE_BRANDS: frozenset[bytes] = frozenset({
+    b"heic", b"heix", b"hevc", b"hevx",  # HEIC (HEVC-based)
+    b"heim", b"heis", b"hevm", b"hevs",  # HEIF multi-picture / tiled
+    b"mif1", b"msf1",                    # HEIF (generic)
+    b"avif", b"avis",                    # AVIF
+})
+
+# JPEG XL ISOBMFF container signature (12 bytes)
+_JXL_CONTAINER_SIG = b"\x00\x00\x00\x0C\x4A\x58\x4C\x20\x0D\x0A\x87\x0A"
+
 
 class ImageParser(AbstractParser):
     SUPPORTED_EXTENSIONS = [
         ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp",
-        ".tif", ".tiff", ".heic", ".heif",
+        ".tif", ".tiff",
+        ".heic", ".heif", ".avif",
+        ".jxl",
     ]
     DISPLAY_NAME = "Image"
 
@@ -55,8 +68,13 @@ def _looks_like_image(peek: bytes) -> bool:
         return True  # TIFF
     if len(peek) >= 12 and peek.startswith(b"RIFF") and peek[8:12] == b"WEBP":
         return True  # WebP
-    if len(peek) >= 12 and peek[4:8] == b"ftyp":
-        brand = peek[8:12]
-        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
-            return True  # HEIC/HEIF family
+    # HEIC / HEIF / AVIF: ISO Base Media File Format — ftyp box at offset 4
+    if len(peek) >= 12 and peek[4:8] == b"ftyp" and peek[8:12] in _ISOBMFF_IMAGE_BRANDS:
+        return True
+    # JPEG XL: bare codestream
+    if peek[:2] == b"\xFF\x0A":
+        return True
+    # JPEG XL: ISOBMFF container
+    if len(peek) >= 12 and peek[:12] == _JXL_CONTAINER_SIG:
+        return True
     return False
