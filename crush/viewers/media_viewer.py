@@ -28,10 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 _OGG_MAGIC = b"OggS"
+_AMR_MAGIC = b"#!AMR"
 
 
-def _decode_ogg_to_pcm(data: bytes) -> tuple[bytes, int, int] | None:
-    """Decode OGG/Opus/Vorbis to interleaved signed-16-bit PCM.
+def _decode_audio_pcm(data: bytes) -> tuple[bytes, int, int] | None:
+    """Decode OGG/Opus/Vorbis/AMR to interleaved signed-16-bit PCM.
 
     Returns (pcm_bytes, sample_rate, channels) or None on failure.
     PyAV bundles FFmpeg on Windows/macOS so no system codec is required.
@@ -126,8 +127,8 @@ class MediaViewer(QWidget):
         self._player.playbackStateChanged.connect(self._on_state_changed)
 
     def _load(self, data: bytes) -> None:
-        if data[:4] == _OGG_MAGIC:
-            result = _decode_ogg_to_pcm(data)
+        if data[:4] == _OGG_MAGIC or data[:5] == _AMR_MAGIC:
+            result = _decode_audio_pcm(data)
             if result is not None:
                 pcm, rate, channels = result
                 self._start_pcm(pcm, rate, channels)
