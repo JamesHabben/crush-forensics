@@ -29,6 +29,10 @@ dependencies = [
     "pypdf>=4.0",
     "protobuf>=4.25",
     "grpcio-tools>=1.62",
+    "Pillow>=10.0",
+    "pillow-heif>=0.13",
+    "pillow-jxl-plugin>=1.3",
+    "av>=12.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +51,9 @@ crush = "crush.__main__:main"
 [project.urls]
 Homepage = "https://github.com/kalink0/crush-forensics"
 Issues = "https://github.com/kalink0/crush-forensics/issues"
+
+[tool.setuptools.packages.find]
+include = ["crush*"]
 
 [tool.ruff]
 line-length = 100

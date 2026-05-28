@@ -731,17 +731,22 @@ FORMATS: list[dict[str, Any]] = [
             "iCloud Photo Library syncs HEIC — relevant for cloud artifact correlation."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "ImageParser",
         "magic": [
-            {
-                "offset": 4,
-                "value": b"\x66\x74\x79\x70",
-                "description": "ISOBMFF ftyp box (offset 4)",
-            },
             {
                 "offset": 8,
                 "value": b"\x68\x65\x69\x63",
-                "description": "HEIC brand identifier (offset 8)",
+                "description": "HEIC brand identifier in ISOBMFF ftyp box (offset 8)",
+            },
+            {
+                "offset": 8,
+                "value": b"\x68\x65\x69\x78",
+                "description": "HEIF brand 'heix' in ISOBMFF ftyp box (offset 8)",
+            },
+            {
+                "offset": 8,
+                "value": b"\x6d\x69\x66\x31",
+                "description": "HEIF brand 'mif1' in ISOBMFF ftyp box (offset 8)",
             },
         ],
         "extensions": [".heic", ".heif"],
@@ -790,7 +795,7 @@ FORMATS: list[dict[str, Any]] = [
             "and the format's novelty means older tools may fail to parse it."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "ImageParser",
         "magic": [
             {
                 "offset": 0,
@@ -820,6 +825,63 @@ FORMATS: list[dict[str, Any]] = [
             (
                 "JPEG XL file format overview (Library of Congress)",
                 "https://www.loc.gov/preservation/digital/formats/fdd/fdd000538.shtml",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
+        "name": "AVIF Image",
+        "short_name": "AVIF",
+        "category": "document",
+        "forensic_relevance": (
+            "AV1 Image File Format — a royalty-free still-image format based on the AV1 video "
+            "codec and the ISOBMFF container (ISO/IEC 23000-22). "
+            "Adopted by Chrome (2020), Firefox (2021), Safari (2023), Android (2019), "
+            "and increasingly by social media platforms (Netflix, YouTube, Discord) for "
+            "bandwidth-efficient image delivery. "
+            "Like HEIC, AVIF uses the ISOBMFF ftyp box structure; the brand identifier "
+            "'avif' or 'avis' (for image sequences / animations) appears at offset 8–11. "
+            "Supports EXIF, XMP, and ICC colour profiles embedded in 'meta' boxes — "
+            "GPS coordinates, capture timestamps, and device model are preserved when the "
+            "originating app writes EXIF. "
+            "AVIF files from social media have often had metadata stripped server-side, "
+            "which is itself a forensic indicator of the image's provenance. "
+            "The AV1 bitstream inside is distinct from H.265 (HEVC used in HEIC), so "
+            "HEIC-specific codec detection tools will not recognise AVIF content. "
+            "Animation / multi-frame AVIF ('avis' brand) is increasingly used as a GIF "
+            "replacement — relevant when investigating multimedia evidence."
+        ),
+        "platforms": ["Android", "iOS", "macOS", "Windows"],
+        "parser_class": "ImageParser",
+        "magic": [
+            {
+                "offset": 8,
+                "value": b"\x61\x76\x69\x66",
+                "description": "AVIF brand identifier 'avif' in ISOBMFF ftyp box (offset 8)",
+            },
+            {
+                "offset": 8,
+                "value": b"\x61\x76\x69\x73",
+                "description": "AVIF animation brand 'avis' in ISOBMFF ftyp box (offset 8)",
+            },
+        ],
+        "extensions": [".avif"],
+        "links": [
+            (
+                "AVIF — AOM specification",
+                "https://aomediacodec.github.io/av1-avif/",
+            ),
+            (
+                "AVIF format overview (Library of Congress)",
+                "https://www.loc.gov/preservation/digital/formats/fdd/fdd000538.shtml",
+            ),
+            (
+                "AVIF metadata handling (Exiv2)",
+                "https://dev.exiv2.org/projects/exiv2/wiki/The_Metadata_in_AVIF_files",
+            ),
+            (
+                "ISOBMFF — ISO/IEC 14496-12 base media file format",
+                "https://www.iso.org/standard/83102.html",
             ),
         ],
         "status": "reviewed",
@@ -1706,9 +1768,9 @@ FORMATS: list[dict[str, Any]] = [
         "parser_class": None,
         "magic": [
             {
-                "offset": 0,
-                "value": b"\x4f\x67\x67\x53",
-                "description": "OggS capture pattern (Opus uses Ogg container)",
+                "offset": 28,
+                "value": b"\x4f\x70\x75\x73\x48\x65\x61\x64",
+                "description": "OpusHead codec identification (RFC 7845 §5.1, offset 28 in first Ogg page)",
             }
         ],
         "extensions": [".opus"],

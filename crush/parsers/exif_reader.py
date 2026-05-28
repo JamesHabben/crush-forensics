@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 - now Marco Neumann (kalink0)
-"""Pure-Python EXIF extractor for JPEG, TIFF, and PNG.
+"""Pure-Python EXIF extractor for JPEG, TIFF, PNG, HEIF/HEIC/AVIF, and JPEG XL.
 
 Extracts the most forensically relevant fields:
   - Device: Make, Model, Software, SerialNumber, LensModel
@@ -66,7 +66,7 @@ _ORIENTATION_LABELS: dict[int, str] = {
 
 
 def extract_exif(raw: bytes) -> dict[str, Any]:
-    """Return raw EXIF dict from image bytes (JPEG, TIFF, or PNG)."""
+    """Return raw EXIF dict from image bytes (JPEG, TIFF, PNG, HEIF/HEIC/AVIF, or JPEG XL)."""
     try:
         if len(raw) < 4:
             return {}
@@ -79,6 +79,8 @@ def extract_exif(raw: bytes) -> dict[str, Any]:
             return _parse_tiff(raw)
         if raw[:8] == b"\x89PNG\r\n\x1a\n":
             return _extract_png_text(raw)
+        if _is_isobmff_image(raw):
+            return _extract_heif_exif(raw)
     except Exception:
         pass
     return {}
@@ -299,3 +301,45 @@ def _extract_png_text(raw: bytes) -> dict[str, Any]:
             break
         pos += 8 + clen + 4
     return result
+
+
+# ---------------------------------------------------------------------------
+# HEIF / HEIC / AVIF helpers (require pillow-heif optional dependency)
+# ---------------------------------------------------------------------------
+
+_ISOBMFF_IMAGE_BRANDS: frozenset[bytes] = frozenset({
+    b"heic", b"heix", b"hevc", b"hevx",
+    b"heim", b"heis", b"hevm", b"hevs",
+    b"mif1", b"msf1",
+    b"avif", b"avis",
+})
+
+
+def _is_isobmff_image(raw: bytes) -> bool:
+    return len(raw) >= 12 and raw[4:8] == b"ftyp" and raw[8:12] in _ISOBMFF_IMAGE_BRANDS
+
+
+def _extract_heif_exif(raw: bytes) -> dict[str, Any]:
+    """Extract EXIF from a HEIF/HEIC/AVIF file via pillow-heif (optional dep)."""
+    try:
+        import pillow_heif  # type: ignore[import-untyped]
+        heif = pillow_heif.open_heif(raw, convert_hdr_to_8bit=False)
+        exif_bytes: bytes = heif.info.get("exif", b"")
+        if not exif_bytes:
+            return {}
+        # pillow-heif may include a 4-byte length prefix before the TIFF block
+        if exif_bytes[:4] == b"Exif" or exif_bytes[4:8] == b"Exif":
+            # Strip any leading length word so we land on "Exif\x00\x00<TIFF>"
+            start = exif_bytes.find(b"Exif\x00\x00")
+            if start >= 0:
+                exif_bytes = exif_bytes[start + 6:]
+        elif len(exif_bytes) > 4:
+            # Raw 4-byte offset prefix (value = 6 means skip 6 bytes to TIFF)
+            skip = struct.unpack_from(">I", exif_bytes)[0]
+            if 4 < skip < len(exif_bytes):
+                exif_bytes = exif_bytes[skip:]
+        return _parse_tiff(exif_bytes)
+    except ImportError:
+        return {}
+    except Exception:
+        return {}

@@ -131,6 +131,9 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --name crush \
             --collect-all PySide6 \
             --collect-all magic \
+            --collect-all pillow_heif \
+            --collect-all pillow_jxl \
+            --collect-all av \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -166,6 +169,9 @@ jobs:
             --icon crush.icns \
             --collect-all PySide6 \
             --collect-all magic \
+            --collect-all pillow_heif \
+            --collect-all pillow_jxl \
+            --collect-all av \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -218,6 +224,9 @@ jobs:
             --icon crush.ico `
             --collect-all PySide6 `
             --collect-all magic `
+            --collect-all pillow_heif `
+            --collect-all pillow_jxl `
+            --collect-all av `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
             --exclude-module PySide6.QtWebEngineQuick `

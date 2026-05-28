@@ -85,10 +85,17 @@ While the filter is active, the tree is replaced by a **flat search results list
 |---|---|
 | `rubin` | Plain text — matches all files and folders whose name contains `rubin` |
 | `name:rubin` | Explicit name filter — identical to plain text |
-| `type:sqlite` | Matches all files whose detected format contains `sqlite` (e.g. `SQLite Database`) |
-| `name:rubin type:sqlite` | AND — only files whose name contains `rubin` **and** whose type contains `sqlite` |
+| `type:sqlite` | Matches all files whose detected type is SQLite (by magic bytes, regardless of extension) |
+| `type:image` | Matches **all** image files — JPEG, PNG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, GIF, BMP |
+| `type:heic` | Matches only files identified as HEIC containers — including those with a `.mp4` or `.jpeg` extension |
+| `type:avif` | Matches AVIF image files |
+| `type:jxl` | Matches JPEG XL image files |
+| `type:media` | Matches **all** audio and video files — MP4, MOV, MP3, WAV, OGG, Opus, and more |
+| `type:opus` | Matches Opus voice notes (WhatsApp `.opus`, Telegram `.ogg`) detected by codec header |
+| `type:ogg` | Matches OGG Vorbis audio files |
+| `name:rubin type:sqlite` | AND — only files whose name contains `rubin` **and** whose type is SQLite |
 
-Multiple tokens are always AND-combined. The `type:` token matches against the format label shown in the Type column (e.g. `jpeg`, `plist`, `xml`, `sqlite`).
+Multiple tokens are always AND-combined. The `type:` token matches against the format label in the Type column, which is detected from file content (magic bytes) — not from the file extension. This means a HEIC image named `photo.jpeg` will still match `type:heic`.
 
 **Interacting with results**
 
@@ -232,7 +239,13 @@ Displays text files with line numbers, syntax highlighting, and search.
 
 ### Image Viewer
 
-Displays JPEG, PNG, GIF, BMP, WebP, TIFF, and HEIC images. EXIF metadata (camera make/model, GPS coordinates, timestamp, ISO, aperture) is shown in the Properties panel when available.
+Displays JPEG, PNG, GIF, BMP, WebP, TIFF, HEIC, HEIF, AVIF, and JPEG XL images. EXIF metadata (camera make/model, GPS coordinates, timestamp, ISO, aperture) is shown in the Properties panel when available.
+
+> **Forensic note — HEIC/HEIF:** Common on iOS devices (default since iOS 11). A file labelled `HEIC` in the filesystem panel is identified by its ISOBMFF `ftyp` container brand — not by its extension. A `.mp4` or `.jpeg` file can be a HEIC container; Crush will detect and display it correctly regardless. Use `type:heic` in the filter field to find all HEIC files across an acquisition, including any with misleading extensions.
+>
+> **Current limitation:** HEIC/HEIF is a container format and can hold multiple images in a single file — burst frames, HDR primary + gain map, depth maps, and Live Photo previews. Crush currently displays only the primary image. Embedded secondary images (depth maps, HDR layers, burst frames) are not yet accessible.
+>
+> **Forensic note — AVIF:** Used by social media platforms (Netflix, YouTube, Discord) and increasingly on Android and modern browsers. AVIF files downloaded from social platforms frequently have EXIF metadata stripped server-side — the absence of GPS or device metadata in an AVIF is therefore a provenance indicator rather than a sign of camera origin. Like HEIC, AVIF is detected from the ISOBMFF `ftyp` brand (`avif` or `avis`), so `type:avif` finds AVIF content regardless of file extension.
 
 ### Media Viewer
 

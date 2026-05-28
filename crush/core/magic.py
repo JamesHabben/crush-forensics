@@ -22,11 +22,50 @@ REALM_MNEMONIC: Final = b"T-DB"
 _REALM_MNEMONIC_OFFSET: Final = 16
 
 
+_ISOBMFF_HEIC_BRANDS: Final[frozenset[bytes]] = frozenset({
+    b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs",
+})
+_ISOBMFF_HEIF_BRANDS: Final[frozenset[bytes]] = frozenset({b"mif1", b"msf1"})
+_ISOBMFF_AVIF_BRANDS: Final[frozenset[bytes]] = frozenset({b"avif", b"avis"})
+_JXL_CONTAINER_SIG: Final = b"\x00\x00\x00\x0C\x4A\x58\x4C\x20\x0D\x0A\x87\x0A"
+
+# Ogg page header is 27 bytes + 1-byte segment table (for single-segment first pages)
+# → codec identification payload starts at byte 28.
+_OGG_MAGIC: Final = b"OggS"
+_OPUS_HEAD: Final = b"OpusHead"   # RFC 7845 §5.1
+_VORBIS_HEAD: Final = b"\x01vorbis"  # Vorbis I spec §5.2.1
+
+
 def detect_fast_label(peek_bytes: bytes, path: str) -> str:
     """Return a fast type label using lightweight magic checks.
 
     Returns empty string when no fast label applies.
     """
+    # Check ISOBMFF image containers before filetype — filetype lumps all HEIF
+    # variants under a generic "heif" extension and returns no label for JXL.
+    if len(peek_bytes) >= 12:
+        if peek_bytes[4:8] == b"ftyp":
+            brand = peek_bytes[8:12]
+            if brand in _ISOBMFF_HEIC_BRANDS:
+                return "HEIC"
+            if brand in _ISOBMFF_HEIF_BRANDS:
+                return "HEIF"
+            if brand in _ISOBMFF_AVIF_BRANDS:
+                return "AVIF"
+        if peek_bytes[:12] == _JXL_CONTAINER_SIG:
+            return "JXL"
+    if len(peek_bytes) >= 2 and peek_bytes[:2] == b"\xFF\x0A":
+        return "JXL"
+
+    # Ogg-container codecs — check before filetype (which only returns "Media").
+    # First page payload sits at offset 28 for the standard single-segment first page.
+    if len(peek_bytes) >= 4 and peek_bytes[:4] == _OGG_MAGIC:
+        if len(peek_bytes) >= 36 and peek_bytes[28:36] == _OPUS_HEAD:
+            return "Opus"
+        if len(peek_bytes) >= 35 and peek_bytes[28:35] == _VORBIS_HEAD:
+            return "OGG"
+        return "OGG"
+
     if filetype is not None:
         kind = filetype.guess(peek_bytes)
         if kind is not None:
