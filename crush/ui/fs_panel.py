@@ -554,13 +554,15 @@ class FilesystemPanel(QWidget):
             self._stack.setCurrentIndex(1)
 
     def _parse_filter_text(self, text: str) -> dict[str, str]:
-        """Parse 'type:sqlite name:rubin' into {'type': 'sqlite', 'name': 'rubin'}.
+        """Parse filter tokens into a dict.  A leading '-' marks negation.
+        'type:sqlite -type:segb name:foo' → {'type': 'sqlite', '-type': 'segb', 'name': 'foo'}.
         Plain text without tokens is treated as a name filter."""
         import re
         tokens: dict[str, str] = {}
-        for key, value in re.findall(r'(\w+):(\S+)', text):
-            tokens[key.lower()] = value.lower()
-        remainder = re.sub(r'\w+:\S+', '', text).strip()
+        for neg, key, value in re.findall(r'(-?)(\w+):(\S+)', text):
+            token_key = f"-{key.lower()}" if neg else key.lower()
+            tokens[token_key] = value.lower()
+        remainder = re.sub(r'-?\w+:\S+', '', text).strip()
         if remainder and 'name' not in tokens:
             tokens['name'] = remainder.lower()
         return tokens
@@ -598,21 +600,27 @@ class FilesystemPanel(QWidget):
         path = f"{parent_path}/{node.name}" if parent_path else node.name
 
         name_filter = tokens.get('name')
+        name_exclude = tokens.get('-name')
         type_filter = tokens.get('type')
+        type_exclude = tokens.get('-type')
 
-        name_match = name_filter is None or name_filter in node.name.lower()
+        name_match = (
+            (name_filter is None or name_filter in node.name.lower())
+            and (name_exclude is None or name_exclude not in node.name.lower())
+        )
 
-        if type_filter is not None:
+        if type_filter is not None or type_exclude is not None:
             if node.is_dir:
                 type_label: str | None = "DIR"
-                type_match = (
-                    type_filter in "dir"
-                    or type_filter in "folder"
-                    or type_filter in "directory"
-                )
+                dir_words = ("dir", "folder", "directory")
+                pos_ok = type_filter is None or any(type_filter in w for w in dir_words)
+                neg_ok = type_exclude is None or not any(type_exclude in w for w in dir_words)
+                type_match = pos_ok and neg_ok
             else:
                 type_label = self._detect_type_label(node, vfs)
-                type_match = _type_matches(type_filter, type_label)
+                pos_ok = type_filter is None or _type_matches(type_filter, type_label)
+                neg_ok = type_exclude is None or not _type_matches(type_exclude, type_label)
+                type_match = pos_ok and neg_ok
         else:
             type_label = None
             type_match = True

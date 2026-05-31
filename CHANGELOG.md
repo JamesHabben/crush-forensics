@@ -2,6 +2,12 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Search — negation filter (`-type:`, `-name:`)** — `-type:segb` was silently parsed as `type=segb` plus `name=-`, so it matched nothing instead of excluding the given type. The filter parser now recognises a leading `-` as a negation prefix; `-type:segb` returns all files that are *not* SEGB, and `-name:foo` excludes files whose name contains `foo`.
+
 ## v0.10.0 - 2026-05-28
 
 **Focus: Extended image support, cross-platform audio playback, and plist/NSKeyedArchiver improvements.**
