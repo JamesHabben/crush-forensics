@@ -8,6 +8,14 @@ All notable changes to Crush will be documented in this file.
 
 - **Search — negation filter (`-type:`, `-name:`)** — `-type:segb` was silently parsed as `type=segb` plus `name=-`, so it matched nothing instead of excluding the given type. The filter parser now recognises a leading `-` as a negation prefix; `-type:segb` returns all files that are *not* SEGB, and `-name:foo` excludes files whose name contains `foo`.
 
+### Improvements
+
+**Protobuf viewer**
+- **Nested message rendering fixed** — the BlobInspector's Protobuf decode mode was comparing `wire_type` against the string `"message"`, but `wire_type` is always `"length-delimited"` for wire-type-2 fields. The check now inspects `value.type` instead, so nested messages render as indented blocks (`field { … }`) rather than a raw Python dict string.
+- **String and bytes values rendered correctly** — length-delimited fields decoded as plain strings now display as `field: "text"` and raw-bytes fields display as `field: <hex>` in the BlobInspector; both previously fell through to the `else` branch and showed unformatted dict reprs.
+- **Nested-first decoding heuristic** — `_decode_message` previously checked `_looks_like_utf8()` before attempting recursive protobuf decode. A length-delimited payload that happened to be valid UTF-8 *and* a valid nested message was always shown as a flat string, hiding its structure. The order is now reversed: nested decode is attempted first; UTF-8 string and bytes-preview are only used as fallbacks when the nested parse yields no entries or raises an error.
+- **Shared varint primitive** — the two independent `_read_varint` copies in `protobuf_parser` and `segb_parser` are replaced by a single `read_varint` in the new `crush/parsers/proto_wire.py`. The canonical implementation follows the Protobuf spec exactly (max 10 bytes for a 64-bit varint); the previous `segb_parser` copy had an off-by-one in the overflow guard.
+
 ## v0.10.0 - 2026-05-28
 
 **Focus: Extended image support, cross-platform audio playback, and plist/NSKeyedArchiver improvements.**

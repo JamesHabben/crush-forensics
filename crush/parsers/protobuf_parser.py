@@ -10,6 +10,7 @@ from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
+from crush.parsers.proto_wire import read_varint
 
 
 class ProtobufParser(AbstractParser):
@@ -113,11 +114,8 @@ def _decode_message(
                 }
 
                 if payload:
-                    if _looks_like_utf8(payload):
-                        text = payload.decode("utf-8", errors="replace")
-                        entry["value"] = {"type": "string", "text": text}
-                        text_parts.append(text)
-                    elif depth < max_depth:
+                    nested_ok = False
+                    if depth < max_depth:
                         nested, nested_warn, nested_text = _decode_message(
                             payload, depth=depth + 1, max_depth=max_depth, max_entries=max_entries
                         )
@@ -125,10 +123,14 @@ def _decode_message(
                             entry["value"] = {"type": "message", "entries": nested["entries"]}
                             if nested_text:
                                 text_parts.append(nested_text)
+                            nested_ok = True
+                    if not nested_ok:
+                        if _looks_like_utf8(payload):
+                            text = payload.decode("utf-8", errors="replace")
+                            entry["value"] = {"type": "string", "text": text}
+                            text_parts.append(text)
                         else:
                             entry["value"] = _bytes_preview(payload)
-                    else:
-                        entry["value"] = _bytes_preview(payload)
                 else:
                     entry["value"] = {"type": "bytes", "length": 0, "hex_preview": ""}
 
@@ -149,17 +151,7 @@ def _decode_message(
     return decoded, warning, text_index
 
 
-def _read_varint(data: bytes, idx: int) -> tuple[int | None, int]:
-    result = 0
-    shift = 0
-    while idx < len(data) and shift <= 70:
-        b = data[idx]
-        idx += 1
-        result |= (b & 0x7F) << shift
-        if b < 0x80:
-            return result, idx
-        shift += 7
-    return None, idx
+_read_varint = read_varint
 
 
 def _looks_like_utf8(data: bytes) -> bool:

@@ -1961,10 +1961,16 @@ def _render_protobuf(entries: list, indent: int = 0) -> str:
         field = entry.get("field", "?")
         wt = entry.get("wire_type", "?")
         val = entry.get("value")
-        if wt == "message" and isinstance(val, dict):
-            lines.append(f"{pad}{field} {{")
-            lines.append(_render_protobuf(val.get("entries", []), indent + 1))
-            lines.append(f"{pad}}}")
+        if isinstance(val, dict):
+            vtype = val.get("type")
+            if vtype == "message":
+                lines.append(f"{pad}{field} {{")
+                lines.append(_render_protobuf(val.get("entries", []), indent + 1))
+                lines.append(f"{pad}}}")
+            elif vtype == "string":
+                lines.append(f'{pad}{field}: "{val.get("text", "")}"')
+            else:  # bytes preview
+                lines.append(f"{pad}{field}: <{val.get('hex_preview', '')}>")
         elif isinstance(val, bytes):
             lines.append(f"{pad}{field}: {val[:32].hex()}" + ("…" if len(val) > 32 else ""))
         else:

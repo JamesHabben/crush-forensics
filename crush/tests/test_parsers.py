@@ -640,16 +640,40 @@ def test_render_protobuf_simple() -> None:
 
 
 def test_render_protobuf_nested() -> None:
+    # wire_type is "length-delimited" (as _decode_message produces);
+    # value shape is {"type": "message", "entries": [...]}
     from crush.viewers.table_viewer import _render_protobuf
     entries = [
-        {"field": 1, "wire_type": "message", "value": {
-            "entries": [{"field": 3, "wire_type": "varint", "value": 99}]
+        {"field": 1, "wire_type": "length-delimited", "value": {
+            "type": "message",
+            "entries": [{"field": 3, "wire_type": "varint", "value": 99}],
         }},
     ]
     result = _render_protobuf(entries)
     assert "1 {" in result
     assert "3 [varint]: 99" in result
     assert "}" in result
+
+
+def test_render_protobuf_string_value() -> None:
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {"field": 5, "wire_type": "length-delimited", "value": {"type": "string", "text": "hello"}},
+    ]
+    result = _render_protobuf(entries)
+    assert '5: "hello"' in result
+
+
+def test_render_protobuf_bytes_dict_value() -> None:
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {"field": 3, "wire_type": "length-delimited", "value": {
+            "type": "bytes", "length": 4, "hex_preview": "de ad be ef",
+        }},
+    ]
+    result = _render_protobuf(entries)
+    assert "3:" in result
+    assert "de ad be ef" in result
 
 
 def test_render_protobuf_bytes_value() -> None:
@@ -659,6 +683,94 @@ def test_render_protobuf_bytes_value() -> None:
     assert "2:" in result           # field number present
     assert "…" in result            # truncation marker for > 32 bytes
     assert "00010203" in result     # hex content starts correctly
+
+
+def test_render_protobuf_integration_nested() -> None:
+    """End-to-end: real wire bytes with a nested message render as a block, not a raw dict."""
+    from crush.parsers.protobuf_parser import _decode_message
+    from crush.viewers.table_viewer import _render_protobuf
+
+    # inner: field 1, varint 7  →  b'\x08\x07'
+    inner = b"\x08\x07"
+    # outer: field 1 varint 42, field 2 length-delimited (inner)
+    outer = (
+        b"\x08\x2a"                                        # field 1, varint 42
+        + b"\x12" + bytes([len(inner)]) + inner            # field 2, length-delimited, inner
+    )
+    decoded, warning, _ = _decode_message(outer)
+    assert not warning
+    result = _render_protobuf(decoded["entries"])
+    assert "1 [varint]: 42" in result
+    assert "2 {" in result            # nested message renders as block
+    assert "1 [varint]: 7" in result  # inner field present
+    assert "}" in result
+    assert "type" not in result       # no raw dict repr leaking through
+
+
+# ---------------------------------------------------------------------------
+# _decode_message heuristic: nested-first, string/bytes fallback
+# ---------------------------------------------------------------------------
+
+def test_decode_message_prefers_nested_over_utf8() -> None:
+    """A length-delimited payload that is valid protobuf AND printable UTF-8 is decoded
+    as a nested message, not a string."""
+    from crush.parsers.protobuf_parser import _decode_message, _looks_like_utf8
+
+    # tag 0x20 = field 4, wire_type 0 (varint); 0x41 = 65 — both are printable ASCII
+    inner = b"\x20\x41"
+    assert _looks_like_utf8(inner), "precondition: inner passes UTF-8 heuristic"
+
+    # wrap as field 1, length-delimited
+    outer = b"\x0a" + bytes([len(inner)]) + inner
+    decoded, warning, _ = _decode_message(outer)
+
+    assert not warning
+    entry = decoded["entries"][0]
+    assert entry["value"]["type"] == "message", (
+        "valid nested protobuf should be decoded as message, not string"
+    )
+
+
+def test_decode_message_falls_back_to_string() -> None:
+    """When nested parse yields no entries, UTF-8 payload is decoded as string."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # b'\x07' is BEL — not parseable as a valid protobuf field (wire_type 7 is unknown)
+    # and not printable (< 0x20), so this will fall through to bytes preview.
+    # Use a clean printable string that cannot parse as protobuf:
+    # 0xff starts an invalid varint sequence (never terminates within 1 byte as a tag)
+    # → use pure ASCII text wrapped to trigger string fallback
+
+    # "hello" as a payload: tag attempts fail quickly on 'h'=0x68 → field 13, wire_type 0
+    # then 'e'=0x65 as varint value → succeeds → gives entries → would be nested!
+    # We need something that fails nested parse but passes UTF-8.
+    # Best approach: a payload that has a valid tag but truncated value.
+    # field 1, wire_type 1 (64-bit) needs exactly 8 bytes — give it only 4.
+    # tag 0x09 (field 1, wire_type 1) + 4 bytes "aaaa" → nested fails (truncated), payload IS UTF-8.
+    payload = b"\x09aaaa"  # truncated 64-bit field → nested_warn set → falls back
+    outer = b"\x0a" + bytes([len(payload)]) + payload
+    decoded, warning, _ = _decode_message(outer)
+
+    assert not warning
+    entry = decoded["entries"][0]
+    assert entry["value"]["type"] == "string", (
+        "when nested parse fails, UTF-8 payload should fall back to string"
+    )
+
+
+def test_decode_message_falls_back_to_bytes() -> None:
+    """When nested parse fails and payload is not UTF-8, shown as bytes preview."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # 0x09 = field 1, wire_type 1 (64-bit) — but only 3 bytes follow → truncated nested parse
+    # 0x80 0x81 0x82 are non-UTF-8 bytes → not a string either
+    payload = b"\x09\x80\x81\x82"
+    outer = b"\x0a" + bytes([len(payload)]) + payload
+    decoded, warning, _ = _decode_message(outer)
+
+    assert not warning
+    entry = decoded["entries"][0]
+    assert entry["value"]["type"] == "bytes"
 
 
 # ---------------------------------------------------------------------------
