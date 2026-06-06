@@ -15,6 +15,7 @@ from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
+from crush.parsers.proto_wire import read_varint as _read_varint
 from crush.third_party.ccl_segb import ccl_segb1, ccl_segb2
 from crush.third_party.ccl_segb.ccl_segb_common import decode_cocoa_time
 
@@ -282,19 +283,6 @@ def _fmt_ts(ts: object) -> str:
 # Minimal protobuf wire-format decoder (no external dependency)
 # ---------------------------------------------------------------------------
 
-def _read_varint(data: bytes, pos: int) -> tuple[int | None, int]:
-    result = 0
-    shift = 0
-    while pos < len(data):
-        byte = data[pos]
-        pos += 1
-        result |= (byte & 0x7F) << shift
-        if not (byte & 0x80):
-            return result, pos
-        shift += 7
-        if shift >= 64:
-            return None, pos
-    return None, pos
 
 
 def _parse_protobuf(data: bytes) -> dict[int, Any]:

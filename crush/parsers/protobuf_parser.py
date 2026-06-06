@@ -10,6 +10,8 @@ from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
 from crush.parsers.base import AbstractParser, ParseResult
+from crush.parsers.proto_interp import interpret_fixed32, interpret_fixed64, interpret_varint
+from crush.parsers.proto_wire import read_varint
 
 
 class ProtobufParser(AbstractParser):
@@ -77,23 +79,40 @@ def _decode_message(
                 if val is None:
                     warning = "Truncated varint value"
                     break
-                entries.append({"field": field_no, "wire_type": "varint", "value": val})
+                entries.append({
+                    "field": field_no,
+                    "wire_type": "varint",
+                    "value": val,
+                    "interpretations": interpret_varint(val),
+                })
 
             elif wire_type == 1:  # 64-bit
                 if idx + 8 > len(raw):
                     warning = "Truncated 64-bit value"
                     break
-                val = int.from_bytes(raw[idx:idx + 8], "little", signed=False)
+                chunk = raw[idx:idx + 8]
+                val = int.from_bytes(chunk, "little", signed=False)
                 idx += 8
-                entries.append({"field": field_no, "wire_type": "fixed64", "value": val})
+                entries.append({
+                    "field": field_no,
+                    "wire_type": "fixed64",
+                    "value": val,
+                    "interpretations": interpret_fixed64(chunk),
+                })
 
             elif wire_type == 5:  # 32-bit
                 if idx + 4 > len(raw):
                     warning = "Truncated 32-bit value"
                     break
-                val = int.from_bytes(raw[idx:idx + 4], "little", signed=False)
+                chunk = raw[idx:idx + 4]
+                val = int.from_bytes(chunk, "little", signed=False)
                 idx += 4
-                entries.append({"field": field_no, "wire_type": "fixed32", "value": val})
+                entries.append({
+                    "field": field_no,
+                    "wire_type": "fixed32",
+                    "value": val,
+                    "interpretations": interpret_fixed32(chunk),
+                })
 
             elif wire_type == 2:  # length-delimited
                 length, idx = _read_varint(raw, idx)
@@ -113,11 +132,8 @@ def _decode_message(
                 }
 
                 if payload:
-                    if _looks_like_utf8(payload):
-                        text = payload.decode("utf-8", errors="replace")
-                        entry["value"] = {"type": "string", "text": text}
-                        text_parts.append(text)
-                    elif depth < max_depth:
+                    nested_ok = False
+                    if depth < max_depth:
                         nested, nested_warn, nested_text = _decode_message(
                             payload, depth=depth + 1, max_depth=max_depth, max_entries=max_entries
                         )
@@ -125,10 +141,14 @@ def _decode_message(
                             entry["value"] = {"type": "message", "entries": nested["entries"]}
                             if nested_text:
                                 text_parts.append(nested_text)
+                            nested_ok = True
+                    if not nested_ok:
+                        if _looks_like_utf8(payload):
+                            text = payload.decode("utf-8", errors="replace")
+                            entry["value"] = {"type": "string", "text": text}
+                            text_parts.append(text)
                         else:
                             entry["value"] = _bytes_preview(payload)
-                    else:
-                        entry["value"] = _bytes_preview(payload)
                 else:
                     entry["value"] = {"type": "bytes", "length": 0, "hex_preview": ""}
 
@@ -149,17 +169,7 @@ def _decode_message(
     return decoded, warning, text_index
 
 
-def _read_varint(data: bytes, idx: int) -> tuple[int | None, int]:
-    result = 0
-    shift = 0
-    while idx < len(data) and shift <= 70:
-        b = data[idx]
-        idx += 1
-        result |= (b & 0x7F) << shift
-        if b < 0x80:
-            return result, idx
-        shift += 7
-    return None, idx
+_read_varint = read_varint
 
 
 def _looks_like_utf8(data: bytes) -> bool:

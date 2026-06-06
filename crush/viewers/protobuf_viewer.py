@@ -6,12 +6,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QComboBox,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
@@ -98,7 +100,7 @@ class ProtobufViewer(QWidget):
 
     def _show_schema_less(self) -> None:
         self._status.setText("Schema-less decode")
-        self._replace_view(TreeViewer(self._decoded, self))
+        self._replace_view(ProtobufTreeWidget(self._decoded, self))
 
     def _clear_schema(self) -> None:
         self._pool = None
@@ -194,6 +196,92 @@ class ProtobufViewer(QWidget):
 
         self._status.setText(f"Decoded as {name}")
         self._replace_view(TreeViewer(decoded, self))
+
+
+# ---------------------------------------------------------------------------
+# Protobuf-specific tree widget
+# ---------------------------------------------------------------------------
+
+_GRAY = QColor(130, 130, 130)
+_INTERP_FONT_SIZE_DELTA = -1  # points smaller than parent
+
+
+class ProtobufTreeWidget(QWidget):
+    """Tree view tailored for schema-less protobuf entries.
+
+    Each field is a top-level row; its interpretations appear as dimmed child
+    rows so analysts can immediately see all candidate type readings.
+    Nested messages expand recursively.
+    """
+
+    def __init__(self, decoded: dict[str, Any], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._model = QStandardItemModel()
+        self._model.setHorizontalHeaderLabels(["Field", "Value", "Wire type"])
+
+        self._tree = QTreeView()
+        self._tree.setModel(self._model)
+        self._tree.setAlternatingRowColors(True)
+        self._tree.setAnimated(True)
+        self._tree.header().setStretchLastSection(False)
+        self._tree.setColumnWidth(0, 140)
+        self._tree.setColumnWidth(1, 340)
+        self._tree.setColumnWidth(2, 120)
+        self._tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
+
+        layout.addWidget(self._tree)
+        self._populate(decoded.get("entries", []), self._model.invisibleRootItem())
+        self._tree.expandToDepth(1)
+
+    def _populate(self, entries: list[dict[str, Any]], parent: QStandardItem) -> None:
+        for entry in entries:
+            field = entry.get("field", "?")
+            wire_type = entry.get("wire_type", "?")
+            val = entry.get("value")
+            interpretations = entry.get("interpretations", [])
+
+            # Primary value display
+            if isinstance(val, dict):
+                vtype = val.get("type")
+                if vtype == "message":
+                    label = f"{{ {len(val.get('entries', []))} field(s) }}"
+                elif vtype == "string":
+                    label = f'"{val.get("text", "")}"'
+                else:
+                    label = f'<{val.get("hex_preview", "")}>'
+            else:
+                label = str(val) if val is not None else ""
+
+            field_item = QStandardItem(f"field {field}")
+            val_item = QStandardItem(label)
+            wt_item = QStandardItem(wire_type)
+            for item in (field_item, val_item, wt_item):
+                item.setEditable(False)
+            parent.appendRow([field_item, val_item, wt_item])
+
+            # Interpretations as dimmed child rows
+            if interpretations:
+                interp_font = field_item.font()
+                interp_font.setPointSize(max(7, interp_font.pointSize() + _INTERP_FONT_SIZE_DELTA))
+                for interp in interpretations:
+                    lbl_item = QStandardItem(f"  {interp.label}")
+                    lbl_item.setForeground(_GRAY)
+                    lbl_item.setFont(interp_font)
+                    lbl_item.setEditable(False)
+                    v_item = QStandardItem(interp.value)
+                    v_item.setForeground(_GRAY)
+                    v_item.setFont(interp_font)
+                    v_item.setEditable(False)
+                    empty = QStandardItem("")
+                    empty.setEditable(False)
+                    field_item.appendRow([lbl_item, v_item, empty])
+
+            # Recurse into nested messages
+            if isinstance(val, dict) and val.get("type") == "message":
+                self._populate(val.get("entries", []), field_item)
 
 
 # ---------------------------------------------------------------------------
