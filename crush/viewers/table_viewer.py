@@ -1932,8 +1932,11 @@ class BlobInspector(QDialog):
     def _try_protobuf(self) -> str:
         try:
             from crush.parsers.protobuf_parser import _decode_message
-            decoded, _warning, _text = _decode_message(self._blob)
-            return _render_protobuf(decoded.get("entries", []))
+            decoded, warning, _text = _decode_message(self._blob)
+            result = _render_protobuf(decoded.get("entries", []))
+            if warning:
+                result = f"# Warning: {warning}\n\n{result}"
+            return result
         except Exception:
             return ""
 
@@ -1953,14 +1956,20 @@ def _is_image(data: bytes) -> bool:
     )
 
 
+_INTERP_SKIP = {"uint64", "uint32"}  # already shown as the primary value
+
+
 def _render_protobuf(entries: list, indent: int = 0) -> str:
     """Render protobuf wire-decoded entries as protoc --decode_raw style text."""
     lines: list[str] = []
     pad = "  " * indent
+    ipad = pad + "    "  # indent for interpretation hints
     for entry in entries:
         field = entry.get("field", "?")
         wt = entry.get("wire_type", "?")
         val = entry.get("value")
+        interpretations = [i for i in entry.get("interpretations", []) if i.label not in _INTERP_SKIP]
+
         if isinstance(val, dict):
             vtype = val.get("type")
             if vtype == "message":
@@ -1975,6 +1984,9 @@ def _render_protobuf(entries: list, indent: int = 0) -> str:
             lines.append(f"{pad}{field}: {val[:32].hex()}" + ("…" if len(val) > 32 else ""))
         else:
             lines.append(f"{pad}{field} [{wt}]: {val}")
+
+        for interp in interpretations:
+            lines.append(f"{ipad}# {interp.label}: {interp.value}")
     return "\n".join(lines)
 
 

@@ -334,7 +334,7 @@ The BLOB Inspector is a shared decode dialog for examining raw binary fields. It
 | **Plist** | Decodes as binary or XML property list |
 | **XML** | Parses as XML with pretty-printing |
 | **JSON** | Pretty-prints as formatted JSON |
-| **Protobuf (schema-less)** | Wire-format decode in `protoc --decode_raw` style |
+| **Protobuf (schema-less)** | Wire-format decode in `protoc --decode_raw` style; each numeric field is followed by `# label: value` hint lines for all non-redundant interpretations (int64, sint64, bool, timestamps, double/float). A `# Warning:` header is prepended if the parse was truncated or malformed. |
 | **Android Binary XML (ABX)** | Reconstructs XML from Android's binary XML encoding |
 | **Image (PNG / JPEG / GIF)** | Renders the image inline |
 
@@ -402,9 +402,20 @@ The temporary file is deleted automatically when the viewer is closed.
 
 ### Protobuf Viewer
 
-Opens via right-click → **Open as Protobuf Viewer**. Performs a schema-less wire-format decode showing field numbers, wire types, and raw values.
+Opens via right-click → **Open as Protobuf Viewer**. Performs a schema-less wire-format decode showing field numbers, wire types, and values.
 
-To decode with a schema: click **Load .proto…** to load a `.proto` file, or **Load Descriptor…** for a compiled descriptor set. Field names and types are then resolved from the schema.
+**Multi-interpretation display** — because the wire format carries no type information, every numeric field shows all plausible readings as dimmed child rows:
+
+| Wire type | Interpretations shown |
+|---|---|
+| **varint** (0) | `uint64`, `int64`, `sint64 (zigzag)`, `bool` (if 0 or 1), Unix timestamp (if plausible) |
+| **fixed64** (1) | `uint64`, `int64`, `double`, Cocoa timestamp (if double looks like Apple epoch), Unix timestamp, Chrome/WebKit timestamp |
+| **fixed32** (5) | `uint32`, `int32`, `float`, Unix timestamp (if plausible) |
+| **length-delimited** (2) | Decoded as nested message, UTF-8 string, or hex bytes — no further child rows |
+
+Interpretations that are out of plausible range are suppressed (e.g. a timestamp reading only appears when the value falls within 2000–2100).
+
+**Schema-based decode** — click **Load .proto / descriptor…** to load a `.proto` source file or a compiled FileDescriptorSet (`.pb`, `.fds`, `.desc`). Select the root message type from the dropdown and click **Decode**. Field names and types are then resolved from the schema; the raw wire-format view remains available via **Show Raw Decode**.
 
 ### Multi-Log Studio
 

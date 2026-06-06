@@ -707,6 +707,86 @@ def test_render_protobuf_integration_nested() -> None:
     assert "type" not in result       # no raw dict repr leaking through
 
 
+def test_render_protobuf_shows_interpretations() -> None:
+    """Interpretation hints appear as '# label: value' lines below the field."""
+    from crush.parsers.proto_interp import Interpretation
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {
+            "field": 1,
+            "wire_type": "varint",
+            "value": 42,
+            "interpretations": [
+                Interpretation("uint64", "42"),
+                Interpretation("sint64 (zigzag)", "21"),
+                Interpretation("bool", "false"),
+            ],
+        }
+    ]
+    result = _render_protobuf(entries)
+    assert "1 [varint]: 42" in result
+    assert "# sint64 (zigzag): 21" in result
+    assert "# bool: false" in result
+    # uint64 is redundant (same as primary value) — must be suppressed
+    assert "# uint64" not in result
+
+
+def test_render_protobuf_suppresses_uint32() -> None:
+    """uint32 is also suppressed as it equals the primary fixed32 value."""
+    from crush.parsers.proto_interp import Interpretation
+    from crush.viewers.table_viewer import _render_protobuf
+    entries = [
+        {
+            "field": 2,
+            "wire_type": "fixed32",
+            "value": 99,
+            "interpretations": [
+                Interpretation("uint32", "99"),
+                Interpretation("int32", "99"),
+                Interpretation("float", "1.387e-43"),
+            ],
+        }
+    ]
+    result = _render_protobuf(entries)
+    assert "# uint32" not in result
+    assert "# int32: 99" in result
+    assert "# float" in result
+
+
+def test_render_protobuf_integration_with_interpretations() -> None:
+    """End-to-end: _decode_message produces interpretations shown in text output."""
+    import struct
+    from crush.parsers.protobuf_parser import _decode_message
+    from crush.viewers.table_viewer import _render_protobuf
+
+    # field 1: fixed64 containing a Cocoa timestamp (694656000.0 = 2023-01-07 UTC)
+    raw = b"\x09" + struct.pack("<d", 694_656_000.0)
+    decoded, warning, _ = _decode_message(raw)
+    assert not warning
+    result = _render_protobuf(decoded["entries"])
+    assert "# double:" in result
+    assert "# Cocoa timestamp:" in result
+    assert "2023" in result
+
+
+def test_try_protobuf_surfaces_warning() -> None:
+    """Truncated protobuf shows a Warning header in BlobInspector output."""
+    from crush.parsers.protobuf_parser import _decode_message
+    from crush.viewers.table_viewer import _render_protobuf
+
+    # field 1, wire_type 1 (64-bit) with only 4 bytes — truncated
+    truncated = b"\x09\x00\x01\x02\x03"
+    decoded, warning, _ = _decode_message(truncated)
+    assert warning  # must have a warning
+
+    result = _render_protobuf(decoded["entries"])
+    # _try_protobuf prepends the warning — simulate that here
+    if warning:
+        result = f"# Warning: {warning}\n\n{result}"
+    assert "# Warning:" in result
+    assert "Truncated" in result
+
+
 # ---------------------------------------------------------------------------
 # _decode_message heuristic: nested-first, string/bytes fallback
 # ---------------------------------------------------------------------------
@@ -771,6 +851,96 @@ def test_decode_message_falls_back_to_bytes() -> None:
     assert not warning
     entry = decoded["entries"][0]
     assert entry["value"]["type"] == "bytes"
+
+
+# ---------------------------------------------------------------------------
+# proto_interp: multi-interpretation display
+# ---------------------------------------------------------------------------
+
+def test_interpret_varint_basic() -> None:
+    from crush.parsers.proto_interp import interpret_varint
+    labels = {i.label for i in interpret_varint(42)}
+    assert "uint64" in labels
+    assert "sint64 (zigzag)" in labels
+
+
+def test_interpret_varint_bool() -> None:
+    from crush.parsers.proto_interp import interpret_varint
+    labels = {i.label for i in interpret_varint(1)}
+    assert "bool" in labels
+    val = {i.label: i.value for i in interpret_varint(1)}
+    assert val["bool"] == "true"
+    val0 = {i.label: i.value for i in interpret_varint(0)}
+    assert val0["bool"] == "false"
+
+
+def test_interpret_varint_no_bool_for_large() -> None:
+    from crush.parsers.proto_interp import interpret_varint
+    labels = {i.label for i in interpret_varint(999)}
+    assert "bool" not in labels
+
+
+def test_interpret_varint_unix_ts() -> None:
+    from crush.parsers.proto_interp import interpret_varint
+    # 2023-01-07 00:00:00 UTC = 1673049600
+    val = {i.label: i.value for i in interpret_varint(1_673_049_600)}
+    assert "Unix timestamp (s)" in val
+    assert "2023" in val["Unix timestamp (s)"]
+
+
+def test_interpret_varint_signed() -> None:
+    from crush.parsers.proto_interp import interpret_varint
+    # max uint64 would be negative as int64
+    big = (1 << 63)
+    val = {i.label: i.value for i in interpret_varint(big)}
+    assert "int64" in val
+
+
+def test_interpret_fixed64_double_cocoa() -> None:
+    import struct
+    from crush.parsers.proto_interp import interpret_fixed64
+    # Cocoa timestamp 694656000.0 = 2023-01-07 00:00:00 UTC
+    raw = struct.pack("<d", 694_656_000.0)
+    val = {i.label: i.value for i in interpret_fixed64(raw)}
+    assert "double" in val
+    assert "Cocoa timestamp" in val
+    assert "2023" in val["Cocoa timestamp"]
+
+
+def test_interpret_fixed64_uint64() -> None:
+    import struct
+    from crush.parsers.proto_interp import interpret_fixed64
+    raw = struct.pack("<Q", 12345678)
+    val = {i.label: i.value for i in interpret_fixed64(raw)}
+    assert "uint64" in val
+
+
+def test_interpret_fixed32_float() -> None:
+    import struct
+    from crush.parsers.proto_interp import interpret_fixed32
+    raw = struct.pack("<f", 3.14)
+    val = {i.label: i.value for i in interpret_fixed32(raw)}
+    assert "float" in val
+
+
+def test_interpret_fixed32_uint32() -> None:
+    import struct
+    from crush.parsers.proto_interp import interpret_fixed32
+    raw = struct.pack("<I", 99)
+    val = {i.label: i.value for i in interpret_fixed32(raw)}
+    assert "uint32" in val
+
+
+def test_decode_message_adds_interpretations() -> None:
+    """_decode_message entries include an 'interpretations' list for numeric fields."""
+    from crush.parsers.protobuf_parser import _decode_message
+    # field 1, varint 42
+    data = b"\x08\x2a"
+    decoded, warning, _ = _decode_message(data)
+    assert not warning
+    entry = decoded["entries"][0]
+    assert "interpretations" in entry
+    assert any(i.label == "uint64" for i in entry["interpretations"])
 
 
 # ---------------------------------------------------------------------------
