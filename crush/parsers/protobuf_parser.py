@@ -154,9 +154,16 @@ def _decode_message(
 
                 entries.append(entry)
 
-            elif wire_type in (3, 4):
-                warning = "Group wire type is not supported"
+            elif wire_type == 3:  # start group — deprecated; skip and continue
+                idx, ok = _skip_group(raw, idx, field_no)
+                if not ok:
+                    warning = f"Truncated group field {field_no}"
+                    break
+
+            elif wire_type == 4:  # end group — unexpected at top level
+                warning = f"Unexpected end-group tag for field {field_no}"
                 break
+
             else:
                 warning = f"Unknown wire type: {wire_type}"
                 break
@@ -170,6 +177,46 @@ def _decode_message(
 
 
 _read_varint = read_varint
+
+
+def _skip_group(data: bytes, idx: int, field_no: int) -> tuple[int, bool]:
+    """Skip a deprecated group (wire types 3/4) and return (new_idx, ok).
+
+    Reads fields until the matching end-group tag (wire_type=4, same field_no).
+    Returns ok=False on truncation or field-number mismatch.
+    """
+    while idx < len(data):
+        key, idx = _read_varint(data, idx)
+        if key is None:
+            return idx, False
+        f = key >> 3
+        wt = key & 0x7
+        if wt == 4:  # end group — must match opening field number
+            return idx, f == field_no
+        elif wt == 0:  # varint
+            val, idx = _read_varint(data, idx)
+            if val is None:
+                return idx, False
+        elif wt == 1:  # fixed64
+            if idx + 8 > len(data):
+                return idx, False
+            idx += 8
+        elif wt == 2:  # length-delimited
+            length, idx = _read_varint(data, idx)
+            if length is None or idx + length > len(data):
+                return idx, False
+            idx += length
+        elif wt == 3:  # nested start group
+            idx, ok = _skip_group(data, idx, f)
+            if not ok:
+                return idx, False
+        elif wt == 5:  # fixed32
+            if idx + 4 > len(data):
+                return idx, False
+            idx += 4
+        else:
+            return idx, False
+    return idx, False  # EOF without matching end-group tag
 
 
 def _looks_like_utf8(data: bytes) -> bool:

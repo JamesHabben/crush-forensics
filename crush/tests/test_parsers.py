@@ -1084,3 +1084,61 @@ def test_create_segb_sqlite_payload_columns() -> None:
     assert obj.get("2") == "com.apple.test"
     conn.close()
     path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Group wire-type (3/4) handling in _decode_message
+# ---------------------------------------------------------------------------
+
+def test_decode_message_skips_simple_group() -> None:
+    """A group (wire_type=3) should be skipped; fields after it are decoded normally."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # field 1 start-group (0x0B), field 2 varint 99 inside (0x10 0x63),
+    # field 1 end-group (0x0C), then field 3 varint 7 (0x18 0x07)
+    raw = bytes([0x0B, 0x10, 0x63, 0x0C, 0x18, 0x07])
+    decoded, warning, _ = _decode_message(raw)
+    assert warning == ""
+    entries = decoded["entries"]
+    assert len(entries) == 1
+    assert entries[0]["field"] == 3
+    assert entries[0]["value"] == 7
+
+
+def test_decode_message_skips_nested_group() -> None:
+    """Nested groups (group inside a group) are skipped recursively."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # field 1 start-group (0x0B)
+    #   field 3 start-group (0x1B)
+    #     field 4 varint 5 (0x20 0x05)
+    #   field 3 end-group (0x1C)
+    # field 1 end-group (0x0C)
+    # field 3 varint 7 (0x18 0x07)
+    raw = bytes([0x0B, 0x1B, 0x20, 0x05, 0x1C, 0x0C, 0x18, 0x07])
+    decoded, warning, _ = _decode_message(raw)
+    assert warning == ""
+    entries = decoded["entries"]
+    assert len(entries) == 1
+    assert entries[0]["field"] == 3
+    assert entries[0]["value"] == 7
+
+
+def test_decode_message_warns_on_truncated_group() -> None:
+    """A group without a closing end-group tag produces a truncation warning."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # field 1 start-group (0x0B), field 2 varint 99 inside (0x10 0x63), then EOF
+    raw = bytes([0x0B, 0x10, 0x63])
+    decoded, warning, _ = _decode_message(raw)
+    assert "Truncated" in warning or "truncated" in warning.lower()
+
+
+def test_decode_message_warns_on_unexpected_end_group() -> None:
+    """An end-group tag (wire_type=4) at the top level produces a warning."""
+    from crush.parsers.protobuf_parser import _decode_message
+
+    # field 1 end-group (0x0C) at top level — no matching start-group
+    raw = bytes([0x0C])
+    decoded, warning, _ = _decode_message(raw)
+    assert "end-group" in warning.lower() or "Unexpected" in warning

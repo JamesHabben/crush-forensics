@@ -412,8 +412,9 @@ Opens via right-click → **Open as Protobuf Viewer**. Performs a schema-less wi
 | **fixed64** (1) | `uint64`, `int64`, `double`, Cocoa timestamp (if double looks like Apple epoch), Unix timestamp, Chrome/WebKit timestamp |
 | **fixed32** (5) | `uint32`, `int32`, `float`, Unix timestamp (if plausible) |
 | **length-delimited** (2) | Decoded as nested message, UTF-8 string, or hex bytes — no further child rows |
+| **start-group** (3) / **end-group** (4) | Deprecated wire type — the group and its contents are silently skipped; parsing continues with the next field |
 
-Interpretations that are out of plausible range are suppressed (e.g. a timestamp reading only appears when the value falls within 2000–2100).
+Interpretations that are out of plausible range are suppressed (e.g. a timestamp reading only appears when the value falls within 2000–2100). A truncated group or an end-group tag at the top level produces a parse warning shown in the Properties panel.
 
 **Schema-based decode** — click **Load .proto / descriptor…** to load a `.proto` source file or a compiled FileDescriptorSet (`.pb`, `.fds`, `.desc`). Select the root message type from the dropdown and click **Decode**. Field names and types are then resolved from the schema; the raw wire-format view remains available via **Show Raw Decode**.
 
