@@ -255,6 +255,10 @@ FORMATS: list[dict[str, Any]] = [
                 "Mobile App Forensics: A Practical Guide (Realm chapter)",
                 "https://link.springer.com/content/pdf/10.1007/978-3-030-98467-0_8",
             ),
+            (
+                "Object by Object — RealmDB Forensics with crush (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/05/object-by-object-realmdb-forensics-with.html",
+            ),
         ],
         "status": "reviewed",
     },
@@ -1008,6 +1012,10 @@ FORMATS: list[dict[str, Any]] = [
             (
                 "ForensicsWiki — LevelDB format",
                 "https://forensics.wiki/leveldb_format/",
+            ),
+            (
+                "Reading the CURRENT — LevelDB Forensics with crush (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/05/reading-current-leveldb-forensics-with.html",
             ),
         ],
         "status": "reviewed",
@@ -2138,7 +2146,10 @@ FORMATS: list[dict[str, Any]] = [
             "Chrome/Edge/Brave (Network Action Predictor, Local State), "
             "Google apps (Gmail, Maps, Drive, Photos), Jetpack DataStore "
             "(Android SharedPreferences replacement), and gRPC network protocols. "
-            "No magic bytes — identification relies on file extension (.pb, .proto), "
+            "On Apple platforms, protobuf payloads appear as record bodies inside "
+            "SEGB (.segb, .biome) files written by iOS and macOS system services "
+            "(Screen Time, Health, Siri, Homekit, and others). "
+            "No magic bytes — identification relies on file extension (.pb, .binarypb), "
             "database BLOB column context (common in Chrome SQLite databases), "
             "or heuristic detection of wire-format tag/length patterns. "
             "Not self-describing: without the .proto schema file, fields are visible "
@@ -2152,7 +2163,7 @@ FORMATS: list[dict[str, Any]] = [
         "platforms": ["iOS", "macOS", "Android", "Windows", "Linux"],
         "parser_class": "ProtobufParser",
         "magic": [],
-        "extensions": [".pb", ".proto"],
+        "extensions": [".pb", ".binarypb"],
         "links": [
             (
                 "Protocol Buffers encoding specification (Google)",
@@ -2169,6 +2180,10 @@ FORMATS: list[dict[str, Any]] = [
             (
                 "Protocol Buffers in mobile forensics (Springer — Mobile Forensics Handbook)",
                 "https://link.springer.com/chapter/10.1007/978-3-030-98467-0_9",
+            ),
+            (
+                "Reading Protobuf wire format without a map — forensic deep dive (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/06/reading-wire-protobuf-without-map.html",
             ),
         ],
         "status": "reviewed",
@@ -2284,6 +2299,10 @@ FORMATS: list[dict[str, Any]] = [
                 "Biome data as KnowledgeC successor (Magnet Forensics)",
                 "https://www.magnetforensics.com/blog/bringing-it-back-with-biome-data/",
             ),
+            (
+                "Beyond the C — SEGB and Biome Forensics with crush (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/05/beyond-c-segb-and-biome-forensics-with.html",
+            ),
         ],
         "status": "reviewed",
     },
@@ -2395,6 +2414,10 @@ FORMATS: list[dict[str, Any]] = [
                 "SQLite deleted record recovery techniques — survey (ScienceDirect 2025)",
                 "https://www.sciencedirect.com/science/article/abs/pii/S2666281725001714",
             ),
+            (
+                "What Hides in the WAL — SQLite Forensics with crush (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/05/what-hides-in-wal-sqlite-forensics-with.html",
+            ),
         ],
         "status": "reviewed",
     },
@@ -2430,6 +2453,10 @@ FORMATS: list[dict[str, Any]] = [
             (
                 "Forensic analysis of SQLite WAL files (Sanderson Forensics)",
                 "https://sqliteforensictoolkit.com/forensic-examination-of-sqlite-write-ahead-log-wal-files/",
+            ),
+            (
+                "What Hides in the WAL — SQLite Forensics with crush (beBinary)",
+                "https://bebinary4n6.blogspot.com/2026/05/what-hides-in-wal-sqlite-forensics-with.html",
             ),
         ],
         "status": "reviewed",

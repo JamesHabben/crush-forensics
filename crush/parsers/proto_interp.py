@@ -40,14 +40,14 @@ def interpret_varint(value: int) -> list[Interpretation]:
     """All plausible interpretations of a varint field value."""
     out: list[Interpretation] = []
 
-    out.append(Interpretation("uint64", f"{value:,}"))
+    out.append(Interpretation("uint64", f"{value}"))
 
     signed = value if value < (1 << 63) else value - (1 << 64)
     if signed != value:
-        out.append(Interpretation("int64", f"{signed:,}"))
+        out.append(Interpretation("int64", f"{signed}"))
 
     zigzag = (value >> 1) ^ -(value & 1)
-    out.append(Interpretation("sint64 (zigzag)", f"{zigzag:,}"))
+    out.append(Interpretation("sint64 (zigzag)", f"{zigzag}"))
 
     if value in (0, 1):
         out.append(Interpretation("bool", "true" if value else "false"))
@@ -72,9 +72,9 @@ def interpret_fixed64(raw: bytes) -> list[Interpretation]:
     int64 = int.from_bytes(raw, "little", signed=True)
     double = struct.unpack("<d", raw)[0]
 
-    out.append(Interpretation("uint64", f"{uint64:,}"))
+    out.append(Interpretation("uint64", f"{uint64}"))
     if int64 != uint64:
-        out.append(Interpretation("int64", f"{int64:,}"))
+        out.append(Interpretation("int64", f"{int64}"))
 
     if not math.isnan(double) and not math.isinf(double):
         out.append(Interpretation("double", repr(double)))
@@ -103,9 +103,9 @@ def interpret_fixed32(raw: bytes) -> list[Interpretation]:
     int32 = int.from_bytes(raw, "little", signed=True)
     float32 = struct.unpack("<f", raw)[0]
 
-    out.append(Interpretation("uint32", f"{uint32:,}"))
+    out.append(Interpretation("uint32", f"{uint32}"))
     if int32 != uint32:
-        out.append(Interpretation("int32", f"{int32:,}"))
+        out.append(Interpretation("int32", f"{int32}"))
 
     if not math.isnan(float32) and not math.isinf(float32):
         out.append(Interpretation("float", repr(float32)))

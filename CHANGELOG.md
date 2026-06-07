@@ -4,20 +4,21 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+## v0.11.0 - 2026-06-07
+
+**Focus: Protobuf decoding improvements**
+
 ### Bug Fixes
 
 - **Search — negation filter (`-type:`, `-name:`)** — `-type:segb` was silently parsed as `type=segb` plus `name=-`, so it matched nothing instead of excluding the given type. The filter parser now recognises a leading `-` as a negation prefix; `-type:segb` returns all files that are *not* SEGB, and `-name:foo` excludes files whose name contains `foo`.
+- **Protobuf rendering fixes** — the BlobInspector's Protobuf decode mode incorrectly compared `wire_type` against `"message"` instead of inspecting `value.type`; nested messages now render as indented blocks (`field { … }`). Plain strings now display as `field: "text"` and raw bytes as `field: <hex>`; both previously showed unformatted dict reprs. The nested-first heuristic in `_decode_message` was also inverted: a length-delimited payload is now tried as a nested message first and falls back to UTF-8 string or hex bytes only if that yields no entries.
 
 ### Improvements
 
 **Protobuf viewer**
-- **Multi-interpretation display** — the schema-less viewer now shows all plausible type readings for every numeric field as dimmed child rows beneath each entry. Varint fields show `uint64`, `int64`, `sint64 (zigzag)`, `bool`, and Unix timestamp candidates. Fixed-64 fields additionally show `double`, Cocoa timestamp, and Chrome/WebKit timestamp. Fixed-32 fields show `uint32`, `int32`, `float`, and Unix timestamp. Interpretations are computed in the new `crush/parsers/proto_interp.py` module. The generic `TreeViewer` is replaced by a dedicated `ProtobufTreeWidget` that understands the entry structure and renders nested messages recursively.
-- **Nested message rendering fixed** — the BlobInspector's Protobuf decode mode was comparing `wire_type` against the string `"message"`, but `wire_type` is always `"length-delimited"` for wire-type-2 fields. The check now inspects `value.type` instead, so nested messages render as indented blocks (`field { … }`) rather than a raw Python dict string.
-- **String and bytes values rendered correctly** — length-delimited fields decoded as plain strings now display as `field: "text"` and raw-bytes fields display as `field: <hex>` in the BlobInspector; both previously fell through to the `else` branch and showed unformatted dict reprs.
-- **Nested-first decoding heuristic** — `_decode_message` previously checked `_looks_like_utf8()` before attempting recursive protobuf decode. A length-delimited payload that happened to be valid UTF-8 *and* a valid nested message was always shown as a flat string, hiding its structure. The order is now reversed: nested decode is attempted first; UTF-8 string and bytes-preview are only used as fallbacks when the nested parse yields no entries or raises an error.
-- **Shared varint primitive** — the two independent `_read_varint` copies in `protobuf_parser` and `segb_parser` are replaced by a single `read_varint` in the new `crush/parsers/proto_wire.py`. The canonical implementation follows the Protobuf spec exactly (max 10 bytes for a 64-bit varint); the previous `segb_parser` copy had an off-by-one in the overflow guard.
-- **BlobInspector — Protobuf interpretation hints** — the `Protobuf (schema-less)` decode mode now renders `# label: value` hint lines below each numeric field, showing all non-redundant type candidates (`int64`, `sint64 (zigzag)`, `bool`, Unix/Cocoa/Chrome timestamps, `double`, `float`). `uint64` and `uint32` are suppressed since they equal the primary value already shown. Parse warnings (truncated payload, unknown wire type) are prepended as a `# Warning:` header instead of being silently discarded.
-- **Group wire type handled gracefully** — the deprecated Protobuf group wire types (3 = start-group, 4 = end-group) previously aborted the entire parse with "Group wire type is not supported". The decoder now skips group fields completely (including nested groups) and continues parsing subsequent fields. An unexpected end-group tag or a truncated group (missing closing tag) still sets a parse warning.
+- **Multi-interpretation display** — every numeric field in the schema-less viewer now shows all plausible type readings as dimmed child rows: `uint64`, `int64`, `sint64 (zigzag)`, `bool`, Unix/Cocoa/Chrome timestamps, `double`, and `float` — each only when the value falls within a plausible range. The same hints appear in the BlobInspector as `# label: value` lines; `uint64` and `uint32` are suppressed there since they equal the primary value. Parse warnings are prepended as `# Warning:` headers.
+- **Shared varint primitive** — the duplicate `_read_varint` implementations in `protobuf_parser` and `segb_parser` are replaced by a single `read_varint` in `crush/parsers/proto_wire.py`, following the Protobuf spec (max 10 bytes for a 64-bit varint).
+- **Group wire types skipped gracefully** — wire types 3 (start-group) and 4 (end-group) previously aborted the entire parse. The decoder now skips group fields — including nested groups — and continues with subsequent fields. Truncated groups or unexpected end-group tags at the top level produce a parse warning.
 
 ## v0.10.0 - 2026-05-28
 
