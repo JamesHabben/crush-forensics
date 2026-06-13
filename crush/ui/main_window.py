@@ -509,7 +509,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._close_window_action = file_menu.addAction("Close Window", self.close)
         self._close_window_action.setShortcut("Ctrl+W")
-        exit_action = file_menu.addAction("Exit", QApplication.quit)
+        exit_action = file_menu.addAction("Exit", self.close)
         exit_action.setShortcut("Ctrl+Q")
 
         view_menu = menu.addMenu("View")
