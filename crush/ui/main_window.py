@@ -152,6 +152,37 @@ class _DockTitleBar(QWidget):
             mw._dock_to_default(self._dock)  # type: ignore[attr-defined]
 
 
+class _RecentFileButton(QWidget):
+    opened = Signal(str)
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self._path = path
+        self.setToolTip(path)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        p = Path(path)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(12)
+        name = QLabel(f"<b>{p.name}</b>")
+        directory = QLabel(f"<span style='color:gray'>{p.parent}</span>")
+        directory.setSizePolicy(directory.sizePolicy().horizontalPolicy(), directory.sizePolicy().verticalPolicy())
+        layout.addWidget(name)
+        layout.addWidget(directory, stretch=1)
+
+    def mousePressEvent(self, event: object) -> None:  # type: ignore[override]
+        if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
+            self.opened.emit(self._path)
+        else:
+            super().mousePressEvent(event)  # type: ignore[arg-type]
+
+    def enterEvent(self, event: object) -> None:  # type: ignore[override]
+        self.setStyleSheet("background-color: palette(highlight); border-radius: 4px;")
+
+    def leaveEvent(self, event: object) -> None:  # type: ignore[override]
+        self.setStyleSheet("")
+
+
 class _ClickableStatusLabel(QLabel):
     clicked = Signal()
 
@@ -406,6 +437,11 @@ class MainWindow(QMainWindow):
         open_folder_button.clicked.connect(self._open_folder)
         button_row.addWidget(open_folder_button)
         empty_layout.addLayout(button_row)
+
+        self._recent_on_welcome = QVBoxLayout()
+        self._recent_on_welcome.setSpacing(4)
+        empty_layout.addSpacing(16)
+        empty_layout.addLayout(self._recent_on_welcome)
 
         self._central_stack = QStackedWidget()
         self._central_stack.addWidget(self._empty_view)
@@ -1231,7 +1267,30 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"Closed source: {name} ({closed_tabs} tabs closed)")
 
     def _show_empty_view(self) -> None:
+        self._rebuild_welcome_recent()
         self._central_stack.setCurrentWidget(self._empty_view)
+
+    def _rebuild_welcome_recent(self) -> None:
+        while self._recent_on_welcome.count():
+            item = self._recent_on_welcome.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        recent: list[str] = self._settings.value("recent_files", [], type=list)
+        if not recent:
+            return
+        header = QLabel("Recently opened: ")
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._recent_on_welcome.addWidget(header)
+        container = QWidget()
+        container.setFixedWidth(480)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(4)
+        for path in recent[:10]:
+            btn = _RecentFileButton(path)
+            btn.opened.connect(self._load_source)
+            container_layout.addWidget(btn)
+        self._recent_on_welcome.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
 
     def _show_empty_view_if_no_sources(self, _vfs: VFS) -> None:
         if not self._fs_panel._vfs_list:

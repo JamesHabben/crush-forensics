@@ -4,6 +4,22 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+### New Features
+
+- **Open in New Window** — right-clicking any file in a folder source now shows *Open in New Window*; the file is loaded into a fresh Crush window without affecting the current session. Addresses [#15](https://github.com/kalink0/crush-forensics/issues/15).
+- **Multiple windows** — *File → New Window* (Ctrl+N) opens an additional Crush window; *File → Close Window* (Ctrl+W) closes the current window without exiting the application. The window title shows the loaded source name to help distinguish windows. ([@JamesHabben](https://github.com/JamesHabben), [#17](https://github.com/kalink0/crush-forensics/pull/17))
+- **Welcome screen** — an *Open something to begin* screen with *Open File* and *Open Folder* buttons is shown when no source is loaded. ([@JamesHabben](https://github.com/JamesHabben), [#18](https://github.com/kalink0/crush-forensics/pull/18))
+- **Recent files on welcome screen** — the last 10 recently opened sources are listed on the welcome screen for quick access.
+
+### Improvements
+
+- **Unified Open dialog** — *File → Open ZIP archive…* and *File → Open TAR archive…* are replaced by a single *File → Open file…* entry; Crush detects the format automatically from file content.
+
+### Bug Fixes
+
+- **Ctrl+Q exits the application** — previously called `close()` on the current window only; now calls `QApplication.quit()` so all open windows are closed.
+- **macOS build — app bundle not launching** — `--collect-all PySide6` caused a `pkg_resources.NullProvider` error at startup; removed in favour of PyInstaller's built-in PySide6 hook. The `ditto` packaging step now passes `--keepParent` so the `.app` bundle is preserved inside the ZIP. ([@JamesHabben](https://github.com/JamesHabben), [#14](https://github.com/kalink0/crush-forensics/pull/14), closes [#8](https://github.com/kalink0/crush-forensics/issues/8))
+
 ## v0.11.0 - 2026-06-07
 
 **Focus: Protobuf decoding improvements**
