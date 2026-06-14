@@ -134,6 +134,7 @@ jobs:
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
             --collect-all av \
+            --exclude-module pkg_resources \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -172,6 +173,7 @@ jobs:
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
             --collect-all av \
+            --exclude-module pkg_resources \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -226,6 +228,7 @@ jobs:
             --collect-all pillow_heif `
             --collect-all pillow_jxl `
             --collect-all av `
+            --exclude-module pkg_resources `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
             --exclude-module PySide6.QtWebEngineQuick `
@@ -287,6 +290,32 @@ jobs:
       - name: Package artifact (macOS → ZIP)
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent dist/crush.app "${MACOS_ARTIFACT}"
+
+      - name: Smoke test packaged macOS app
+        if: runner.os == 'macOS'
+        run: |
+          extract_dir="$RUNNER_TEMP/crush-smoke"
+          log_file="$RUNNER_TEMP/crush-smoke.log"
+          ditto -x -k "${MACOS_ARTIFACT}" "$extract_dir"
+          executable="$extract_dir/crush.app/Contents/MacOS/crush"
+
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            expected_arch="arm64"
+          else
+            expected_arch="x86_64"
+          fi
+          lipo -archs "$executable" | grep -qw "$expected_arch"
+
+          QT_QPA_PLATFORM=offscreen "$executable" >"$log_file" 2>&1 &
+          app_pid=$!
+          sleep 5
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            wait "$app_pid" || true
+            cat "$log_file"
+            exit 1
+          fi
+          kill "$app_pid"
+          wait "$app_pid" || true
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
