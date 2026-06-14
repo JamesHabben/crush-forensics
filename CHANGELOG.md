@@ -17,6 +17,7 @@ All notable changes to Crush will be documented in this file.
 
 ### Bug Fixes
 
+- **Theme switching broken with multiple windows** — each new window started its own rainbow timer; switching the theme in one window stopped only that window's timer while the others kept overwriting the application palette every 50 ms. `_stop_rainbow_timer` now stops the timer in all open windows.
 - **Ctrl+Q exits the application** — previously called `close()` on the current window only; now calls `QApplication.quit()` so all open windows are closed.
 - **macOS build — app bundle not launching** — `--collect-all PySide6` caused a `pkg_resources.NullProvider` error at startup; removed in favour of PyInstaller's built-in PySide6 hook. The `ditto` packaging step now passes `--keepParent` so the `.app` bundle is preserved inside the ZIP. ([@JamesHabben](https://github.com/JamesHabben), [#14](https://github.com/kalink0/crush-forensics/pull/14), closes [#8](https://github.com/kalink0/crush-forensics/issues/8))
 

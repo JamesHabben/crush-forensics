@@ -1650,10 +1650,13 @@ class MainWindow(QMainWindow):
             return None
 
     def _stop_rainbow_timer(self) -> None:
-        if hasattr(self, "_rainbow_timer"):
-            self._rainbow_timer.stop()
-        if hasattr(self, "_rainbow_snapshot_btn"):
-            self._rainbow_snapshot_btn.setVisible(False)
+        for window in self._open_windows:
+            if not isValid(window):
+                continue
+            if hasattr(window, "_rainbow_timer"):
+                window._rainbow_timer.stop()
+            if hasattr(window, "_rainbow_snapshot_btn"):
+                window._rainbow_snapshot_btn.setVisible(False)
 
     def _set_theme_light(self) -> None:
         self._stop_rainbow_timer()
