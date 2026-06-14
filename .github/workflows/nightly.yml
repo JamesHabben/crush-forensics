@@ -322,18 +322,35 @@ jobs:
           else
             expected_arch="x86_64"
           fi
-          lipo -archs "$executable" | grep -qw "$expected_arch"
+          actual_archs="$(lipo -archs "$executable")"
+          echo "Packaged executable architectures: $actual_archs"
+          grep -qw "$expected_arch" <<<"$actual_archs"
 
           QT_QPA_PLATFORM=offscreen "$executable" >"$log_file" 2>&1 &
           app_pid=$!
           sleep 5
           if ! kill -0 "$app_pid" 2>/dev/null; then
-            wait "$app_pid" || true
+            set +e
+            wait "$app_pid" 2>/dev/null
+            exit_code=$?
+            set -e
             cat "$log_file"
+            echo "Smoke test failed: app exited early with status $exit_code"
             exit 1
           fi
+
+          echo "App remained running for 5 seconds; stopping smoke test process."
           kill "$app_pid"
-          wait "$app_pid" || true
+          set +e
+          wait "$app_pid" 2>/dev/null
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 143 ]; then
+            cat "$log_file"
+            echo "Smoke test failed: expected SIGTERM exit status 143, got $exit_code"
+            exit 1
+          fi
+          echo "Smoke test passed."
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
