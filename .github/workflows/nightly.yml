@@ -151,6 +151,7 @@ jobs:
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
             --collect-all av \
+            --exclude-module pkg_resources \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -188,6 +189,7 @@ jobs:
             --collect-all pillow_heif \
             --collect-all pillow_jxl \
             --collect-all av \
+            --exclude-module pkg_resources \
             --exclude-module PySide6.QtWebEngineCore \
             --exclude-module PySide6.QtWebEngineWidgets \
             --exclude-module PySide6.QtWebEngineQuick \
@@ -243,6 +245,7 @@ jobs:
             --collect-all pillow_heif `
             --collect-all pillow_jxl `
             --collect-all av `
+            --exclude-module pkg_resources `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
             --exclude-module PySide6.QtWebEngineQuick `
@@ -304,6 +307,50 @@ jobs:
       - name: Package artifact (macOS → ZIP)
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent dist/crush.app "${MACOS_ARTIFACT_NAME}-${BUILD_ID}.zip"
+
+      - name: Smoke test packaged macOS app
+        if: runner.os == 'macOS'
+        run: |
+          artifact="${MACOS_ARTIFACT_NAME}-${BUILD_ID}.zip"
+          extract_dir="$RUNNER_TEMP/crush-smoke"
+          log_file="$RUNNER_TEMP/crush-smoke.log"
+          ditto -x -k "$artifact" "$extract_dir"
+          executable="$extract_dir/crush.app/Contents/MacOS/crush"
+
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            expected_arch="arm64"
+          else
+            expected_arch="x86_64"
+          fi
+          actual_archs="$(lipo -archs "$executable")"
+          echo "Packaged executable architectures: $actual_archs"
+          grep -qw "$expected_arch" <<<"$actual_archs"
+
+          QT_QPA_PLATFORM=offscreen "$executable" >"$log_file" 2>&1 &
+          app_pid=$!
+          sleep 5
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            set +e
+            wait "$app_pid" 2>/dev/null
+            exit_code=$?
+            set -e
+            cat "$log_file"
+            echo "Smoke test failed: app exited early with status $exit_code"
+            exit 1
+          fi
+
+          echo "App remained running for 5 seconds; stopping smoke test process."
+          kill "$app_pid"
+          set +e
+          wait "$app_pid" 2>/dev/null
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 143 ]; then
+            cat "$log_file"
+            echo "Smoke test failed: expected SIGTERM exit status 143, got $exit_code"
+            exit 1
+          fi
+          echo "Smoke test passed."
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
