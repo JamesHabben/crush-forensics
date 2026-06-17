@@ -14,6 +14,7 @@ All notable changes to Crush will be documented in this file.
 ### Improvements
 
 - **Unified Open dialog** — *File → Open ZIP archive…* and *File → Open TAR archive…* are replaced by a single *File → Open file…* entry; Crush detects the format automatically from file content.
+- **SQLite query improvements** - Improvements for SQlite queries (performance) and UI responsiveness ([@JamesHabben](https://github.com/JamesHabben), [#22](https://github.com/kalink0/crush-forensics/pull/22))
 
 ### Bug Fixes
 
