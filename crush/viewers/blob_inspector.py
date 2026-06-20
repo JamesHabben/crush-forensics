@@ -1,25 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 - now Marco Neumann (kalink0)
-"""BLOB Inspector dialog with a chainable decode pipeline."""
+"""BLOB Inspector dialog with a chainable decode pipeline and multi-view panel."""
 from __future__ import annotations
 
 import base64
+import gzip
 import json as _json
+import zlib
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QContextMenuEvent, QPixmap
+from PySide6.QtGui import QColor, QContextMenuEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -55,6 +58,35 @@ def _decode_hex(data: bytes) -> bytes | None:
         text = data.decode("ascii", errors="ignore")
         cleaned = "".join(text.split()).replace(":", "")
         return bytes.fromhex(cleaned)
+    except Exception:
+        return None
+
+
+def _decode_zlib(data: bytes) -> bytes | None:
+    try:
+        return zlib.decompress(data)
+    except Exception:
+        return None
+
+
+def _decode_gzip(data: bytes) -> bytes | None:
+    try:
+        return gzip.decompress(data)
+    except Exception:
+        return None
+
+
+def _decode_base64url(data: bytes) -> bytes | None:
+    try:
+        return base64.urlsafe_b64decode(data.strip() + b"==")
+    except Exception:
+        return None
+
+
+def _decode_lzfse(data: bytes) -> bytes | None:
+    try:
+        import lzfse
+        return lzfse.decompress(data)  # type: ignore[attr-defined]
     except Exception:
         return None
 
@@ -128,8 +160,12 @@ def _try_abx(data: bytes) -> str:
 
 # bytes → bytes; None on failure
 _INTERMEDIATE: dict[str, Callable[[bytes], bytes | None]] = {
-    "Base64 (decode)":  _decode_base64,
-    "Hex → Bytes":      _decode_hex,
+    "Base64 (decode)":   _decode_base64,
+    "Base64url (decode)": _decode_base64url,
+    "Hex → Bytes":       _decode_hex,
+    "zlib decompress":   _decode_zlib,
+    "gzip decompress":   _decode_gzip,
+    "lzfse decompress":  _decode_lzfse,
 }
 
 # bytes → str; tuple is (render_fn, error_label_on_failure)
@@ -143,7 +179,7 @@ _TERMINAL_TEXT: dict[str, tuple[Callable[[bytes], str], str]] = {
     "Android Binary XML (ABX)": (_try_abx,      "[parse error]"),
 }
 
-# Subset of _TERMINAL_TEXT keys tried in order by "Auto"
+# Subset of _TERMINAL_TEXT keys tried by auto-detection, in priority order
 _AUTO_ORDER: tuple[str, ...] = (
     "Plist / bplist",
     "XML",
@@ -152,15 +188,10 @@ _AUTO_ORDER: tuple[str, ...] = (
     "Latin-1 text",
 )
 
-# Derived tuples for combo boxes — "Auto" / "Hex view" / "Image" stay special
+# Formats that always (or almost always) produce output — not a strong recognition signal
+_PERMISSIVE: frozenset[str] = frozenset({"Latin-1 text", "Protobuf (schema-less)"})
+
 _INTERMEDIATE_FORMATS: tuple[str, ...] = tuple(_INTERMEDIATE)
-_TERMINAL_FORMATS: tuple[str, ...] = (
-    "Auto",
-    "Hex view",
-    *_TERMINAL_TEXT,
-    "Image (PNG / JPEG / GIF)",
-)
-_ALL_FORMATS: tuple[str, ...] = _TERMINAL_FORMATS + _INTERMEDIATE_FORMATS
 
 
 def _is_image(data: bytes) -> bool:
@@ -205,68 +236,67 @@ def _render_protobuf(entries: list, indent: int = 0) -> str:
 class _BlobViewerEdit(QPlainTextEdit):
     """QPlainTextEdit with a hex-aware context menu."""
 
-    def __init__(self, inspector: "BlobInspector") -> None:
+    def __init__(self, panel: "_BlobPanel") -> None:
         super().__init__()
-        self._inspector = inspector
+        self._panel = panel
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         menu = self.createStandardContextMenu()
         cursor = self.textCursor()
-        if cursor.hasSelection() and self._inspector._is_hex_mode():
+        if cursor.hasSelection() and self._panel._is_hex_mode():
             menu.addSeparator()
             menu.addAction("Copy Selected Hex").triggered.connect(
-                self._inspector._copy_selected_hex
+                self._panel._copy_selected_hex
             )
             menu.addAction("Copy Selected ASCII").triggered.connect(
-                self._inspector._copy_selected_ascii
+                self._panel._copy_selected_ascii
             )
         menu.addSeparator()
-        menu.addAction("Copy All").triggered.connect(self._inspector._copy_all)
+        menu.addAction("Copy All").triggered.connect(self._panel._copy_all)
         menu.exec(event.globalPos())
 
 
+_STEP_LIST_MAX_VISIBLE = 5
+
+
 class _StepRow(QWidget):
-    """One row in the decode pipeline: step label + format combo + size hint + remove button."""
+    """One transform step in the decode pipeline: label + format list + size hint."""
 
-    def __init__(
-        self,
-        number: int,
-        formats: tuple[str, ...],
-        inspector: "BlobInspector",
-    ) -> None:
+    def __init__(self, number: int, inspector: "_BlobPanel") -> None:
         super().__init__()
-        self._inspector = inspector
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 2, 0, 2)
-        row.setSpacing(4)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 6)
+        layout.setSpacing(2)
 
+        header = QHBoxLayout()
         self._num_label = QLabel(f"Step {number}:")
-        row.addWidget(self._num_label)
+        header.addWidget(self._num_label)
+        header.addStretch()
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedSize(22, 22)
+        remove_btn.setToolTip("Remove this step")
+        remove_btn.clicked.connect(lambda: inspector._remove_step(self))
+        header.addWidget(remove_btn)
+        layout.addLayout(header)
 
-        self._combo = QComboBox()
-        self._combo.blockSignals(True)
-        self._combo.addItems(formats)
-        self._combo.blockSignals(False)
-        self._combo.currentIndexChanged.connect(self._on_changed)
-        row.addWidget(self._combo, stretch=1)
+        self._list = QListWidget()
+        self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._list.addItems(_INTERMEDIATE_FORMATS)
+        self._list.setCurrentRow(0)
+        visible = min(len(_INTERMEDIATE_FORMATS), _STEP_LIST_MAX_VISIBLE)
+        row_h = self._list.sizeHintForRow(0)
+        self._list.setFixedHeight(visible * row_h + 4)
+        self._list.currentItemChanged.connect(lambda *_: inspector._recompute())
+        layout.addWidget(self._list)
 
         self._hint = QLabel("")
         self._hint.setStyleSheet("color: gray;")
-        self._hint.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        row.addWidget(self._hint)
-
-        self._remove_btn = QPushButton("✕")
-        self._remove_btn.setFixedWidth(28)
-        self._remove_btn.setToolTip("Remove this step")
-        self._remove_btn.clicked.connect(lambda: self._inspector._remove_step(self))
-        row.addWidget(self._remove_btn)
+        layout.addWidget(self._hint)
 
     def format(self) -> str:
-        return self._combo.currentText()
-
-    def is_intermediate(self) -> bool:
-        return self.format() in _INTERMEDIATE_FORMATS
+        item = self._list.currentItem()
+        return item.text() if item else ""
 
     def set_number(self, n: int) -> None:
         self._num_label.setText(f"Step {n}:")
@@ -274,14 +304,10 @@ class _StepRow(QWidget):
     def set_hint(self, text: str) -> None:
         self._hint.setText(text)
 
-    def show_remove(self, visible: bool) -> None:
-        self._remove_btn.setVisible(visible)
 
-    def _on_changed(self) -> None:
-        self._inspector._on_step_format_changed(self)
+class _BlobPanel(QWidget):
+    """Three-column BLOB inspection panel reused by BlobInspector and PasteDecodeDialog."""
 
-
-class BlobInspector(QDialog):
     def __init__(
         self,
         blob: bytes,
@@ -290,32 +316,73 @@ class BlobInspector(QDialog):
         display_text: str | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._blob = blob
         self._display_text = display_text
         self._steps: list[_StepRow] = []
+        self._cached_results: dict[str, str] = {}
+        self._cached_image_data: bytes | None = None
         self._hex_mode = False
-        self._build_ui()
-        self._push_step(first=True)
+        self._build_panel()
+        self._recompute()
 
-    def _build_ui(self) -> None:
-        self.setWindowTitle(f"BLOB Inspector ({len(self._blob):,} B)")
-        self.resize(700, 500)
+    def update_blob(self, blob: bytes) -> None:
+        """Replace the inspected bytes and refresh all interpretations."""
+        self._blob = blob
+        for step in self._steps:
+            step.set_hint("")
+        self._recompute()
 
+    def _build_panel(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
-        pipeline_container = QWidget()
-        self._pipeline_layout = QVBoxLayout(pipeline_container)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # --- Column 1: Decode pipeline ---
+        pipeline_widget = QWidget()
+        pipeline_col = QVBoxLayout(pipeline_widget)
+        pipeline_col.setContentsMargins(0, 0, 4, 0)
+        pipeline_col.setSpacing(4)
+
+        lbl_pipeline = QLabel("Decode pipeline")
+        lbl_pipeline.setStyleSheet("font-weight: bold;")
+        pipeline_col.addWidget(lbl_pipeline)
+
+        steps_container = QWidget()
+        self._pipeline_layout = QVBoxLayout(steps_container)
         self._pipeline_layout.setContentsMargins(0, 0, 0, 0)
         self._pipeline_layout.setSpacing(0)
-        outer.addWidget(pipeline_container)
+        pipeline_col.addWidget(steps_container)
+        pipeline_col.addStretch()
 
-        self._add_btn = QPushButton("＋  Add decode step")
-        self._add_btn.setVisible(False)
-        self._add_btn.clicked.connect(lambda: self._push_step(first=False))
-        outer.addWidget(self._add_btn)
+        self._add_btn = QPushButton("＋  Add step")
+        self._add_btn.clicked.connect(self._push_step)
+        pipeline_col.addWidget(self._add_btn)
+
+        splitter.addWidget(pipeline_widget)
+
+        # --- Column 2: Interpretations ---
+        interp_widget = QWidget()
+        interp_col = QVBoxLayout(interp_widget)
+        interp_col.setContentsMargins(4, 0, 4, 0)
+        interp_col.setSpacing(4)
+
+        lbl_interp = QLabel("Interpretations")
+        lbl_interp.setStyleSheet("font-weight: bold;")
+        interp_col.addWidget(lbl_interp)
+
+        self._format_list = QListWidget()
+        self._format_list.currentItemChanged.connect(self._on_item_changed)
+        interp_col.addWidget(self._format_list)
+
+        splitter.addWidget(interp_widget)
+
+        # --- Column 3: Content view ---
+        content_widget = QWidget()
+        content_col = QVBoxLayout(content_widget)
+        content_col.setContentsMargins(4, 0, 0, 0)
+        content_col.setSpacing(4)
 
         self._stack = QStackedWidget()
 
@@ -332,28 +399,27 @@ class BlobInspector(QDialog):
         self._img_scroll.setWidget(self._img_label)
         self._stack.addWidget(self._img_scroll)
 
-        outer.addWidget(self._stack, stretch=1)
+        content_col.addWidget(self._stack, stretch=1)
 
-        bottom = QHBoxLayout()
+        copy_row = QHBoxLayout()
         self._copy_btn = QPushButton("Copy")
         self._copy_btn.clicked.connect(self._copy_current)
-        bottom.addWidget(self._copy_btn)
-        bottom.addStretch()
-        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        close_box.rejected.connect(self.reject)
-        bottom.addWidget(close_box)
-        outer.addLayout(bottom)
+        copy_row.addWidget(self._copy_btn)
+        copy_row.addStretch()
+        content_col.addLayout(copy_row)
 
-    def _first_step_formats(self) -> tuple[str, ...]:
-        if self._display_text is not None:
-            return ("Decoded (from table)",) + _ALL_FORMATS
-        return _ALL_FORMATS
+        splitter.addWidget(content_widget)
 
-    def _push_step(self, *, first: bool) -> None:
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
+        splitter.setSizes([185, 170, 505])
+
+        outer.addWidget(splitter, stretch=1)
+
+    def _push_step(self) -> None:
         number = len(self._steps) + 1
-        formats = self._first_step_formats() if first else _ALL_FORMATS
-        step = _StepRow(number, formats, self)
-        step.show_remove(not first)
+        step = _StepRow(number, self)
         self._steps.append(step)
         self._pipeline_layout.addWidget(step)
         self._recompute()
@@ -365,93 +431,160 @@ class BlobInspector(QDialog):
         step.deleteLater()
         for i, s in enumerate(self._steps):
             s.set_number(i + 1)
-        if self._steps:
-            self._steps[0].show_remove(False)
-        self._recompute()
-
-    def _on_step_format_changed(self, step: _StepRow) -> None:
-        idx = self._steps.index(step)
-        # if a non-last step switched to terminal, drop all steps after it
-        if idx < len(self._steps) - 1 and not step.is_intermediate():
-            for s in self._steps[idx + 1:]:
-                self._pipeline_layout.removeWidget(s)
-                s.deleteLater()
-            del self._steps[idx + 1:]
         self._recompute()
 
     def _recompute(self) -> None:
-        if not self._steps:
-            return
         current = self._blob
 
         for i, step in enumerate(self._steps):
-            is_last = i == len(self._steps) - 1
             fmt = step.format()
-
-            if step.is_intermediate():
-                result = _INTERMEDIATE[fmt](current)
-                if result is None:
-                    step.set_hint("→ [error]")
-                    for s in self._steps[i + 1:]:
-                        s.set_hint("")
-                    self._viewer.setPlainText(f"[step {i + 1}: {fmt!r} failed]")
-                    self._stack.setCurrentIndex(0)
-                    self._hex_mode = False
-                    self._copy_btn.setEnabled(False)
-                    self._add_btn.setVisible(False)
-                    return
-                step.set_hint(f"→ {len(result):,} B")
-                if is_last:
-                    self._hex_mode = True
-                    self._viewer.setPlainText(bytes_to_hexview(result, max_bytes=200_000))
-                    self._stack.setCurrentIndex(0)
-                    self._copy_btn.setEnabled(True)
-                    self._add_btn.setVisible(True)
-                    return
-                current = result
-            else:
-                step.set_hint("")
-                self._render_final(fmt, current)
-                self._add_btn.setVisible(False)
+            result = _INTERMEDIATE[fmt](current)
+            if result is None:
+                step.set_hint("→ [error]")
+                for s in self._steps[i + 1:]:
+                    s.set_hint("")
+                self._format_list.blockSignals(True)
+                self._format_list.clear()
+                self._format_list.blockSignals(False)
+                self._viewer.setPlainText(f"[step {i + 1}: {fmt!r} failed]")
+                self._stack.setCurrentIndex(0)
+                self._hex_mode = False
+                self._copy_btn.setEnabled(False)
                 return
+            step.set_hint(f"→ {len(result):,} B")
+            current = result
 
-    def _render_final(self, fmt: str, data: bytes) -> None:
-        if fmt == "Decoded (from table)":
-            self._stack.setCurrentIndex(0)
-            self._hex_mode = False
-            self._copy_btn.setEnabled(True)
-            self._viewer.setPlainText(self._display_text or "")
+        self._populate_format_list(current)
+
+    def _populate_format_list(self, data: bytes) -> None:
+        self._cached_results = {}
+        self._cached_image_data = None
+
+        confident: list[str] = []
+        uncertain: list[str] = []
+        failed: list[str] = []
+
+        if self._display_text is not None:
+            confident.append("Decoded (from table)")
+            self._cached_results["Decoded (from table)"] = self._display_text
+
+        if _is_image(data):
+            confident.append("Image")
+            self._cached_image_data = data
+        else:
+            failed.append("Image")
+
+        ordered_keys = list(_AUTO_ORDER) + [k for k in _TERMINAL_TEXT if k not in set(_AUTO_ORDER)]
+        for key in ordered_keys:
+            render_fn, _ = _TERMINAL_TEXT[key]
+            result = render_fn(data)
+            if result:
+                self._cached_results[key] = result
+                if key in _PERMISSIVE:
+                    uncertain.append(key)
+                else:
+                    confident.append(key)
+            else:
+                failed.append(key)
+
+        self._cached_results["Hex view"] = bytes_to_hexview(data, max_bytes=200_000)
+
+        prev = self._format_list.currentItem()
+        prev_name: str | None = prev.data(Qt.ItemDataRole.UserRole) if prev else None
+
+        muted = QColor(128, 128, 128)
+
+        self._format_list.blockSignals(True)
+        self._format_list.clear()
+
+        def _sep() -> None:
+            s = QListWidgetItem("─" * 18)
+            s.setFlags(Qt.ItemFlag.NoItemFlags)
+            s.setForeground(muted)
+            self._format_list.addItem(s)
+
+        hex_item = QListWidgetItem("Hex view")
+        hex_item.setData(Qt.ItemDataRole.UserRole, "Hex view")
+        self._format_list.addItem(hex_item)
+
+        if confident:
+            _sep()
+            for name in confident:
+                item = QListWidgetItem(f"✓  {name}")
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                self._format_list.addItem(item)
+
+        if uncertain:
+            _sep()
+            for name in uncertain:
+                item = QListWidgetItem(f"~  {name}")
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                item.setForeground(muted)
+                self._format_list.addItem(item)
+
+        if failed:
+            _sep()
+            for name in failed:
+                item = QListWidgetItem(f"    {name}")
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                item.setForeground(muted)
+                self._format_list.addItem(item)
+
+        to_select: str
+        prev_still_valid = prev_name is not None and (
+            prev_name in self._cached_results
+            or (prev_name == "Image" and self._cached_image_data is not None)
+        )
+        if prev_still_valid:
+            to_select = prev_name  # type: ignore[assignment]
+        elif self._display_text is not None:
+            to_select = "Decoded (from table)"
+        elif self._cached_image_data is not None:
+            to_select = "Image"
+        else:
+            to_select = next((k for k in _AUTO_ORDER if k in self._cached_results and k not in _PERMISSIVE), "Hex view")
+
+        for i in range(self._format_list.count()):
+            item = self._format_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == to_select:
+                self._format_list.setCurrentItem(item)
+                break
+
+        self._format_list.blockSignals(False)
+
+        current_item = self._format_list.currentItem()
+        self._on_format_selected(current_item.data(Qt.ItemDataRole.UserRole) if current_item else "")
+
+    def _on_item_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        if current is None:
+            return
+        name: str = current.data(Qt.ItemDataRole.UserRole)
+        if not name:
+            return
+        self._on_format_selected(name)
+
+    def _on_format_selected(self, name: str) -> None:
+        if not name:
             return
 
-        if fmt == "Image (PNG / JPEG / GIF)":
-            self._show_image(data)
-            return
-
-        if fmt == "Auto" and _is_image(data):
-            self._show_image(data)
+        if name == "Image":
+            if self._cached_image_data is not None:
+                self._show_image(self._cached_image_data)
+            else:
+                self._stack.setCurrentIndex(0)
+                self._copy_btn.setEnabled(False)
+                self._viewer.setPlainText("[not recognised as image]")
             return
 
         self._stack.setCurrentIndex(0)
-        self._copy_btn.setEnabled(True)
-        self._hex_mode = False
+        self._hex_mode = name == "Hex view"
 
-        if fmt == "Auto":
-            for key in _AUTO_ORDER:
-                content = _TERMINAL_TEXT[key][0](data)
-                if content:
-                    break
-            else:
-                content = bytes_to_hexview(data, max_bytes=200_000)
-                self._hex_mode = True
-        elif fmt == "Hex view":
-            self._hex_mode = True
-            content = bytes_to_hexview(data, max_bytes=200_000)
-        elif fmt in _TERMINAL_TEXT:
-            render_fn, error_label = _TERMINAL_TEXT[fmt]
-            content = render_fn(data) or error_label
+        if name in self._cached_results:
+            self._copy_btn.setEnabled(True)
+            self._viewer.setPlainText(self._cached_results[name][:500_000])
         else:
-            content = ""
-        self._viewer.setPlainText(content[:500_000])
+            self._copy_btn.setEnabled(False)
+            self._viewer.setPlainText(f"[{name}: not recognised]")
 
     def _show_image(self, data: bytes) -> None:
         from PySide6.QtCore import QByteArray
@@ -480,7 +613,7 @@ class BlobInspector(QDialog):
         if not cursor.hasSelection():
             return
         tokens: list[str] = []
-        for line in cursor.selectedText().split(" "):
+        for line in cursor.selectedText().split(" "):
             hex_section = line[_BLOB_HEX_START:_BLOB_HEX_END]
             for part in hex_section.split():
                 if len(part) == 2 and all(c in "0123456789ABCDEFabcdef" for c in part):
@@ -492,7 +625,36 @@ class BlobInspector(QDialog):
         if not cursor.hasSelection():
             return
         parts: list[str] = []
-        for line in cursor.selectedText().split(" "):
+        for line in cursor.selectedText().split(" "):
             if len(line) > _BLOB_ASCII_START:
                 parts.append(line[_BLOB_ASCII_START:])
         QApplication.clipboard().setText("".join(parts))
+
+
+class BlobInspector(QDialog):
+    """Non-modal dialog wrapping _BlobPanel for inspecting a single binary BLOB."""
+
+    def __init__(
+        self,
+        blob: bytes,
+        parent: QWidget | None = None,
+        *,
+        display_text: str | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setWindowTitle(f"BLOB Inspector ({len(blob):,} B)")
+        self.resize(900, 560)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        outer.addWidget(_BlobPanel(blob, self, display_text=display_text), stretch=1)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        bottom.addWidget(close_box)
+        outer.addLayout(bottom)

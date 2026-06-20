@@ -320,22 +320,103 @@ The BLOB Inspector is a shared decode dialog for examining raw binary fields. It
 - **SQLite viewer** — right-click any cell → **Inspect Cell…**
 - **LevelDB viewer** — right-click any record row → **Inspect Key…**, **Inspect Value…**, or **Inspect Internal Key…**
 - **Realm viewer** — right-click any freed block in the Freed Data tab → **Inspect Block…**
+- **Tools → Paste & Decode…** — paste hex, base64, or text directly into the inspector without a source file
 
-**Decode modes:**
+---
 
-| Mode | What it does |
+#### Layout — three columns
+
+| Column | Purpose |
 |---|---|
-| **Auto** | Tries each decoder in order and shows the first successful result; detects PNG/JPEG/GIF via magic bytes, valid Protobuf, UTF-8 JSON, XML, and plist automatically |
-| **Hex** | Raw hex dump |
-| **UTF-8** | Interprets bytes as UTF-8 text |
-| **Latin-1** | Interprets bytes as ISO-8859-1 text |
-| **Base64** | Decodes as Base64 then re-inspects the result |
-| **Plist** | Decodes as binary or XML property list |
-| **XML** | Parses as XML with pretty-printing |
-| **JSON** | Pretty-prints as formatted JSON |
-| **Protobuf (schema-less)** | Wire-format decode in `protoc --decode_raw` style; each numeric field is followed by `# label: value` hint lines for all non-redundant interpretations (int64, sint64, bool, timestamps, double/float). A `# Warning:` header is prepended if the parse was truncated or malformed. |
-| **Android Binary XML (ABX)** | Reconstructs XML from Android's binary XML encoding |
-| **Image (PNG / JPEG / GIF)** | Renders the image inline |
+| **Decode pipeline** (left) | Chain of byte→byte transform steps applied before interpretation. Click **＋ Add step** to append a step; click **×** to remove one. Steps run top-to-bottom; if a step fails the pipeline stops there and the error is shown inline. |
+| **Interpretations** (middle) | All available display formats for the bytes produced by the pipeline, grouped by confidence. Click any entry to switch the content view instantly — no second click needed. |
+| **Content view** (right) | The rendered output for the selected interpretation. **Copy** copies the full content to the clipboard. Right-click in hex view for per-selection copy options. |
+
+---
+
+#### Decode pipeline steps
+
+Pipeline steps are byte→byte transforms that pre-process the raw bytes before the interpretations are evaluated. Steps are chained: the output of step 1 is the input of step 2, and so on. The byte count after each step is shown inline.
+
+| Step | What it does | Typical source |
+|---|---|---|
+| **Base64 (decode)** | Decodes standard Base64 with `+`/`/` charset and `=` padding | iOS/Android SQLite BLOBs, email attachments |
+| **Base64url (decode)** | Decodes URL-safe Base64 with `-`/`_` charset; padding optional | JWT payloads, web API tokens, OAuth parameters |
+| **Hex → Bytes** | Converts hex strings with any separator (space, colon, none) to raw bytes | Database hex columns, copy-pasted hex dumps |
+| **zlib decompress** | Decompresses zlib data (deflate stream with zlib header, `0x78 …`) | Chrome LevelDB values, iOS WebKit caches |
+| **gzip decompress** | Decompresses gzip data (magic `1f 8b`) | HTTP response bodies, server-side log archives |
+| **lzfse decompress** | Decompresses Apple LZFSE data (magic `bvx2` / `bvxn` / `bvxx`) | iOS backups, iCloud sync blobs, macOS system caches, APFS metadata |
+
+Steps can be combined freely. To decode a value that is Base64url-encoded and then lzfse-compressed, add **Base64url** as step 1 and **lzfse decompress** as step 2.
+
+---
+
+#### Interpretations
+
+After the pipeline runs, the resulting bytes are tested against all available interpretations. The list is grouped into three tiers:
+
+| Marker | Meaning |
+|---|---|
+| *(no marker)* | **Hex view** — always available as the baseline |
+| **✓** | Confident — format positively identified (magic bytes, strict parse, valid structure) |
+| **~** | Permissive — format almost always succeeds regardless of content; treat as a fallback, not a confirmation |
+| *(gray, no marker)* | Failed — bytes did not match this format |
+
+**Available interpretations:**
+
+| Interpretation | Tier | Notes |
+|---|---|---|
+| **Hex view** | baseline | Annotated hex dump with address / hex / ASCII columns |
+| **UTF-8 text** | ✓ | Only ✓ when all bytes are valid UTF-8; strict decode |
+| **JSON** | ✓ | Pretty-prints valid JSON; also detects escaped JSON embedded in a string |
+| **Plist / bplist** | ✓ | Decodes binary (`bplist00`) or XML property list. NSKeyedArchiver payloads are automatically deserialised and the object graph is rendered as a Python pprint |
+| **XML** | ✓ | Parses and pretty-prints well-formed XML (via lxml) |
+| **Android Binary XML (ABX)** | ✓ | Reconstructs XML from Android's compact binary XML format |
+| **Image** | ✓ | Renders the image inline — PNG, JPEG, GIF, BMP, WebP, HEIC, AVIF |
+| **Protobuf (schema-less)** | ~ | Wire-format decode. Numeric fields include `# label: value` hints for int64, sint64 (zigzag), bool, Unix/Cocoa/Chrome timestamps, double, and float. A `# Warning:` header appears if the parse was truncated or malformed. Shown as **~** because Protobuf's wire format accepts most byte sequences. |
+| **Latin-1 text** | ~ | ISO-8859-1 — always succeeds since every byte is a valid Latin-1 character; useful as a last resort for mixed binary/text data |
+
+**Auto-selection:** when the inspector opens or the pipeline changes, the best ✓-tier interpretation is selected automatically. If the previously selected format still produces output after a pipeline change, the selection is preserved.
+
+---
+
+#### Forensic examples
+
+**iOS app database — Base64-encoded binary plist**
+
+Many iOS apps store serialised objects as Base64-encoded bplist BLOBs in SQLite. To inspect:
+1. Right-click the cell → *Inspect Cell…*
+2. Add step: **Base64 (decode)**
+3. The Interpretations list shows **✓ Plist / bplist** — click it to read the deserialised object graph, including NSKeyedArchiver structures.
+
+**JWT / OAuth token stored in a database**
+
+Web-facing apps (and some native apps) store JWT tokens in SQLite. The token payload is the second dot-separated segment, Base64url-encoded without padding:
+1. Copy the middle segment (between the first and second `.`)
+2. Open *Tools → Paste & Decode…*, paste the segment
+3. Set *Input encoding* to **Auto** (it recognises Base64url) or force **Base64**
+4. Add step: **Base64url (decode)** — the payload JSON appears in the Interpretations list.
+
+**iOS backup / iCloud sync blob — lzfse-compressed plist**
+
+Apple uses LZFSE compression extensively in iOS backups, iCloud sync metadata, and macOS system caches. The magic bytes `62 76 78 32` (`bvx2`) identify lzfse data:
+1. Right-click the cell → *Inspect Cell…*
+2. Add step: **lzfse decompress**
+3. If the decompressed result is a plist, **✓ Plist / bplist** appears automatically.
+
+**Multi-layer encoding (Base64url → lzfse → JSON)**
+
+Some modern mobile backends layer encodings. Add steps in order and the pipeline resolves them one by one:
+1. Add **Base64url (decode)** — converts the token to compressed bytes
+2. Add **lzfse decompress** — decompresses to JSON
+3. Click **✓ JSON** to read the payload
+
+**Protobuf inside a bplist**
+
+iOS apps sometimes store Protobuf bytes as a `<data>` field inside an NSKeyedArchiver bplist:
+1. Add step: **Base64 (decode)** if the outer BLOB is Base64-encoded
+2. Select **✓ Plist / bplist** — the NSKeyedArchiver is deserialised; note the field that holds raw bytes
+3. To inspect the inner Protobuf, copy its hex from the plist view, open a new inspector via *Paste & Decode…*, add **Hex → Bytes**, then select **~ Protobuf (schema-less)**.
 
 ### ABX Viewer
 
@@ -538,30 +619,20 @@ Right-click any file or folder in the Filesystem panel and choose **Export…**.
 
 ## Paste & Decode
 
-**Tools → Paste & Decode…** lets you paste raw binary data — copied from a hex editor, a SQLite BLOB cell, a network capture, or any other source — and inspect it directly in Crush without saving it to disk first.
+**Tools → Paste & Decode…** is an alternative entry point to the [BLOB Inspector](#blob-inspector). It lets you paste raw binary data — copied from a hex editor, a SQLite BLOB cell, a network capture, or any other source — and inspect it directly in Crush without saving it to disk first.
 
-1. Paste hex, base64, or plain text into the input area.
-2. Set **Input encoding** to **Auto** (default) or force a specific encoding if auto-detection picks the wrong one.
-3. Choose the target format from **Open as**:
+1. Paste hex, base64, or plain text into the input area at the top.
+2. Set **Input encoding** to **Auto** (default) or force a specific encoding if auto-detection picks the wrong one:
+   - **Auto** — detects hex strings, Base64, and plain text automatically
+   - **Hex** — treats the input as a hex string regardless of content
+   - **Base64** — decodes as Base64 regardless of content
+   - **UTF-8 text** — treats the input as UTF-8 text and passes the raw bytes through
+3. The status line shows the detected encoding and decoded byte count as you type. If it stays grey, the input could not be decoded with the current encoding setting.
+4. The full BLOB Inspector panel — three columns: *Decode pipeline*, *Interpretations*, *Content view* — appears directly below and updates live as you type.
 
-| Open as | Notes |
-|---|---|
-| Auto-detect | Crush identifies the format by magic bytes |
-| Binary plist (bplist) | Force the Property List viewer |
-| XML / Text plist | Force the Property List viewer (XML form) |
-| JSON | Force the JSON viewer |
-| XML | Force the XML viewer |
-| SQLite database | Force the SQLite / table viewer |
-| Realm database | Force the Realm Database viewer |
-| Android Binary XML (ABX) | Force the ABX viewer |
-| SEGB / Biome | Force the SEGB viewer |
-| Protobuf (schema-less) | Force the Protobuf wire decoder |
-| Hex view (raw bytes) | Always open as raw hex, regardless of content |
+All pipeline steps and interpretations available in the BLOB Inspector (Base64, zlib, gzip, …) are also available here. New decode steps added to the inspector appear automatically in Paste & Decode as well.
 
-4. The status line shows the decoded byte count as you type — if it stays grey, the input could not be decoded with the current encoding setting.
-5. Click **Open** — the decoded result appears in a viewer pane in the lower half of the same window. The dialog is non-modal so the rest of the UI remains accessible while it is open.
-
-> **Tip:** Use this to inspect a BLOB that is not a supported type for automatic chaining — for example, paste a hex dump of a custom binary format and open it as raw hex to examine its structure.
+> **Tip:** The dialog is non-modal — you can keep it open and paste new data at any time while working in the main window.
 
 ---
 
