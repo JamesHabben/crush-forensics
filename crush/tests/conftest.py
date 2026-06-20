@@ -31,6 +31,7 @@ _CATEGORY_ORDER = [
     "No Side Effects",
     "Read-only Media",
     "Known-output Verification",
+    "Completeness",
     "Reproducibility",
 ]
 
@@ -53,6 +54,11 @@ _CATEGORY_INTROS: dict[str, str] = {
         "Committed reference artifacts must parse to their exact, pre-computed values. "
         "These are fixed-point checks: if parser output changes for a known input, "
         "the test fails."
+    ),
+    "Completeness": (
+        "Every plausible interpretation of a value must always be produced — silently "
+        "omitting a valid interpretation means potentially missing forensic evidence. "
+        "These tests verify that no interpretation group is ever dropped."
     ),
     "Reproducibility": (
         "Parsing the same artifact twice must produce identical results. "

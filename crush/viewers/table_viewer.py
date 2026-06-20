@@ -27,11 +27,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
-    QContextMenuEvent,
     QFont,
     QKeyEvent,
     QKeySequence,
-    QPixmap,
     QStandardItem,
     QStandardItemModel,
     QSyntaxHighlighter,
@@ -44,7 +42,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -52,22 +49,13 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QPlainTextEdit,
-    QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QTableView,
     QVBoxLayout,
     QWidget,
 )
 
-from crush.core.formatters import (
-    bytes_to_hexview,
-    pretty_object,
-    try_base64_text,
-    try_plist_text,
-    try_xml_text,
-)
 from crush.core.sqlite_wal import (
     build_page_table_map,
     parse_table_leaf_page,
@@ -79,6 +67,7 @@ from crush.core.work_priority import (
     foreground_io,
     release_foreground_io,
 )
+from crush.viewers.blob_inspector import BlobInspector
 
 
 _MAX_COL_WIDTH = 400
@@ -1637,7 +1626,9 @@ class TableViewer(QWidget):
         open_tab = menu.addAction("Open as new tab")
         blob_bytes = _coerce_blob(blob)
         display_val = self._table_view.model().data(index, Qt.ItemDataRole.DisplayRole)
-        has_display = display_val is not None and str(display_val) != ""
+        display_str = str(display_val) if display_val is not None else ""
+        has_display = bool(display_str)
+        is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
         if blob_bytes is None and not has_display:
             open_tab.setEnabled(False)
             blob_preview.setEnabled(False)
@@ -1662,8 +1653,6 @@ class TableViewer(QWidget):
             rows = sorted({i.row() for i in self._table_view.selectedIndexes()})
             self._copy_rows(rows)
         elif action == blob_preview:
-            display_str = str(display_val) if display_val is not None else ""
-            is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
             decoded = display_str if (blob_bytes is not None and not is_blob_placeholder and display_str) else None
             if blob_bytes is not None:
                 self._preview_blob(blob_bytes, display_text=decoded)
@@ -1915,326 +1904,6 @@ class _NumericSortProxy(QSortFilterProxyModel):
         except (ValueError, TypeError):
             pass
         return super().lessThan(left, right)
-
-
-# Column layout produced by bytes_to_hexview (e.g. "0000000a: 48 65 6c 6c 6f  Hello"):
-# cols  0-7   offset (8 hex digits)
-# col   8     ':'
-# col   9     space
-# cols 10-56  hex section (16 bytes × 3 − 1 = 47 chars, space-padded)
-# cols 57-58  two spaces
-# cols 59+    ASCII (up to 16 printable chars)
-_BLOB_HEX_START = 10
-_BLOB_HEX_END = 57
-_BLOB_ASCII_START = 59
-
-
-class _BlobViewerEdit(QPlainTextEdit):
-    """QPlainTextEdit with a hex-aware context menu for the BLOB inspector."""
-
-    def __init__(self, inspector: "BlobInspector") -> None:
-        super().__init__()
-        self._inspector = inspector
-
-    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        menu = self.createStandardContextMenu()
-        cursor = self.textCursor()
-        if cursor.hasSelection() and self._inspector._is_hex_mode():
-            menu.addSeparator()
-            menu.addAction("Copy Selected Hex").triggered.connect(
-                self._inspector._copy_selected_hex
-            )
-            menu.addAction("Copy Selected ASCII").triggered.connect(
-                self._inspector._copy_selected_ascii
-            )
-        menu.addSeparator()
-        menu.addAction("Copy All").triggered.connect(self._inspector._copy_all)
-        menu.exec(event.globalPos())
-
-
-class BlobInspector(QDialog):
-    def __init__(
-        self,
-        blob: bytes,
-        parent: QWidget | None = None,
-        *,
-        display_text: str | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self._blob = blob
-        self._display_text = display_text
-        self._build_ui()
-        self._apply_view()
-
-    def _build_ui(self) -> None:
-        self.setWindowTitle(f"BLOB Inspector ({len(self._blob):,} B)")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        top = QWidget()
-        top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(6)
-
-        top_layout.addWidget(QLabel("Open as:"))
-        self._format = QComboBox()
-        base_formats = [
-            "Auto",
-            "Hex",
-            "UTF-8 text",
-            "Latin-1 text",
-            "Base64 (decode)",
-            "JSON",
-            "Plist / bplist",
-            "XML",
-            "Protobuf (schema-less)",
-            "Android Binary XML (ABX)",
-            "Image (PNG / JPEG / GIF)",
-        ]
-        if self._display_text is not None:
-            self._format.addItems(["Decoded (from table)"] + base_formats)
-        else:
-            self._format.addItems(base_formats)
-        self._format.currentIndexChanged.connect(self._apply_view)
-        top_layout.addWidget(self._format)
-
-        self._copy_btn = QPushButton("Copy")
-        self._copy_btn.clicked.connect(self._copy_current)
-        top_layout.addWidget(self._copy_btn)
-        top_layout.addStretch()
-        layout.addWidget(top)
-
-        # Stack: page 0 = text, page 1 = image
-        self._stack = QStackedWidget()
-
-        self._viewer = _BlobViewerEdit(self)
-        self._viewer.setReadOnly(True)
-        self._viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self._stack.addWidget(self._viewer)
-
-        self._img_scroll = QScrollArea()
-        self._img_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._img_scroll.setWidgetResizable(False)
-        self._img_label = QLabel()
-        self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._img_scroll.setWidget(self._img_label)
-        self._stack.addWidget(self._img_scroll)
-
-        layout.addWidget(self._stack, stretch=1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _apply_view(self) -> None:
-        fmt = self._format.currentText()
-
-        if fmt == "Decoded (from table)":
-            self._stack.setCurrentIndex(0)
-            self._copy_btn.setEnabled(True)
-            self._viewer.setPlainText(self._display_text or "")
-            return
-
-        if fmt == "Image (PNG / JPEG / GIF)":
-            self._show_image(self._blob)
-            return
-
-        if fmt == "Auto" and _is_image(self._blob):
-            self._show_image(self._blob)
-            return
-
-        # All other formats — switch to text page
-        self._stack.setCurrentIndex(0)
-        self._copy_btn.setEnabled(True)
-
-        content = ""
-        if fmt == "Auto":
-            content = (
-                self._try_plist()
-                or self._try_xml()
-                or self._try_json()
-                or self._try_utf8()
-                or self._try_latin1()
-                or self._hex()
-            )
-        elif fmt == "Hex":
-            content = self._hex()
-        elif fmt == "UTF-8 text":
-            content = self._try_utf8() or "[decode error]"
-        elif fmt == "Latin-1 text":
-            content = self._try_latin1() or "[decode error]"
-        elif fmt == "Base64 (decode)":
-            content = self._try_base64() or "[decode error]"
-        elif fmt == "JSON":
-            content = self._try_json() or "[parse error]"
-        elif fmt == "Plist / bplist":
-            content = self._try_plist() or "[parse error]"
-        elif fmt == "XML":
-            content = self._try_xml() or "[parse error]"
-        elif fmt == "Protobuf (schema-less)":
-            content = self._try_protobuf() or "[parse error]"
-        elif fmt == "Android Binary XML (ABX)":
-            content = self._try_abx() or "[parse error]"
-        self._viewer.setPlainText(content[:500_000])
-
-    def _show_image(self, data: bytes) -> None:
-        from PySide6.QtCore import QByteArray
-        px = QPixmap()
-        if px.loadFromData(QByteArray(data)):
-            self._img_label.setPixmap(px)
-            self._img_label.resize(px.size())
-            self._stack.setCurrentIndex(1)
-            self._copy_btn.setEnabled(False)
-        else:
-            self._stack.setCurrentIndex(0)
-            self._copy_btn.setEnabled(True)
-            self._viewer.setPlainText("[not a recognised image format]")
-
-    def _is_hex_mode(self) -> bool:
-        fmt = self._format.currentText()
-        return fmt in ("Hex", "Auto")
-
-    def _copy_current(self) -> None:
-        QApplication.clipboard().setText(self._viewer.toPlainText())
-
-    def _copy_all(self) -> None:
-        QApplication.clipboard().setText(self._viewer.toPlainText())
-
-    def _copy_selected_hex(self) -> None:
-        cursor = self._viewer.textCursor()
-        if not cursor.hasSelection():
-            return
-        text = cursor.selectedText()
-        tokens: list[str] = []
-        for line in text.split("\u2029"):
-            hex_section = line[_BLOB_HEX_START:_BLOB_HEX_END]
-            for part in hex_section.split():
-                if len(part) == 2 and all(c in "0123456789ABCDEFabcdef" for c in part):
-                    tokens.append(part.upper())
-        QApplication.clipboard().setText(" ".join(tokens))
-
-    def _copy_selected_ascii(self) -> None:
-        cursor = self._viewer.textCursor()
-        if not cursor.hasSelection():
-            return
-        text = cursor.selectedText()
-        parts: list[str] = []
-        for line in text.split("\u2029"):
-            if len(line) > _BLOB_ASCII_START:
-                parts.append(line[_BLOB_ASCII_START:])
-        QApplication.clipboard().setText("".join(parts))
-
-    def _hex(self) -> str:
-        return _bytes_to_hexview(self._blob, max_bytes=200_000)
-
-    def _try_utf8(self) -> str:
-        try:
-            return self._blob.decode("utf-8")
-        except Exception:
-            return ""
-
-    def _try_latin1(self) -> str:
-        try:
-            return self._blob.decode("latin-1")
-        except Exception:
-            return ""
-
-    def _try_base64(self) -> str:
-        return try_base64_text(self._blob) or ""
-
-    def _try_json(self) -> str:
-        import json
-        try:
-            text = self._blob.decode("utf-8")
-        except Exception:
-            return ""
-        unescaped = text.replace('\\"', '"')
-        for candidate in (text, unescaped):
-            try:
-                return json.dumps(json.loads(candidate), indent=2, ensure_ascii=False)
-            except Exception:
-                pass
-        # Truncated / partial JSON — show unescaped text with a warning header
-        candidate = unescaped if '\\"' in text else text
-        if candidate.lstrip().startswith(("{", "[")):
-            return "[partial / truncated JSON — pretty-print not possible]\n\n" + candidate
-        return ""
-
-    def _try_plist(self) -> str:
-        return try_plist_text(self._blob) or ""
-
-    def _try_xml(self) -> str:
-        return try_xml_text(self._blob) or ""
-
-    def _try_protobuf(self) -> str:
-        try:
-            from crush.parsers.protobuf_parser import _decode_message
-            decoded, warning, _text = _decode_message(self._blob)
-            result = _render_protobuf(decoded.get("entries", []))
-            if warning:
-                result = f"# Warning: {warning}\n\n{result}"
-            return result
-        except Exception:
-            return ""
-
-    def _try_abx(self) -> str:
-        try:
-            from crush.parsers.abx_decoder import decode_abx
-            return decode_abx(self._blob).xml
-        except Exception:
-            return ""
-
-
-def _is_image(data: bytes) -> bool:
-    return (
-        data[:8] == b"\x89PNG\r\n\x1a\n"       # PNG
-        or data[:3] == b"\xff\xd8\xff"          # JPEG
-        or data[:6] in (b"GIF87a", b"GIF89a")   # GIF
-    )
-
-
-_INTERP_SKIP = {"uint64", "uint32"}  # already shown as the primary value
-
-
-def _render_protobuf(entries: list, indent: int = 0) -> str:
-    """Render protobuf wire-decoded entries as protoc --decode_raw style text."""
-    lines: list[str] = []
-    pad = "  " * indent
-    ipad = pad + "    "  # indent for interpretation hints
-    for entry in entries:
-        field = entry.get("field", "?")
-        wt = entry.get("wire_type", "?")
-        val = entry.get("value")
-        interpretations = [i for i in entry.get("interpretations", []) if i.label not in _INTERP_SKIP]
-
-        if isinstance(val, dict):
-            vtype = val.get("type")
-            if vtype == "message":
-                lines.append(f"{pad}{field} {{")
-                lines.append(_render_protobuf(val.get("entries", []), indent + 1))
-                lines.append(f"{pad}}}")
-            elif vtype == "string":
-                lines.append(f'{pad}{field}: "{val.get("text", "")}"')
-            else:  # bytes preview
-                lines.append(f"{pad}{field}: <{val.get('hex_preview', '')}>")
-        elif isinstance(val, bytes):
-            lines.append(f"{pad}{field}: {val[:32].hex()}" + ("…" if len(val) > 32 else ""))
-        else:
-            lines.append(f"{pad}{field} [{wt}]: {val}")
-
-        for interp in interpretations:
-            lines.append(f"{ipad}# {interp.label}: {interp.value}")
-    return "\n".join(lines)
-
-
-def _pretty(obj: object) -> str:
-    return pretty_object(obj)
-
-
-def _bytes_to_hexview(b: bytes, width: int = 16, max_bytes: int = 200_000) -> str:
-    return bytes_to_hexview(b, width=width, max_bytes=max_bytes)
 
 
 def _coerce_blob(value: object) -> bytes | None:

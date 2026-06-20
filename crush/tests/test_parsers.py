@@ -602,34 +602,34 @@ def test_leveldb_parse_record_has_offset(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_is_image_png() -> None:
-    from crush.viewers.table_viewer import _is_image
+    from crush.viewers.blob_inspector import _is_image
     assert _is_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
 
 def test_is_image_jpeg() -> None:
-    from crush.viewers.table_viewer import _is_image
+    from crush.viewers.blob_inspector import _is_image
     assert _is_image(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
 
 
 def test_is_image_gif87() -> None:
-    from crush.viewers.table_viewer import _is_image
+    from crush.viewers.blob_inspector import _is_image
     assert _is_image(b"GIF87a" + b"\x00" * 100)
 
 
 def test_is_image_gif89() -> None:
-    from crush.viewers.table_viewer import _is_image
+    from crush.viewers.blob_inspector import _is_image
     assert _is_image(b"GIF89a" + b"\x00" * 100)
 
 
 def test_is_image_negative() -> None:
-    from crush.viewers.table_viewer import _is_image
+    from crush.viewers.blob_inspector import _is_image
     assert not _is_image(b"SQLite format 3\x00" + b"\x00" * 100)
     assert not _is_image(b"")
     assert not _is_image(b"\x00\x01\x02\x03")
 
 
 def test_render_protobuf_simple() -> None:
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {"field": 1, "wire_type": "varint", "value": 42},
         {"field": 2, "wire_type": "varint", "value": 0},
@@ -642,7 +642,7 @@ def test_render_protobuf_simple() -> None:
 def test_render_protobuf_nested() -> None:
     # wire_type is "length-delimited" (as _decode_message produces);
     # value shape is {"type": "message", "entries": [...]}
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {"field": 1, "wire_type": "length-delimited", "value": {
             "type": "message",
@@ -656,7 +656,7 @@ def test_render_protobuf_nested() -> None:
 
 
 def test_render_protobuf_string_value() -> None:
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {"field": 5, "wire_type": "length-delimited", "value": {"type": "string", "text": "hello"}},
     ]
@@ -665,7 +665,7 @@ def test_render_protobuf_string_value() -> None:
 
 
 def test_render_protobuf_bytes_dict_value() -> None:
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {"field": 3, "wire_type": "length-delimited", "value": {
             "type": "bytes", "length": 4, "hex_preview": "de ad be ef",
@@ -677,7 +677,7 @@ def test_render_protobuf_bytes_dict_value() -> None:
 
 
 def test_render_protobuf_bytes_value() -> None:
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [{"field": 2, "wire_type": "bytes", "value": bytes(range(40))}]
     result = _render_protobuf(entries)
     assert "2:" in result           # field number present
@@ -688,7 +688,7 @@ def test_render_protobuf_bytes_value() -> None:
 def test_render_protobuf_integration_nested() -> None:
     """End-to-end: real wire bytes with a nested message render as a block, not a raw dict."""
     from crush.parsers.protobuf_parser import _decode_message
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
 
     # inner: field 1, varint 7  →  b'\x08\x07'
     inner = b"\x08\x07"
@@ -710,7 +710,7 @@ def test_render_protobuf_integration_nested() -> None:
 def test_render_protobuf_shows_interpretations() -> None:
     """Interpretation hints appear as '# label: value' lines below the field."""
     from crush.parsers.proto_interp import Interpretation
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {
             "field": 1,
@@ -734,7 +734,7 @@ def test_render_protobuf_shows_interpretations() -> None:
 def test_render_protobuf_suppresses_uint32() -> None:
     """uint32 is also suppressed as it equals the primary fixed32 value."""
     from crush.parsers.proto_interp import Interpretation
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
     entries = [
         {
             "field": 2,
@@ -757,7 +757,7 @@ def test_render_protobuf_integration_with_interpretations() -> None:
     """End-to-end: _decode_message produces interpretations shown in text output."""
     import struct
     from crush.parsers.protobuf_parser import _decode_message
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
 
     # field 1: fixed64 containing a Cocoa timestamp (694656000.0 = 2023-01-07 UTC)
     raw = b"\x09" + struct.pack("<d", 694_656_000.0)
@@ -772,7 +772,7 @@ def test_render_protobuf_integration_with_interpretations() -> None:
 def test_try_protobuf_surfaces_warning() -> None:
     """Truncated protobuf shows a Warning header in BlobInspector output."""
     from crush.parsers.protobuf_parser import _decode_message
-    from crush.viewers.table_viewer import _render_protobuf
+    from crush.viewers.blob_inspector import _render_protobuf
 
     # field 1, wire_type 1 (64-bit) with only 4 bytes — truncated
     truncated = b"\x09\x00\x01\x02\x03"
@@ -1142,3 +1142,97 @@ def test_decode_message_warns_on_unexpected_end_group() -> None:
     raw = bytes([0x0C])
     decoded, warning, _ = _decode_message(raw)
     assert "end-group" in warning.lower() or "Unexpected" in warning
+
+
+# ---------------------------------------------------------------------------
+# blob_inspector — intermediate decode functions and registry
+# ---------------------------------------------------------------------------
+
+def test_decode_base64_valid() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _decode_base64
+    payload = b"hello world"
+    assert _decode_base64(base64.b64encode(payload)) == payload
+
+
+def test_decode_base64_invalid() -> None:
+    from crush.viewers.blob_inspector import _decode_base64
+    assert _decode_base64(b"!!!not-base64!!!") is None
+
+
+def test_decode_hex_valid() -> None:
+    from crush.viewers.blob_inspector import _decode_hex
+    assert _decode_hex(b"deadbeef") == bytes.fromhex("deadbeef")
+
+
+def test_decode_hex_with_spaces() -> None:
+    from crush.viewers.blob_inspector import _decode_hex
+    assert _decode_hex(b"de ad be ef") == bytes.fromhex("deadbeef")
+
+
+def test_decode_hex_with_colons() -> None:
+    from crush.viewers.blob_inspector import _decode_hex
+    assert _decode_hex(b"de:ad:be:ef") == bytes.fromhex("deadbeef")
+
+
+def test_decode_hex_invalid() -> None:
+    from crush.viewers.blob_inspector import _decode_hex
+    assert _decode_hex(b"zzzz") is None
+
+
+def test_intermediate_registry_dispatches() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    payload = b"hello"
+    assert _INTERMEDIATE["Base64 (decode)"](base64.b64encode(payload)) == payload
+    assert _INTERMEDIATE["Hex → Bytes"](b"deadbeef") == bytes.fromhex("deadbeef")
+
+
+def test_intermediate_registry_unknown_returns_none() -> None:
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    assert _INTERMEDIATE.get("UTF-8 text") is None
+
+
+def test_decode_base64url_valid() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _decode_base64url
+    payload = b"\xfb\xfc\xfd"
+    assert _decode_base64url(base64.urlsafe_b64encode(payload)) == payload
+
+
+def test_decode_base64url_url_chars_accepted() -> None:
+    """URL-safe alphabet (-_) must round-trip correctly."""
+    from crush.viewers.blob_inspector import _decode_base64url
+    # b"\xfb\xfc\xfd" encodes to "-_z9" in URL-safe b64 (contains - and _)
+    import base64
+    payload = b"\xfb\xfc\xfd"
+    url_encoded = base64.urlsafe_b64encode(payload)
+    assert _decode_base64url(url_encoded) == payload
+
+
+def test_decode_base64url_no_padding_needed() -> None:
+    """urlsafe_b64decode adds padding automatically — partial input must still decode."""
+    import base64
+    from crush.viewers.blob_inspector import _decode_base64url
+    payload = b"hello"
+    # strip trailing padding; function must restore it
+    stripped = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    assert _decode_base64url(stripped) == payload
+
+
+def test_decode_lzfse_invalid_returns_none() -> None:
+    from crush.viewers.blob_inspector import _decode_lzfse
+    assert _decode_lzfse(b"not lzfse data at all") is None
+
+
+def test_intermediate_registry_has_new_steps() -> None:
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    assert "Base64url (decode)" in _INTERMEDIATE
+    assert "lzfse decompress" in _INTERMEDIATE
+
+
+def test_intermediate_registry_base64url_dispatches() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    payload = b"hello \xfb\xfc"
+    assert _INTERMEDIATE["Base64url (decode)"](base64.urlsafe_b64encode(payload)) == payload

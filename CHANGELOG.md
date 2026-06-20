@@ -6,6 +6,7 @@ All notable changes to Crush will be documented in this file.
 
 ### New Features
 
+- **Value Inspector** — *Tools → Value Inspector…* opens a persistent non-modal window that shows all plausible interpretations of any text value. On Linux/X11 the window auto-updates whenever text is selected anywhere within Crush (via X11 PRIMARY clipboard); on other platforms enter or paste a value manually. Interpretation groups: *Integer* (decimal, hex, signed/unsigned 32 & 64-bit, big-endian and little-endian variants for hex-byte input), *Float* (64-bit double, Float32 and Double reinterpret as BE and LE), *Timestamp* (Unix s/ms/µs, Cocoa/Apple, Chrome/WebKit, Windows FILETIME, HFS+), *UUID*, *Network* (IPv4 BE/LE, MAC address), *Text* (ASCII and UTF-8 rendering of hex bytes). All cells show a tooltip with the full text on hover.
 - **'Merica theme** — a deliberately over-the-top red-white-blue U-S-A intro settles into a calmer hold-and-fade patriotic palette, with a status-bar button to replay the show. The intro uses an accessibility-conscious cadence below three colour changes per second.
 - **Open in New Window** — right-clicking any file in a folder source now shows *Open in New Window*; the file is loaded into a fresh Crush window without affecting the current session. Addresses [#15](https://github.com/kalink0/crush-forensics/issues/15).
 - **Multiple windows** — *File → New Window* (Ctrl+N) opens an additional Crush window; *File → Close Window* (Ctrl+W) closes the current window without exiting the application. The window title shows the loaded source name to help distinguish windows. ([@JamesHabben](https://github.com/JamesHabben), [#17](https://github.com/kalink0/crush-forensics/pull/17))
@@ -14,6 +15,8 @@ All notable changes to Crush will be documented in this file.
 
 ### Improvements
 
+- **BLOB Inspector — extended decode pipeline** — three new byte→byte transform steps: *Base64url (decode)* (URL-safe alphabet, padding added automatically), *lzfse decompress* (Apple LZFSE; new dependency `lzfse>=0.4.2`), and the panel layout is now a reusable `_BlobPanel` widget shared with Paste & Decode. The auto-selection logic restores the previous format only when it still produces output after a pipeline change.
+- **Paste & Decode — redesigned as BLOB Inspector entry point** — the *Tools → Paste & Decode…* dialog now embeds the full BLOB Inspector panel directly below the input field. Paste hex, base64, or text; the panel updates live as you type. All decode steps and interpretations available in the BLOB Inspector are automatically available here too.
 - **Unified Open dialog** — *File → Open ZIP archive…* and *File → Open TAR archive…* are replaced by a single *File → Open file…* entry; Crush detects the format automatically from file content.
 - **SQLite query improvements** - Improvements for SQlite queries (performance) and UI responsiveness ([@JamesHabben](https://github.com/JamesHabben), [#22](https://github.com/kalink0/crush-forensics/pull/22))
 

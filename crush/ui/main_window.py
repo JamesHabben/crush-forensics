@@ -624,6 +624,7 @@ class MainWindow(QMainWindow):
 
         tools_menu = menu.addMenu("Tools")
         tools_menu.addAction("Paste & Decode…", self._paste_decode)
+        tools_menu.addAction("Value Inspector…", self._open_value_inspector)
         tools_menu.addSeparator()
         tools_menu.addAction("Export log…", self._export_log)
         tools_menu.addSeparator()
@@ -1109,6 +1110,10 @@ class MainWindow(QMainWindow):
     def _paste_decode(self) -> None:
         from crush.ui.paste_decode_dialog import PasteDecodeDialog
         PasteDecodeDialog(self).show()
+
+    def _open_value_inspector(self) -> None:
+        from crush.viewers.value_inspector import ValueInspector
+        ValueInspector.inspect("", self)
 
     def _open_bytes_with_format(self, data: bytes, filename_hint: str, parser_display_name: object) -> None:
         """Open *data* in the appropriate viewer, honouring an explicit format choice."""
