@@ -1191,3 +1191,48 @@ def test_intermediate_registry_dispatches() -> None:
 def test_intermediate_registry_unknown_returns_none() -> None:
     from crush.viewers.blob_inspector import _INTERMEDIATE
     assert _INTERMEDIATE.get("UTF-8 text") is None
+
+
+def test_decode_base64url_valid() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _decode_base64url
+    payload = b"\xfb\xfc\xfd"
+    assert _decode_base64url(base64.urlsafe_b64encode(payload)) == payload
+
+
+def test_decode_base64url_url_chars_accepted() -> None:
+    """URL-safe alphabet (-_) must round-trip correctly."""
+    from crush.viewers.blob_inspector import _decode_base64url
+    # b"\xfb\xfc\xfd" encodes to "-_z9" in URL-safe b64 (contains - and _)
+    import base64
+    payload = b"\xfb\xfc\xfd"
+    url_encoded = base64.urlsafe_b64encode(payload)
+    assert _decode_base64url(url_encoded) == payload
+
+
+def test_decode_base64url_no_padding_needed() -> None:
+    """urlsafe_b64decode adds padding automatically — partial input must still decode."""
+    import base64
+    from crush.viewers.blob_inspector import _decode_base64url
+    payload = b"hello"
+    # strip trailing padding; function must restore it
+    stripped = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    assert _decode_base64url(stripped) == payload
+
+
+def test_decode_lzfse_invalid_returns_none() -> None:
+    from crush.viewers.blob_inspector import _decode_lzfse
+    assert _decode_lzfse(b"not lzfse data at all") is None
+
+
+def test_intermediate_registry_has_new_steps() -> None:
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    assert "Base64url (decode)" in _INTERMEDIATE
+    assert "lzfse decompress" in _INTERMEDIATE
+
+
+def test_intermediate_registry_base64url_dispatches() -> None:
+    import base64
+    from crush.viewers.blob_inspector import _INTERMEDIATE
+    payload = b"hello \xfb\xfc"
+    assert _INTERMEDIATE["Base64url (decode)"](base64.urlsafe_b64encode(payload)) == payload

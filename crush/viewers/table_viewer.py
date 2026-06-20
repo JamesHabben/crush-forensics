@@ -1626,7 +1626,9 @@ class TableViewer(QWidget):
         open_tab = menu.addAction("Open as new tab")
         blob_bytes = _coerce_blob(blob)
         display_val = self._table_view.model().data(index, Qt.ItemDataRole.DisplayRole)
-        has_display = display_val is not None and str(display_val) != ""
+        display_str = str(display_val) if display_val is not None else ""
+        has_display = bool(display_str)
+        is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
         if blob_bytes is None and not has_display:
             open_tab.setEnabled(False)
             blob_preview.setEnabled(False)
@@ -1651,8 +1653,6 @@ class TableViewer(QWidget):
             rows = sorted({i.row() for i in self._table_view.selectedIndexes()})
             self._copy_rows(rows)
         elif action == blob_preview:
-            display_str = str(display_val) if display_val is not None else ""
-            is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
             decoded = display_str if (blob_bytes is not None and not is_blob_placeholder and display_str) else None
             if blob_bytes is not None:
                 self._preview_blob(blob_bytes, display_text=decoded)

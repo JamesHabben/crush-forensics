@@ -753,6 +753,18 @@ def test_segb_parser_works_on_readonly_media(tmp_path: Path) -> None:
 
 
 @pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="minimal.segb2 must parse to at least one record with a non-empty payload",
+)
+def test_segb_fixture_known_output(segb_fixture: Path) -> None:
+    vfs = DirectoryVFS(segb_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == segb_fixture.name)
+    result = SegbParser().parse(node, vfs)
+    assert result.viewer_type == "table"
+    assert len(result.data["SEGB"]["rows"]) > 0
+
+
+@pytest.mark.forensic(
     category="Reproducibility",
     desc="Parsing the same SEGB file twice must produce structurally identical results",
 )
@@ -768,3 +780,189 @@ def test_segb_parse_is_reproducible(segb_fixture: Path) -> None:
     assert r1.metadata == r2.metadata
     assert r1.data["SEGB"]["columns"] == r2.data["SEGB"]["columns"]
     assert len(r1.data["SEGB"]["rows"]) == len(r2.data["SEGB"]["rows"])
+
+
+# ---------------------------------------------------------------------------
+# Blob Inspector decode pipeline — forensic tests
+# ---------------------------------------------------------------------------
+
+_BLOB_DB = FIXTURES_DIR / "blob_samples.db"
+
+
+def _blob_row(label: str) -> bytes:
+    import sqlite3
+    conn = sqlite3.connect(str(_BLOB_DB))
+    row = conn.execute("SELECT data FROM blobs WHERE label = ?", (label,)).fetchone()
+    conn.close()
+    assert row is not None, f"Fixture row '{label}' not found in blob_samples.db"
+    return row[0]
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="Reading blob_samples.db must leave the fixture file byte-identical",
+)
+def test_blob_samples_db_not_modified() -> None:
+    digest_before = _sha256_file(_BLOB_DB)
+    _blob_row("json_raw")  # trigger a read
+    assert _sha256_file(_BLOB_DB) == digest_before
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="blob_samples.db 'b64url_json': Base64url decode must yield JSON starting with {\"sub\"",
+)
+def test_blob_b64url_json_known_output() -> None:
+    from crush.viewers.blob_inspector import _decode_base64url
+    decoded = _decode_base64url(_blob_row("b64url_json"))
+    assert decoded is not None and decoded.lstrip().startswith(b'{"sub"')
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="blob_samples.db 'b64url_plist': Base64url decode must yield an XML plist",
+)
+def test_blob_b64url_plist_known_output() -> None:
+    from crush.viewers.blob_inspector import _decode_base64url
+    decoded = _decode_base64url(_blob_row("b64url_plist"))
+    assert decoded is not None and b"<?xml" in decoded and b"<plist" in decoded
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="blob_samples.db 'lzfse_json': lzfse decompress must yield JSON with 'bundleId'",
+)
+def test_blob_lzfse_json_known_output() -> None:
+    from crush.viewers.blob_inspector import _decode_lzfse
+    decoded = _decode_lzfse(_blob_row("lzfse_json"))
+    assert decoded is not None and b'"bundleId"' in decoded
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="blob_samples.db 'b64url_lzfse_json': two-step Base64url→lzfse pipeline must yield JSON",
+)
+def test_blob_b64url_lzfse_pipeline_known_output() -> None:
+    from crush.viewers.blob_inspector import _decode_base64url, _decode_lzfse
+    step1 = _decode_base64url(_blob_row("b64url_lzfse_json"))
+    assert step1 is not None, "Base64url step produced None"
+    step2 = _decode_lzfse(step1)
+    assert step2 is not None and b'"bundleId"' in step2
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Blob Inspector decode functions must produce byte-identical output on repeated calls",
+)
+def test_blob_decode_functions_are_reproducible() -> None:
+    import base64
+    import lzfse
+    import zlib
+    from crush.viewers.blob_inspector import (
+        _decode_base64,
+        _decode_base64url,
+        _decode_hex,
+        _decode_lzfse,
+        _decode_zlib,
+    )
+    payload = b'{"event": "login", "ts": 1718000000}'
+    cases = [
+        (_decode_base64,    base64.b64encode(payload)),
+        (_decode_base64url, base64.urlsafe_b64encode(payload)),
+        (_decode_hex,       payload.hex().encode()),
+        (_decode_zlib,      zlib.compress(payload)),
+        (_decode_lzfse,     lzfse.compress(payload)),
+    ]
+    for fn, encoded in cases:
+        assert fn(encoded) == fn(encoded), f"{fn.__name__} is not reproducible"
+
+
+# ---------------------------------------------------------------------------
+# Value Inspector — forensic tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="Unix timestamp 1718000000 must always decode to 2024-06-10 06:13:20 UTC",
+)
+def test_value_inspector_unix_timestamp_known_output() -> None:
+    from crush.viewers.value_inspector import _interpret
+    rows = _interpret("1718000000")
+    row = next((r for r in rows if r.group == "Timestamp" and r.label == "Unix (s)"), None)
+    assert row is not None and row.value == "2024-06-10 06:13:20 UTC"
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="Cocoa timestamp 760000000 must always decode to a date in 2025",
+)
+def test_value_inspector_cocoa_timestamp_known_output() -> None:
+    from crush.viewers.value_inspector import _interpret
+    rows = _interpret("760000000")
+    row = next((r for r in rows if r.group == "Timestamp" and r.label == "Cocoa / Apple (s)"), None)
+    assert row is not None and row.value is not None and "2025" in row.value
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="Hex bytes 'c0 a8 01 01' must always decode to IPv4 192.168.1.1 (big-endian)",
+)
+def test_value_inspector_ipv4_known_output() -> None:
+    from crush.viewers.value_inspector import _interpret
+    rows = _interpret("c0 a8 01 01")
+    row = next((r for r in rows if r.group == "Network" and r.label == "IPv4 (big-endian)"), None)
+    assert row is not None and row.value == "192.168.1.1"
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="Hex bytes 'f7 f8 f9 fa fb fc' must always decode to MAC f7:f8:f9:fa:fb:fc",
+)
+def test_value_inspector_mac_known_output() -> None:
+    from crush.viewers.value_inspector import _interpret
+    rows = _interpret("f7 f8 f9 fa fb fc")
+    row = next((r for r in rows if r.group == "Network" and r.label == "MAC address"), None)
+    assert row is not None and row.value == "f7:f8:f9:fa:fb:fc"
+
+
+@pytest.mark.forensic(
+    category="Completeness",
+    desc="Value Inspector must never silently drop any interpretation group for a multi-type value",
+)
+def test_value_inspector_no_silent_group_omission() -> None:
+    from crush.viewers.value_inspector import _interpret
+    # 3232235777 = 0xC0A80101: triggers Integer, Float, Timestamp, UUID, Network
+    rows = _interpret("3232235777")
+    groups = {r.group for r in rows}
+    for required in ("Integer", "Float", "Timestamp", "UUID", "Network"):
+        assert required in groups, f"Interpretation group '{required}' silently omitted — missed evidence"
+
+
+@pytest.mark.forensic(
+    category="Completeness",
+    desc="Value Inspector must always show both big-endian and little-endian integer for hex-byte input",
+)
+def test_value_inspector_both_endians_present() -> None:
+    from crush.viewers.value_inspector import _interpret
+    rows = _interpret("c0 a8 01 01")
+    labels = {r.label for r in rows if r.group == "Integer"}
+    assert "Decimal" in labels,    "BE decimal missing"
+    assert "Decimal (LE)" in labels, "LE decimal missing — missed evidence for little-endian values"
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Value Inspector must produce identical ordered output on repeated calls for the same input",
+)
+def test_value_inspector_is_reproducible() -> None:
+    from crush.viewers.value_inspector import _interpret
+    for value in (
+        "1718000000",
+        "c0 a8 01 01",
+        "3.14159",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "f7 f8 f9 fa fb fc",
+    ):
+        r1 = [(r.group, r.label, r.value) for r in _interpret(value)]
+        r2 = [(r.group, r.label, r.value) for r in _interpret(value)]
+        assert r1 == r2, f"_interpret not reproducible for {value!r}"
