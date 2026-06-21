@@ -30,6 +30,11 @@ github.com/kalink0/crush-forensics</a></p>
 """
 
 _ACK_BODY = """\
+<h3>Contributors</h3>
+<p>Crush is built on the shoulders of the open-source and DFIR community.
+A huge thank you to everyone who contributed code, ideas, or feedback —
+your support makes this project possible.</p>
+
 <h3>Bundled third-party code</h3>
 <table>
   <tr>
@@ -42,7 +47,7 @@ _ACK_BODY = """\
     <td><b>ccl_segb</b></td>
     <td>SEGB (Significant Energy Bearer) parser</td>
     <td class="lic">MIT</td>
-    <td><a href="https://github.com/cclgroupltd/ccl_segb">CCL Forensics</a></td>
+    <td><a href="https://github.com/cclgroupltd/ccl-segb">CCL Forensics</a></td>
   </tr>
   <tr>
     <td><b>ccl_leveldb</b></td>
@@ -122,8 +127,8 @@ _ACK_BODY = """\
 """
 
 
-def _ack_html(browser: QTextBrowser) -> str:
-    """Build acknowledgements HTML with colors drawn from the widget palette."""
+def _styled_html(browser: QTextBrowser, body: str) -> str:
+    """Wrap *body* in a palette-aware stylesheet."""
     pal = browser.palette()
     text = pal.color(QPalette.ColorRole.Text).name()
     muted = pal.color(QPalette.ColorRole.PlaceholderText).name()
@@ -136,8 +141,14 @@ def _ack_html(browser: QTextBrowser) -> str:
   td    {{ padding: 4px 8px; vertical-align: top; }}
   tr.alt td {{ background: {alt_bg}; }}
   .lic  {{ color: {muted}; font-size: 12px; }}
+  a     {{ color: {text}; }}
 </style>
-{_ACK_BODY}"""
+{body}"""
+
+
+def _ack_html(browser: QTextBrowser) -> str:
+    return _styled_html(browser, _ACK_BODY)
+
 
 
 class AboutDialog(QDialog):

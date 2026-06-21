@@ -19,9 +19,12 @@ All notable changes to Crush will be documented in this file.
 - **Paste & Decode — redesigned as BLOB Inspector entry point** — the *Tools → Paste & Decode…* dialog now embeds the full BLOB Inspector panel directly below the input field. Paste hex, base64, or text; the panel updates live as you type. All decode steps and interpretations available in the BLOB Inspector are automatically available here too.
 - **Unified Open dialog** — *File → Open ZIP archive…* and *File → Open TAR archive…* are replaced by a single *File → Open file…* entry; Crush detects the format automatically from file content.
 - **SQLite query improvements** - Improvements for SQlite queries (performance) and UI responsiveness ([@JamesHabben](https://github.com/JamesHabben), [#22](https://github.com/kalink0/crush-forensics/pull/22))
+- **About dialog — Contributors section** — the Acknowledgements tab now has a *Contributors* heading with a short thank-you to the open-source and DFIR community ahead of the third-party library list.
 
 ### Bug Fixes
 
+- **LevelDB log offset double-multiplication** — `LogFile._get_batches()` yielded `start_block_offset * LOG_BLOCK_SIZE` as the batch offset, but `start_block_offset` already included the `idx * LOG_BLOCK_SIZE` factor. The extra multiplication produced wrong byte offsets for multi-block log records. Fix ported from upstream `ccl_chromium_reader` (PR #41 by RyanDFIR).
+- **About dialog — ccl_segb link** — the link in the Acknowledgements tab pointed to `cclgroupltd/ccl_segb` (underscore); the correct repository name is `cclgroupltd/ccl-segb` (hyphen).
 - **Dangling content view and stale properties after source change** — opening a folder or archive while files were already open left the previous file's content and metadata visible. The content tabs and properties panel are now cleared whenever a source replaces the current one; closing the last source returns to the welcome screen. Closes [#16](https://github.com/kalink0/crush-forensics/issues/16). ([#20](https://github.com/kalink0/crush-forensics/pull/20))
 - **Theme switching broken with multiple windows** — each new window started its own rainbow timer; switching the theme in one window stopped only that window's timer while the others kept overwriting the application palette every 50 ms. Animated theme cleanup now stops timers in all open windows.
 - **Ctrl+Q exits the application** — previously called `close()` on the current window only; now calls `QApplication.quit()` so all open windows are closed.

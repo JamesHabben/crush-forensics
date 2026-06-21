@@ -328,7 +328,7 @@ class LogFile:
                                              f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
                         block += buff.read(length)
                         in_record = False
-                        yield start_block_offset * LogFile.LOG_BLOCK_SIZE, block
+                        yield start_block_offset, block
                     else:
                         raise ValueError()  # Cannot happen
 
@@ -524,7 +524,7 @@ class ManifestFile:
                                              f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
                         block += buff.read(length)
                         in_record = False
-                        yield start_block_offset * LogFile.LOG_BLOCK_SIZE, block
+                        yield start_block_offset, block
                     else:
                         raise ValueError()  # Cannot happen
 
