@@ -63,20 +63,24 @@ class FormatDatabase:
     # ------------------------------------------------------------------
 
     def identify(self, peek_bytes: bytes, filename: str) -> FormatMatch | None:
-        """Return the best format match by magic bytes, or None."""
+        """Return the best format match by magic bytes, or None.
+
+        Score = sum of lengths of all patterns that match for a given format.
+        This ensures formats with multiple complementary patterns (e.g. WAV:
+        RIFF at offset 0 + WAVE at offset 8) beat formats that only match on
+        the shared prefix (e.g. AVI also starts with RIFF but 'AVI ' at
+        offset 8 would not match a WAV file).
+        """
         if self._conn is None:
             return None
 
-        # 1. Magic bytes — fetch all patterns and test in Python
-        #    (avoids SQL BLOB comparison portability issues)
-        #    Return the most specific match (longest pattern) so that e.g.
-        #    "OpusHead" at offset 28 beats the generic "OggS" at offset 0.
         cur = self._conn.execute(
-            "SELECT f.*, m.offset, m.pattern "
-            "FROM formats f JOIN magic_bytes m ON m.format_id = f.id"
+            "SELECT f.id, m.offset, m.pattern "
+            "FROM formats f JOIN magic_bytes m ON m.format_id = f.id "
+            "ORDER BY f.id"
         )
-        best_row = None
-        best_score = -1
+
+        scores: dict[int, int] = {}
         for row in cur:
             offset = row["offset"]
             if offset is None:
@@ -86,12 +90,16 @@ class FormatDatabase:
             if len(peek_bytes) >= end and peek_bytes[offset:end] == pattern:
                 if pattern == XML_PLIST_SIG and not _looks_like_plist_xml(peek_bytes):
                     continue
-                score = len(pattern)
-                if score > best_score:
-                    best_score = score
-                    best_row = row
+                scores[row["id"]] = scores.get(row["id"], 0) + len(pattern)
 
-        return self._row_to_match(best_row) if best_row is not None else None
+        if not scores:
+            return None
+
+        best_id = max(scores, key=lambda fid: scores[fid])
+        row = self._conn.execute(
+            "SELECT * FROM formats WHERE id = ?", (best_id,)
+        ).fetchone()
+        return self._row_to_match(row) if row else None
 
     def by_short_name(self, short_name: str) -> FormatMatch | None:
         """Look up format metadata by short_name (e.g. 'SEGB', 'SQLite')."""

@@ -67,7 +67,8 @@ jobs:
             libegl1 \
             libxcb-xinerama0 \
             libxkbcommon-x11-0 \
-            libmagic1
+            libmagic1 \
+            libpulse0
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'

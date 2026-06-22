@@ -147,8 +147,6 @@ jobs:
             --exclude-module PySide6.Qt3DInput \
             --exclude-module PySide6.Qt3DLogic \
             --exclude-module PySide6.Qt3DRender \
-            --exclude-module PySide6.QtMultimedia \
-            --exclude-module PySide6.QtMultimediaWidgets \
             --exclude-module PySide6.QtBluetooth \
             --exclude-module PySide6.QtNfc \
             --exclude-module PySide6.QtSensors \
@@ -161,6 +159,7 @@ jobs:
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush_icon_256.png:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu:crush/bin/unifiedlog_iterator/" \
+
             crush/__main__.py
 
       - name: Build (PyInstaller) macOS
@@ -186,8 +185,6 @@ jobs:
             --exclude-module PySide6.Qt3DInput \
             --exclude-module PySide6.Qt3DLogic \
             --exclude-module PySide6.Qt3DRender \
-            --exclude-module PySide6.QtMultimedia \
-            --exclude-module PySide6.QtMultimediaWidgets \
             --exclude-module PySide6.QtBluetooth \
             --exclude-module PySide6.QtNfc \
             --exclude-module PySide6.QtSensors \
@@ -211,7 +208,7 @@ jobs:
             for mod in \
               QtWebEngineCore QtWebEngineWidgets QtWebEngineQuick \
               Qt3DAnimation Qt3DCore Qt3DExtras Qt3DInput Qt3DLogic Qt3DRender \
-              QtMultimedia QtMultimediaWidgets QtBluetooth QtNfc QtSensors \
+              QtBluetooth QtNfc QtSensors \
               QtPositioning QtRemoteObjects QtSerialPort QtDataVisualization \
               QtCharts QtQml QtQuick QtQuick3D; do
               rm -rf "$lib/${mod}.framework"
@@ -241,8 +238,6 @@ jobs:
             --exclude-module PySide6.Qt3DInput `
             --exclude-module PySide6.Qt3DLogic `
             --exclude-module PySide6.Qt3DRender `
-            --exclude-module PySide6.QtMultimedia `
-            --exclude-module PySide6.QtMultimediaWidgets `
             --exclude-module PySide6.QtBluetooth `
             --exclude-module PySide6.QtNfc `
             --exclude-module PySide6.QtSensors `

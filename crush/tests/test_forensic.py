@@ -22,11 +22,17 @@ from pathlib import Path
 import pytest
 
 from crush.core.vfs import DirectoryVFS, TarVFS, VFSNode, ZipVFS
+from crush.parsers.media_parser import MediaParser
 from crush.parsers.plist_parser import PlistParser
 from crush.parsers.realm_parser import RealmParser
 from crush.parsers.segb_parser import SegbParser
 from crush.parsers.sqlite_parser import SQLiteParser
 from crush.tests.conftest import FIXTURES_DIR
+
+_MP3_STUB  = b"\xff\xfb" + b"\x00" * 128   # MPEG-1 Layer 3 sync word
+_OGG_STUB  = b"OggS"    + b"\x00" * 128   # OGG capture pattern
+_AMR_STUB  = b"#!AMR\n" + b"\x00" * 128   # AMR-NB magic
+_MP4_STUB  = b"\x00\x00\x00\x20ftyp" + b"\x00" * 122  # ISOBMFF ftyp box
 
 
 def _sha256_file(path: Path) -> str:
@@ -966,3 +972,229 @@ def test_value_inspector_is_reproducible() -> None:
         r1 = [(r.group, r.label, r.value) for r in _interpret(value)]
         r2 = [(r.group, r.label, r.value) for r in _interpret(value)]
         assert r1 == r2, f"_interpret not reproducible for {value!r}"
+
+
+# ---------------------------------------------------------------------------
+# MediaParser forensic tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="MediaParser read must leave source file bytes unchanged",
+)
+def test_media_parser_does_not_modify_source(tmp_path: Path) -> None:
+    src = tmp_path / "voice.mp3"
+    src.write_bytes(_MP3_STUB)
+    digest_before = _sha256_file(src)
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "voice.mp3")
+    MediaParser().parse(node, vfs)
+
+    assert _sha256_file(src) == digest_before, "MediaParser modified the source file"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="MediaParser must not change mtime or ctime of source files",
+)
+def test_media_parser_does_not_change_timestamps(tmp_path: Path) -> None:
+    src = tmp_path / "voice.mp3"
+    src.write_bytes(_MP3_STUB)
+    ts_before = _timestamps(src)
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "voice.mp3")
+    MediaParser().parse(node, vfs)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(src), "MediaParser")
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="MediaParser must not create any sibling files next to the evidence",
+)
+def test_media_parser_creates_no_sibling_files(tmp_path: Path) -> None:
+    (tmp_path / "recording.ogg").write_bytes(_OGG_STUB)
+    files_before = set(tmp_path.iterdir())
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "recording.ogg")
+    MediaParser().parse(node, vfs)
+
+    new_files = set(tmp_path.iterdir()) - files_before
+    assert new_files == set(), f"MediaParser left unexpected files next to evidence: {new_files}"
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="MediaParser OGG/AMR path (PyAV decode attempt) must not create files next to evidence",
+)
+def test_media_parser_pyav_path_creates_no_sibling_files(tmp_path: Path) -> None:
+    (tmp_path / "note.amr").write_bytes(_AMR_STUB)
+    files_before = set(tmp_path.iterdir())
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "note.amr")
+    MediaParser().parse(node, vfs)
+
+    new_files = set(tmp_path.iterdir()) - files_before
+    assert new_files == set(), f"MediaParser (PyAV path) left unexpected files: {new_files}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="chmod semantics differ on Windows")
+@pytest.mark.forensic(
+    category="Read-only Media",
+    desc="MediaParser must succeed when evidence directory is 0o555 and file is 0o444",
+)
+def test_media_parser_works_on_readonly_media(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    media = evidence_dir / "video.mp4"
+    media.write_bytes(_MP4_STUB)
+
+    media.chmod(0o444)
+    evidence_dir.chmod(0o555)
+    try:
+        vfs = DirectoryVFS(evidence_dir)
+        node = next(c for c in vfs.root().children if c.name == "video.mp4")
+        result = MediaParser().parse(node, vfs)
+        assert result.viewer_type == "media"
+    finally:
+        evidence_dir.chmod(0o755)
+        media.chmod(0o644)
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="MP3 stub must always parse to viewer_type='media' with 'File size' in metadata",
+)
+def test_media_parser_mp3_known_output(tmp_path: Path) -> None:
+    (tmp_path / "audio.mp3").write_bytes(_MP3_STUB)
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "audio.mp3")
+    result = MediaParser().parse(node, vfs)
+    assert result.viewer_type == "media"
+    assert result.data == _MP3_STUB
+    assert "File size" in result.metadata
+    assert result.metadata["File size"] == f"{len(_MP3_STUB):,} B"
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="OGG stub (invalid codec data) must parse without crash and return raw bytes intact",
+)
+def test_media_parser_ogg_stub_known_output(tmp_path: Path) -> None:
+    (tmp_path / "voice.ogg").write_bytes(_OGG_STUB)
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "voice.ogg")
+    result = MediaParser().parse(node, vfs)
+    assert result.viewer_type == "media"
+    assert result.data == _OGG_STUB
+    assert "File size" in result.metadata
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Parsing the same media file twice must produce byte-identical results",
+)
+def test_media_parse_is_reproducible(tmp_path: Path) -> None:
+    (tmp_path / "video.mp4").write_bytes(_MP4_STUB)
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "video.mp4")
+    parser = MediaParser()
+
+    r1 = parser.parse(node, vfs)
+    r2 = parser.parse(node, vfs)
+
+    assert r1.viewer_type == r2.viewer_type
+    assert r1.data == r2.data
+    assert r1.metadata == r2.metadata
+
+
+@pytest.mark.forensic(
+    category="Reproducibility",
+    desc="Parsing the same OGG file twice (PyAV metadata path) must produce identical results",
+)
+def test_media_parse_ogg_is_reproducible(tmp_path: Path) -> None:
+    (tmp_path / "voice.ogg").write_bytes(_OGG_STUB)
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "voice.ogg")
+    parser = MediaParser()
+
+    r1 = parser.parse(node, vfs)
+    r2 = parser.parse(node, vfs)
+
+    assert r1.viewer_type == r2.viewer_type
+    assert r1.data == r2.data
+    assert r1.metadata == r2.metadata
+
+
+# ---------------------------------------------------------------------------
+# PlistParser forensic tests — source immutability, no side effects, read-only
+# ---------------------------------------------------------------------------
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="PlistParser read must leave source file bytes unchanged",
+)
+def test_plist_parser_does_not_modify_source(plist_fixture: Path) -> None:
+    digest_before = _sha256_file(plist_fixture)
+
+    vfs = DirectoryVFS(plist_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == plist_fixture.name)
+    PlistParser().parse(node, vfs)
+
+    assert _sha256_file(plist_fixture) == digest_before, "PlistParser modified the source file"
+
+
+@pytest.mark.forensic(
+    category="Source Immutability",
+    desc="PlistParser must not change mtime or ctime of source files",
+)
+def test_plist_parser_does_not_change_timestamps(plist_fixture: Path) -> None:
+    ts_before = _timestamps(plist_fixture)
+
+    vfs = DirectoryVFS(plist_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == plist_fixture.name)
+    PlistParser().parse(node, vfs)
+
+    _assert_timestamps_unchanged(ts_before, _timestamps(plist_fixture), "PlistParser")
+
+
+@pytest.mark.forensic(
+    category="No Side Effects",
+    desc="PlistParser must not create any sibling files next to the evidence",
+)
+def test_plist_parse_creates_no_sibling_files(plist_fixture: Path) -> None:
+    files_before = set(plist_fixture.parent.iterdir())
+
+    vfs = DirectoryVFS(plist_fixture.parent)
+    node = next(c for c in vfs.root().children if c.name == plist_fixture.name)
+    PlistParser().parse(node, vfs)
+
+    new_files = set(plist_fixture.parent.iterdir()) - files_before
+    assert new_files == set(), f"PlistParser left unexpected files next to evidence: {new_files}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="chmod semantics differ on Windows")
+@pytest.mark.forensic(
+    category="Read-only Media",
+    desc="PlistParser must succeed when evidence directory is 0o555 and file is 0o444",
+)
+def test_plist_parser_works_on_readonly_media(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    plist = evidence_dir / "minimal_binary.plist"
+    plist.write_bytes((FIXTURES_DIR / "minimal_binary.plist").read_bytes())
+
+    plist.chmod(0o444)
+    evidence_dir.chmod(0o555)
+    try:
+        vfs = DirectoryVFS(evidence_dir)
+        node = next(c for c in vfs.root().children if c.name == "minimal_binary.plist")
+        result = PlistParser().parse(node, vfs)
+        assert result.viewer_type == "tree"
+    finally:
+        evidence_dir.chmod(0o755)
+        plist.chmod(0o644)

@@ -4,6 +4,20 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+## v0.12.1 - 2026-06-22
+
+**Focus: Audio/video playback fix in distributed builds; format knowledge base corrections; format identification accuracy.**
+
+### Bug Fixes
+
+- **Audio/video playback broken in all distributed builds** — `PySide6.QtMultimedia` and `PySide6.QtMultimediaWidgets` were accidentally excluded from all PyInstaller builds (Linux, macOS, Windows) since the May 10 size-reduction commit. All audio and video playback in the `.AppImage`, `.app`, and `.exe` releases was non-functional. The exclusion lines have been removed and `QtMultimedia` is now bundled correctly; the macOS post-build framework-strip step no longer removes the `QtMultimedia.framework`.
+- **Audio formats not linked to MediaParser in Format Reference** — MP3, WAV, M4A, AAC, FLAC, OGG, Opus, WMA, and AMR entries in the format knowledge base had `parser_class = None`, causing the Format Reference panel to show no associated viewer for these formats. All nine audio entries now correctly reference `MediaParser`.
+- **Format identification — WAV misidentified as AVI** — `FormatDatabase.identify()` scored magic byte patterns individually; formats with a shared container prefix (WAV and AVI both start with `RIFF` at offset 0) were resolved by query order rather than specificity. The scorer now accumulates the total matched bytes across all patterns for each format: a WAV file matches both `RIFF` (offset 0, 4 bytes) and `WAVE` (offset 8, 4 bytes) for a combined score of 8, while AVI only matches `RIFF` (4 bytes) — so WAV wins. The same logic correctly disambiguates MOV from MP4 via the `qt  ` QuickTime brand, and MKV/WebM via their respective EBML DocType patterns.
+
+## v0.12.0 - 2026-06-21
+
+**Focus: Value Inspector, extended BLOB decode pipeline, multiple windows, welcome screen, and SQLite query performance.**
+
 ### New Features
 
 - **Value Inspector** — *Tools → Value Inspector…* opens a persistent non-modal window that shows all plausible interpretations of any text value. On Linux/X11 the window auto-updates whenever text is selected anywhere within Crush (via X11 PRIMARY clipboard); on other platforms enter or paste a value manually. Interpretation groups: *Integer* (decimal, hex, signed/unsigned 32 & 64-bit, big-endian and little-endian variants for hex-byte input), *Float* (64-bit double, Float32 and Double reinterpret as BE and LE), *Timestamp* (Unix s/ms/µs, Cocoa/Apple, Chrome/WebKit, Windows FILETIME, HFS+), *UUID*, *Network* (IPv4 BE/LE, MAC address), *Text* (ASCII and UTF-8 rendering of hex bytes). All cells show a tooltip with the full text on hover.

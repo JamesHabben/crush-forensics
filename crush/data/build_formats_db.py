@@ -1483,7 +1483,7 @@ FORMATS: list[dict[str, Any]] = [
             "or filesystem metadata."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1534,7 +1534,7 @@ FORMATS: list[dict[str, Any]] = [
             "ExifTool and BWF MetaEdit extract all RIFF and BWF metadata."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1589,7 +1589,7 @@ FORMATS: list[dict[str, Any]] = [
             "ALAC variant (Apple Music lossless) is bit-perfect — no lossy artefacts."
         ),
         "platforms": ["iOS", "macOS"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 4,
@@ -1634,7 +1634,7 @@ FORMATS: list[dict[str, Any]] = [
             "Bitrate and sampling rate can help fingerprint the recording device or app."
         ),
         "platforms": ["iOS", "macOS", "Android", "Windows"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1679,7 +1679,7 @@ FORMATS: list[dict[str, Any]] = [
             "Identified by 'fLaC' magic (0x664C6143) at offset 0."
         ),
         "platforms": ["Android", "Windows", "Linux"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1727,7 +1727,7 @@ FORMATS: list[dict[str, Any]] = [
             "metadata or messaging app databases."
         ),
         "platforms": ["Android", "iOS", "Windows", "Linux"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1773,7 +1773,7 @@ FORMATS: list[dict[str, Any]] = [
             "(PTT-YYYYMMDD-WANNNN.opus)."
         ),
         "platforms": ["Android", "iOS", "Windows", "Linux"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 28,
@@ -1818,7 +1818,7 @@ FORMATS: list[dict[str, Any]] = [
             "or legacy media library transfer."
         ),
         "platforms": ["Windows"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,
@@ -1866,7 +1866,7 @@ FORMATS: list[dict[str, Any]] = [
             "Replaced by AAC and Opus on modern devices but common in older acquisitions."
         ),
         "platforms": ["Android"],
-        "parser_class": None,
+        "parser_class": "MediaParser",
         "magic": [
             {
                 "offset": 0,

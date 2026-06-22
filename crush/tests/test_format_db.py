@@ -2,6 +2,8 @@
 """Tests for FormatDatabase and encoding detection."""
 from __future__ import annotations
 
+import pytest
+
 from crush.core.format_db import FormatDatabase, FormatMatch
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,96 @@ def test_by_parser_class_plist() -> None:
 def test_by_parser_class_unknown_returns_none() -> None:
     fmt = FormatDatabase.get().by_parser_class("NonExistentParser")
     assert fmt is None
+
+
+def test_by_parser_class_media() -> None:
+    fmt = FormatDatabase.get().by_parser_class("MediaParser")
+    assert fmt is not None
+    assert fmt.parser_class == "MediaParser"
+
+
+# ---------------------------------------------------------------------------
+# FormatDatabase.identify() — media magic bytes
+# ---------------------------------------------------------------------------
+
+_MP3_ID3_MAGIC    = b"\x49\x44\x33" + b"\x00" * 125         # ID3v2 header
+_MP3_SYNC_MAGIC   = b"\xff\xfb" + b"\x00" * 126             # MPEG-1 Layer 3 sync
+_WAV_MAGIC        = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 116
+_FLAC_MAGIC       = b"fLaC" + b"\x00" * 124
+_OGG_MAGIC        = b"OggS" + b"\x00" * 124
+_AMR_NB_MAGIC     = b"#!AMR\n" + b"\x00" * 122
+_WMA_GUID         = (
+    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11"
+    b"\xa6\xd9\x00\xaa\x00\x62\xce\x6c"
+    + b"\x00" * 112
+)
+_MP4_FTYP_MAGIC   = b"\x00\x00\x00\x20" + b"ftyp" + b"\x00" * 120
+_MKV_EBML_MAGIC   = b"\x1a\x45\xdf\xa3" + b"\x00" * 124
+_AVI_MAGIC        = b"RIFF\x00\x00\x00\x00AVI " + b"\x00" * 116
+_AAC_ADTS_MAGIC   = b"\xff\xf1" + b"\x00" * 126
+
+
+@pytest.mark.parametrize("magic,expected_short_name", [
+    (_MP3_ID3_MAGIC,  "MP3"),
+    (_MP3_SYNC_MAGIC, "MP3"),
+    (_WAV_MAGIC,      "WAV"),
+    (_FLAC_MAGIC,     "FLAC"),
+    (_OGG_MAGIC,      "OGG"),
+    (_AMR_NB_MAGIC,   "AMR"),
+    (_WMA_GUID,       "WMA"),
+    (_MP4_FTYP_MAGIC, "MP4"),
+    (_MKV_EBML_MAGIC, "MKV"),
+    (_AVI_MAGIC,      "AVI"),
+    (_AAC_ADTS_MAGIC, "AAC"),
+])
+def test_identify_media_by_magic(magic: bytes, expected_short_name: str) -> None:
+    fmt = FormatDatabase.get().identify(magic, "unknown_file")
+    assert fmt is not None, f"Expected {expected_short_name}, got None"
+    assert fmt.short_name == expected_short_name
+
+
+@pytest.mark.parametrize("magic,expected_short_name", [
+    (_MP3_ID3_MAGIC,  "MP3"),
+    (_WAV_MAGIC,      "WAV"),
+    (_FLAC_MAGIC,     "FLAC"),
+    (_OGG_MAGIC,      "OGG"),
+    (_AMR_NB_MAGIC,   "AMR"),
+    (_WMA_GUID,       "WMA"),
+    (_MP4_FTYP_MAGIC, "MP4"),
+    (_MKV_EBML_MAGIC, "MKV"),
+    (_AVI_MAGIC,      "AVI"),
+    (_AAC_ADTS_MAGIC, "AAC"),
+])
+def test_media_format_has_media_parser_class(magic: bytes, expected_short_name: str) -> None:
+    fmt = FormatDatabase.get().identify(magic, "unknown_file")
+    assert fmt is not None, f"No match for {expected_short_name}"
+    assert fmt.parser_class == "MediaParser", (
+        f"{expected_short_name}: expected parser_class='MediaParser', got {fmt.parser_class!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Completeness: all MediaParser extensions appear in the DB
+# ---------------------------------------------------------------------------
+
+_MEDIA_PARSER_EXTENSIONS = [
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr",
+    ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".3gp", ".3g2",
+]
+
+
+def test_all_media_extensions_covered_in_db() -> None:
+    db = FormatDatabase.get()
+    if db._conn is None:
+        pytest.skip("formats.db not available")
+    rows = db._conn.execute(
+        "SELECT e.extension FROM formats f "
+        "JOIN extensions e ON e.format_id = f.id "
+        "WHERE f.parser_class = 'MediaParser'"
+    )
+    all_exts = {row[0] for row in rows}
+    missing = [e for e in _MEDIA_PARSER_EXTENSIONS if e not in all_exts]
+    assert not missing, f"Extensions not covered in formats.db: {missing}"
 
 
 # ---------------------------------------------------------------------------
