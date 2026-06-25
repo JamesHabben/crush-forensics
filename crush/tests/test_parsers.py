@@ -13,6 +13,7 @@ from crush.parsers.sqlite_parser import SQLiteParser
 from crush.parsers.plist_parser import PlistParser
 from crush.parsers.abx_parser import AbxParser
 from crush.parsers.hex_fallback import HexFallbackParser
+from crush.parsers.image_parser import ImageParser
 from crush.parsers.realm_parser import RealmParser
 from crush.core.encodings import detect_encoding as _detect_encoding
 
@@ -333,6 +334,19 @@ def _make_abx_bytes() -> bytes:
     return magic + start_doc + start_tag + attr + end_tag + end_doc
 
 
+def _make_atx_metadata_bytes() -> bytes:
+    head = bytearray(0x54)
+    struct.pack_into("<I", head, 0x18, 32)
+    struct.pack_into("<I", head, 0x1C, 16)
+    struct.pack_into("<I", head, 0x20, 1)
+    struct.pack_into("<I", head, 0x28, 1)
+    struct.pack_into("<I", head, 0x2C, 1)
+    head[0x3C:0x4C] = bytes(range(16))
+    struct.pack_into("<I", head, 0x4C, 3)
+    struct.pack_into("<I", head, 0x50, 5)
+    return b"AAPL\r\n\x1a\n" + struct.pack("<I4s", len(head), b"HEAD") + bytes(head)
+
+
 def test_abx_parser_parse(tmp_path: Path) -> None:
     abx_path = tmp_path / "binary.xml"
     abx_path.write_bytes(_make_abx_bytes())
@@ -352,6 +366,32 @@ def test_abx_parser_parse(tmp_path: Path) -> None:
     assert tree["@tag"] == "root"
     assert tree["@attribs"]["attr"] == "value"
 
+
+def test_image_parser_can_parse_atx_magic(tmp_path: Path) -> None:
+    atx_path = tmp_path / "poster.bin"
+    atx_path.write_bytes(_make_atx_metadata_bytes())
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "poster.bin")
+
+    assert ImageParser().can_parse(node.path, vfs.peek(node))
+
+
+def test_image_parser_atx_metadata(tmp_path: Path) -> None:
+    atx_path = tmp_path / "poster.atx"
+    atx_path.write_bytes(_make_atx_metadata_bytes())
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "poster.atx")
+    result = ImageParser().parse(node, vfs)
+
+    assert result.viewer_type == "image"
+    assert result.metadata["Format"] == "ATX"
+    assert result.metadata["Width"] == 32
+    assert result.metadata["Height"] == 16
+    assert result.metadata["Pixel format"] == "ASTC 4x4"
+    assert result.metadata["Chunks"] == "HEAD"
+    assert result.metadata["Decode status"] == "ATX metadata parsed; image decode unavailable"
 
 # ---------------------------------------------------------------------------
 # HexFallbackParser — format identification via FormatDatabase

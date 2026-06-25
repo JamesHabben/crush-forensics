@@ -126,6 +126,7 @@ _MP4_FTYP_MAGIC   = b"\x00\x00\x00\x20" + b"ftyp" + b"\x00" * 120
 _MKV_EBML_MAGIC   = b"\x1a\x45\xdf\xa3" + b"\x00" * 124
 _AVI_MAGIC        = b"RIFF\x00\x00\x00\x00AVI " + b"\x00" * 116
 _AAC_ADTS_MAGIC   = b"\xff\xf1" + b"\x00" * 126
+_ATX_MAGIC        = b"AAPL\r\n\x1a\n" + b"\x00" * 120
 
 
 @pytest.mark.parametrize("magic,expected_short_name", [
@@ -165,6 +166,13 @@ def test_media_format_has_media_parser_class(magic: bytes, expected_short_name: 
     assert fmt.parser_class == "MediaParser", (
         f"{expected_short_name}: expected parser_class='MediaParser', got {fmt.parser_class!r}"
     )
+
+
+def test_identify_atx_by_magic() -> None:
+    fmt = FormatDatabase.get().identify(_ATX_MAGIC, "unknown_file")
+    assert fmt is not None
+    assert fmt.short_name == "ATX"
+    assert fmt.parser_class == "ImageParser"
 
 
 # ---------------------------------------------------------------------------

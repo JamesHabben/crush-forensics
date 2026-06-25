@@ -30,7 +30,7 @@ from crush.core.magic import detect_fast_label
 from crush.core.work_priority import background_io
 
 _IMAGE_TYPE_LABELS: frozenset[str] = frozenset({
-    "image", "heic", "heif", "avif", "jxl",
+    "image", "heic", "heif", "avif", "jxl", "atx",
     "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif",
 })
 _MEDIA_TYPE_LABELS: frozenset[str] = frozenset({

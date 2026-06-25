@@ -3,10 +3,12 @@
 """Image parser — routes image files to the image viewer."""
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
+from crush.parsers.apple_atx import AAPL_MAGIC, decode_atx, is_atx
 from crush.parsers.base import AbstractParser, ParseResult
 
 # ISOBMFF brands that identify HEIF/HEIC/AVIF containers
@@ -27,6 +29,7 @@ class ImageParser(AbstractParser):
         ".tif", ".tiff",
         ".heic", ".heif", ".avif",
         ".jxl",
+        ".atx",
     ]
     DISPLAY_NAME = "Image"
 
@@ -43,6 +46,44 @@ class ImageParser(AbstractParser):
             "Format": ext or "Image",
             "File size": f"{node.size:,} B",
         }
+        if is_atx(raw):
+            result = decode_atx(raw)
+            if result.header:
+                meta.update({
+                    "Format": "ATX",
+                    "Width": result.header.width,
+                    "Height": result.header.height,
+                    "Depth": result.header.depth,
+                    "Array layers": result.header.array_layers,
+                    "Mipmaps": result.header.mipmap_count,
+                    "Pixel format": result.header.pixel_format,
+                    "Texture UUID": result.header.texture_uuid,
+                })
+            if result.payload:
+                meta.update({
+                    "Payload": result.payload.kind,
+                    "Payload bytes": f"{len(result.payload.data):,} B",
+                    "Declared payload bytes": f"{result.payload.declared_size:,} B",
+                })
+            if result.chunks:
+                meta["Chunks"] = ", ".join(chunk.tag for chunk in result.chunks)
+            if result.warnings:
+                meta["ATX warnings"] = "; ".join(result.warnings)
+            if result.image:
+                out = io.BytesIO()
+                result.image.to_pil().save(out, "PNG")
+                meta["Decode status"] = "Decoded ATX to PNG"
+                return ParseResult(
+                    viewer_type="image",
+                    data=out.getvalue(),
+                    metadata=meta,
+                )
+            meta["Decode status"] = "ATX metadata parsed; image decode unavailable"
+            detail = meta["Decode status"]
+            if result.warnings:
+                detail = f"{detail}\n\n" + "\n".join(result.warnings)
+            return ParseResult(viewer_type="text", data=detail, metadata=meta)
+
         try:
             from crush.parsers.exif_reader import extract_exif, format_for_metadata
             exif_raw = extract_exif(raw)
@@ -56,6 +97,8 @@ class ImageParser(AbstractParser):
 def _looks_like_image(peek: bytes) -> bool:
     if len(peek) < 4:
         return False
+    if peek.startswith(AAPL_MAGIC):
+        return True  # Apple ATX texture archive
     if peek.startswith(b"\xFF\xD8\xFF"):
         return True  # JPEG
     if peek.startswith(b"\x89PNG\r\n\x1a\n"):
