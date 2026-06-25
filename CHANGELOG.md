@@ -4,6 +4,10 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **SQLite temp companion files not deleted on close** — when a SQLite database with WAL or SHM companions was opened, `SQLiteParser` correctly extracted all three files (`-wal`, `-shm`) to the OS temp directory, but `TableViewer.closeEvent` only deleted the main `.db` file. The companion files are now also deleted on close.
+
 ## v0.12.1 - 2026-06-22
 
 **Focus: Audio/video playback fix in distributed builds; format knowledge base corrections; format identification accuracy.**

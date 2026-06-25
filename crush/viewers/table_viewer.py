@@ -1877,11 +1877,14 @@ class TableViewer(QWidget):
         if self._db_conn is not None:
             self._db_conn.close()
             self._db_conn = None
-        if self._db_path and self._db_path.exists():
-            try:
-                self._db_path.unlink()
-            except Exception:
-                pass
+        if self._db_path:
+            for suffix in ("", "-wal", "-shm"):
+                companion = Path(str(self._db_path) + suffix)
+                if companion.exists():
+                    try:
+                        companion.unlink()
+                    except Exception:
+                        pass
         super().closeEvent(event)  # type: ignore[arg-type]
 
 
