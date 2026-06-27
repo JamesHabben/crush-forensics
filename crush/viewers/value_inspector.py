@@ -3,6 +3,7 @@
 """Value Inspector — flat interpretation panel for text/numeric cell values."""
 from __future__ import annotations
 
+import base64
 import struct
 import uuid as _uuid_mod
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,43 @@ _HFS_OFFSET = 2_082_844_800
 _HFS_MIN = _TS_S_MIN + _HFS_OFFSET
 _HFS_MAX = _TS_S_MAX + _HFS_OFFSET
 
+# Apple Absolute Time (Nanosecond): ns since 2001-01-01
+_COCOA_NS_MIN = _COCOA_MIN * 1_000_000_000
+_COCOA_NS_MAX = _COCOA_MAX * 1_000_000_000
+
+# Microsoft .NET Ticks: 100ns intervals since 0001-01-01
+_NET_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
+_NET_EPOCH_OFFSET_S = 62_135_596_800   # seconds from 0001-01-01 to Unix epoch
+_NET_TICKS_PER_S = 10_000_000
+_NET_EPOCH_TICKS = _NET_EPOCH_OFFSET_S * _NET_TICKS_PER_S
+_TICKS_MIN = (_TS_S_MIN + _NET_EPOCH_OFFSET_S) * _NET_TICKS_PER_S
+_TICKS_MAX = (_TS_S_MAX + _NET_EPOCH_OFFSET_S) * _NET_TICKS_PER_S
+
+# OLE Automation Date: days (float) since 1899-12-30
+_OLE_EPOCH = datetime(1899, 12, 30, tzinfo=timezone.utc)
+_OLE_MIN = 32874.0   # 1990-01-01
+_OLE_MAX = 73050.0   # 2100-01-01
+
+# Twitter / X Snowflake ID: upper 41 bits = ms since 2010-11-04 01:42:54.657 UTC
+_TWITTER_EPOCH_MS = 1_288_834_974_657
+
+# FAT / exFAT (MS-DOS): 32-bit packed, upper 16 = date, lower 16 = time (2s resolution)
+# Date word: bits 15-9 = year offset from 1980, bits 8-5 = month, bits 4-0 = day
+# Time word: bits 15-11 = hour, bits 10-5 = minute, bits 4-0 = 2-second count
+_FAT_TS_MIN = 0x0021_0000  # 1980-01-01 00:00:00
+_FAT_TS_MAX = 0xFF9F_BF7D  # 2107-12-31 23:59:58
+
+# UUID v1: 60-bit timestamp = 100ns intervals since Gregorian epoch 1582-10-15
+_UUID_V1_GREG_OFFSET = 0x01B21DD213814000  # 100ns intervals from 1582-10-15 to 1970-01-01
+
+# GPS Time: seconds (or nanoseconds) since 1980-01-06 00:00:00 UTC, NO leap seconds.
+# GPS is currently 18 s ahead of UTC; displayed values are raw GPS time (not UTC-corrected).
+_GPS_EPOCH_UNIX = 315_964_800   # Unix timestamp of GPS epoch 1980-01-06
+_GPS_S_MIN = _TS_S_MIN - _GPS_EPOCH_UNIX    # ~315_187_200  (≈ 1990-01-01 in GPS seconds)
+_GPS_S_MAX = _TS_S_MAX - _GPS_EPOCH_UNIX    # ~3_786_480_000 (≈ 2100-01-01 in GPS seconds)
+_GPS_NS_MIN = _GPS_S_MIN * 1_000_000_000
+_GPS_NS_MAX = _GPS_S_MAX * 1_000_000_000
+
 
 def _fmt_dt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -64,6 +102,14 @@ def _safe_ts(ts_s: float) -> str | None:
         return _fmt_dt(datetime.fromtimestamp(ts_s, tz=timezone.utc))
     except (OSError, OverflowError, ValueError):
         return None
+
+
+def _bcd_byte(b: int) -> int | None:
+    """Decode a single BCD byte to decimal (0-99), or None if nibbles are not 0-9."""
+    hi, lo = (b >> 4) & 0xF, b & 0xF
+    if hi > 9 or lo > 9:
+        return None
+    return hi * 10 + lo
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +166,20 @@ def _interpret(raw: str) -> list[_Row]:
             hex_le_int_val = int.from_bytes(hex_bytes_val, "little")
         except ValueError:
             pass
+
+    # UUID parse — done early so uuid_obj is available in the Timestamp group
+    uuid_obj: _uuid_mod.UUID | None = None
+    if len(raw) == 36 and raw.count("-") == 4:
+        try:
+            uuid_obj = _uuid_mod.UUID(raw)
+        except ValueError:
+            pass
+    elif is_hex_str and len(hex_clean) == 32:
+        try:
+            uuid_obj = _uuid_mod.UUID(hex_clean)
+        except ValueError:
+            pass
+    uuid_val = str(uuid_obj) if uuid_obj is not None else None
 
     # -----------------------------------------------------------------------
     # Group: Integer
@@ -238,6 +298,16 @@ def _interpret(raw: str) -> list[_Row]:
     else:
         rows.append(R("Timestamp", "Cocoa / Apple (s)", None))
 
+    # Cocoa nanoseconds: ns since 2001-01-01
+    if ts is not None and _COCOA_NS_MIN <= ts <= _COCOA_NS_MAX:
+        try:
+            dt = _COCOA_EPOCH + timedelta(seconds=ts / 1_000_000_000)
+            rows.append(R("Timestamp", "Cocoa / Apple (ns)", _fmt_dt(dt)))
+        except (OverflowError, ValueError):
+            rows.append(R("Timestamp", "Cocoa / Apple (ns)", None))
+    else:
+        rows.append(R("Timestamp", "Cocoa / Apple (ns)", None))
+
     # Chrome / WebKit: µs since 1601-01-01
     if ts is not None and _CHROME_US_MIN <= ts <= _CHROME_US_MAX:
         try:
@@ -265,20 +335,114 @@ def _interpret(raw: str) -> list[_Row]:
     else:
         rows.append(R("Timestamp", "HFS+ / Mac OS (s)", None))
 
+    # Microsoft .NET Ticks: 100ns intervals since 0001-01-01
+    if ts is not None and _TICKS_MIN <= ts <= _TICKS_MAX:
+        try:
+            unix_s = (ts - _NET_EPOCH_TICKS) / _NET_TICKS_PER_S
+            rows.append(R("Timestamp", "Microsoft .NET Ticks", _safe_ts(unix_s)))
+        except (OverflowError, ValueError):
+            rows.append(R("Timestamp", "Microsoft .NET Ticks", None))
+    else:
+        rows.append(R("Timestamp", "Microsoft .NET Ticks", None))
+
+    # OLE Automation Date: days (float) since 1899-12-30
+    ole_val = float_val if float_val is not None else (float(eff_int) if eff_int is not None else None)
+    if ole_val is not None and _OLE_MIN <= ole_val <= _OLE_MAX:
+        try:
+            rows.append(R("Timestamp", "OLE Automation Date", _fmt_dt(_OLE_EPOCH + timedelta(days=ole_val))))
+        except (OverflowError, ValueError):
+            rows.append(R("Timestamp", "OLE Automation Date", None))
+    else:
+        rows.append(R("Timestamp", "OLE Automation Date", None))
+
+    # Twitter / X Snowflake ID: upper 41 bits = ms since Twitter epoch
+    if ts is not None and ts >= (1 << 22):  # timestamp part must be > 0
+        tw_ms = (ts >> 22) + _TWITTER_EPOCH_MS
+        if _TS_MS_MIN <= tw_ms <= _TS_MS_MAX:
+            rows.append(R("Timestamp", "Twitter / X Snowflake", _safe_ts(tw_ms / 1000.0)))
+        else:
+            rows.append(R("Timestamp", "Twitter / X Snowflake", None))
+    else:
+        rows.append(R("Timestamp", "Twitter / X Snowflake", None))
+
+    # FAT / exFAT (MS-DOS): 32-bit packed date+time, 2-second resolution, epoch 1980-01-01
+    if ts is not None and _FAT_TS_MIN <= ts <= _FAT_TS_MAX:
+        date_word = (ts >> 16) & 0xFFFF
+        time_word = ts & 0xFFFF
+        fat_year  = ((date_word >> 9) & 0x7F) + 1980
+        fat_month = (date_word >> 5) & 0x0F
+        fat_day   = date_word & 0x1F
+        fat_hour  = (time_word >> 11) & 0x1F
+        fat_min   = (time_word >> 5) & 0x3F
+        fat_sec   = (time_word & 0x1F) * 2
+        if 1 <= fat_month <= 12 and 1 <= fat_day <= 31 and fat_hour <= 23 and fat_min <= 59 and fat_sec <= 58:
+            try:
+                dt = datetime(fat_year, fat_month, fat_day, fat_hour, fat_min, fat_sec, tzinfo=timezone.utc)
+                rows.append(R("Timestamp", "FAT / exFAT (MS-DOS)", _fmt_dt(dt)))
+            except (ValueError, OverflowError):
+                rows.append(R("Timestamp", "FAT / exFAT (MS-DOS)", None))
+        else:
+            rows.append(R("Timestamp", "FAT / exFAT (MS-DOS)", None))
+    else:
+        rows.append(R("Timestamp", "FAT / exFAT (MS-DOS)", None))
+
+    # BCD timestamp: 7 hex bytes = YYYY MM DD HH mm SS (each byte = 2 BCD digits)
+    if hex_bytes_val is not None and len(hex_bytes_val) == 7:
+        bcd = [_bcd_byte(b) for b in hex_bytes_val]
+        if all(v is not None for v in bcd):
+            by, bmo, bd, bh, bmi, bs = bcd[0] * 100 + bcd[1], bcd[2], bcd[3], bcd[4], bcd[5], bcd[6]  # type: ignore[operator]
+            if 1 <= bmo <= 12 and 1 <= bd <= 31 and bh <= 23 and bmi <= 59 and bs <= 59:
+                try:
+                    dt = datetime(by, bmo, bd, bh, bmi, bs, tzinfo=timezone.utc)
+                    rows.append(R("Timestamp", "BCD (YYYYMMDDHHmmSS)", _fmt_dt(dt)))
+                except (ValueError, OverflowError):
+                    rows.append(R("Timestamp", "BCD (YYYYMMDDHHmmSS)", None))
+            else:
+                rows.append(R("Timestamp", "BCD (YYYYMMDDHHmmSS)", None))
+        else:
+            rows.append(R("Timestamp", "BCD (YYYYMMDDHHmmSS)", None))
+    else:
+        rows.append(R("Timestamp", "BCD (YYYYMMDDHHmmSS)", None))
+
+    # UUID v1 timestamp: 60-bit, 100ns intervals since Gregorian epoch 1582-10-15
+    if uuid_obj is not None and uuid_obj.version == 1:
+        unix_s = (uuid_obj.time - _UUID_V1_GREG_OFFSET) / 10_000_000
+        rows.append(R("Timestamp", "UUID v1 Timestamp", _safe_ts(unix_s)))
+    else:
+        rows.append(R("Timestamp", "UUID v1 Timestamp", None))
+
+    # GPS Time (s): seconds since 1980-01-06, no leap-second correction
+    if ts is not None and _GPS_S_MIN <= ts <= _GPS_S_MAX:
+        rows.append(R("Timestamp", "GPS Time (s)", _safe_ts(ts + _GPS_EPOCH_UNIX)))
+    else:
+        rows.append(R("Timestamp", "GPS Time (s)", None))
+
+    # GPS Time (ns): nanoseconds since 1980-01-06, no leap-second correction
+    if ts is not None and _GPS_NS_MIN <= ts <= _GPS_NS_MAX:
+        rows.append(R("Timestamp", "GPS Time (ns)", _safe_ts(ts / 1_000_000_000 + _GPS_EPOCH_UNIX)))
+    else:
+        rows.append(R("Timestamp", "GPS Time (ns)", None))
+
+    # Windows SYSTEMTIME: 16 hex bytes = 8×WORD LE (year, month, dow, day, h, m, s, ms)
+    if hex_bytes_val is not None and len(hex_bytes_val) == 16:
+        try:
+            st_year, st_month, st_dow, st_day, st_hour, st_min, st_sec, st_ms = struct.unpack_from("<8H", hex_bytes_val)
+            if (1 <= st_month <= 12 and 0 <= st_dow <= 6 and 1 <= st_day <= 31
+                    and st_hour <= 23 and st_min <= 59 and st_sec <= 59 and st_ms <= 999):
+                dt = datetime(st_year, st_month, st_day, st_hour, st_min, st_sec,
+                              st_ms * 1000, tzinfo=timezone.utc)
+                val = f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{st_ms:03d} UTC"
+                rows.append(R("Timestamp", "Windows SYSTEMTIME", val))
+            else:
+                rows.append(R("Timestamp", "Windows SYSTEMTIME", None))
+        except (struct.error, ValueError, OverflowError):
+            rows.append(R("Timestamp", "Windows SYSTEMTIME", None))
+    else:
+        rows.append(R("Timestamp", "Windows SYSTEMTIME", None))
+
     # -----------------------------------------------------------------------
     # Group: UUID
     # -----------------------------------------------------------------------
-    uuid_val: str | None = None
-    if len(raw) == 36 and raw.count("-") == 4:
-        try:
-            uuid_val = str(_uuid_mod.UUID(raw))
-        except ValueError:
-            pass
-    elif is_hex_str and len(hex_clean) == 32:
-        try:
-            uuid_val = str(_uuid_mod.UUID(hex_clean))
-        except ValueError:
-            pass
     rows.append(R("UUID", "UUID", uuid_val))
 
     # -----------------------------------------------------------------------
@@ -312,6 +476,30 @@ def _interpret(raw: str) -> list[_Row]:
             rows.append(R("Text", "UTF-8 (hex bytes)", utf8_text))
         except UnicodeDecodeError:
             rows.append(R("Text", "UTF-8 (hex bytes)", None))
+
+    # -----------------------------------------------------------------------
+    # Group: Encoding
+    # -----------------------------------------------------------------------
+    # Only attempt Base64 if the input contains chars that are in Base64 but NOT in hex
+    # (G-Z, g-z, +, /, =, -, _) — avoids false positives on plain numbers and hex strings
+    _B64_DISTINGUISHING = set("GHIJKLMNOPQRSTUVWXYZghijklmnopqrstuvwxyz+/=-_")
+    b64_clean = raw.strip().replace(" ", "").replace("\r", "").replace("\n", "")
+    b64_decoded: bytes | None = None
+    if len(b64_clean) >= 4 and any(c in _B64_DISTINGUISHING for c in b64_clean):
+        for candidate in (b64_clean, b64_clean.replace("-", "+").replace("_", "/")):
+            padded = candidate + "=" * (-len(candidate) % 4)
+            try:
+                b64_decoded = base64.b64decode(padded, validate=True)
+                break
+            except Exception:
+                pass
+
+    if b64_decoded is not None:
+        rows.append(R("Encoding", "Base64 → bytes", b64_decoded.hex(" ")))
+        try:
+            rows.append(R("Encoding", "Base64 → UTF-8", b64_decoded.decode("utf-8")))
+        except UnicodeDecodeError:
+            rows.append(R("Encoding", "Base64 → UTF-8", None))
 
     return rows
 

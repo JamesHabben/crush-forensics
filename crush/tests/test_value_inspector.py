@@ -164,6 +164,90 @@ class TestTimestamp:
         rows = _interpret("1")  # 1970-01-01 → below _TS_S_MIN
         assert _get(rows, "Timestamp", "Unix (s)") is None
 
+    def test_cocoa_nanosecond_in_range(self) -> None:
+        # 750_000_000_000_000_000 ns ≈ 2024-10-07
+        rows = _interpret("750000000000000000")
+        ts = _value(rows, "Timestamp", "Cocoa / Apple (ns)")
+        assert "2024" in ts
+
+    def test_net_ticks_in_range(self) -> None:
+        # 638_000_000_000_000_000 ticks ≈ 2022-09
+        rows = _interpret("638000000000000000")
+        ts = _value(rows, "Timestamp", "Microsoft .NET Ticks")
+        assert "2022" in ts
+
+    def test_ole_automation_float(self) -> None:
+        # 45000.5 days since 1899-12-30 ≈ 2023-03-15 12:00:00
+        rows = _interpret("45000.5")
+        ts = _value(rows, "Timestamp", "OLE Automation Date")
+        assert "2023" in ts
+        assert "12:00:00" in ts
+
+    def test_twitter_snowflake_in_range(self) -> None:
+        # Real-world Snowflake ID from ~2023
+        rows = _interpret("1641183228246523904")
+        ts = _value(rows, "Timestamp", "Twitter / X Snowflake")
+        assert "2023" in ts
+
+    def test_small_int_no_snowflake(self) -> None:
+        rows = _interpret("12345")
+        assert _get(rows, "Timestamp", "Twitter / X Snowflake") is None
+
+    def test_fat_ms_dos_timestamp(self) -> None:
+        # 2024-06-07 14:30:22: year_off=44, date=(44<<9)|(6<<5)|7, time=(14<<11)|(30<<5)|11
+        date_word = (44 << 9) | (6 << 5) | 7
+        time_word = (14 << 11) | (30 << 5) | 11  # 11 * 2 = 22s
+        rows = _interpret(str((date_word << 16) | time_word))
+        ts = _value(rows, "Timestamp", "FAT / exFAT (MS-DOS)")
+        assert "2024" in ts and "14:30:22" in ts
+
+    def test_bcd_7byte_timestamp(self) -> None:
+        rows = _interpret("20 24 06 07 14 30 22")
+        ts = _value(rows, "Timestamp", "BCD (YYYYMMDDHHmmSS)")
+        assert "2024-06-07" in ts and "14:30:22" in ts
+
+    def test_bcd_invalid_nibble_shows_none(self) -> None:
+        rows = _interpret("20 24 AB 07 14 30 22")
+        assert _get(rows, "Timestamp", "BCD (YYYYMMDDHHmmSS)") is None
+
+    def test_uuid_v1_timestamp(self) -> None:
+        rows = _interpret("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        ts = _value(rows, "Timestamp", "UUID v1 Timestamp")
+        assert "1998" in ts
+
+    def test_uuid_v4_no_timestamp(self) -> None:
+        rows = _interpret("550e8400-e29b-41d4-a716-446655440000")
+        assert _get(rows, "Timestamp", "UUID v1 Timestamp") is None
+
+    def test_gps_time_seconds(self) -> None:
+        # 1402718933 GPS seconds since 1980-01-06 ≈ 2024-06
+        rows = _interpret("1402718933")
+        ts = _value(rows, "Timestamp", "GPS Time (s)")
+        assert "2024" in ts
+
+    def test_gps_time_nanoseconds(self) -> None:
+        rows = _interpret("1402718933000000000")
+        ts = _value(rows, "Timestamp", "GPS Time (ns)")
+        assert "2024" in ts
+
+    def test_gps_small_value_shows_none(self) -> None:
+        rows = _interpret("12345")
+        assert _get(rows, "Timestamp", "GPS Time (s)") is None
+
+    def test_windows_systemtime(self) -> None:
+        import struct as _struct
+        # 2024-06-27 14:36:42.500, dow=4 (Thursday)
+        data = _struct.pack("<8H", 2024, 6, 4, 27, 14, 36, 42, 500)
+        rows = _interpret(" ".join(f"{b:02x}" for b in data))
+        ts = _value(rows, "Timestamp", "Windows SYSTEMTIME")
+        assert ts == "2024-06-27 14:36:42.500 UTC"
+
+    def test_windows_systemtime_invalid_month(self) -> None:
+        import struct as _struct
+        data = _struct.pack("<8H", 2024, 13, 0, 1, 0, 0, 0, 0)  # month=13 invalid
+        rows = _interpret(" ".join(f"{b:02x}" for b in data))
+        assert _get(rows, "Timestamp", "Windows SYSTEMTIME") is None
+
 
 # ---------------------------------------------------------------------------
 # UUID group
@@ -241,3 +325,44 @@ class TestText:
     def test_no_text_group_for_plain_decimal(self) -> None:
         rows = _interpret("1718000000")
         assert not _present(rows, "Text", "ASCII (hex bytes)")
+
+
+# ---------------------------------------------------------------------------
+# Encoding group
+# ---------------------------------------------------------------------------
+
+class TestEncoding:
+    def test_base64_standard_with_padding(self) -> None:
+        # dGVzdA== → b"test"
+        rows = _interpret("dGVzdA==")
+        assert _value(rows, "Encoding", "Base64 → bytes") == "74 65 73 74"
+        assert _value(rows, "Encoding", "Base64 → UTF-8") == "test"
+
+    def test_base64_no_padding(self) -> None:
+        # SGVsbG8gV29ybGQ → "Hello World"
+        rows = _interpret("SGVsbG8gV29ybGQ")
+        assert _value(rows, "Encoding", "Base64 → UTF-8") == "Hello World"
+
+    def test_base64url_variant(self) -> None:
+        # URL-safe Base64 uses - and _ instead of + and /
+        import base64 as _b64
+        payload = b"\xfb\xff\xfe"
+        encoded = _b64.urlsafe_b64encode(payload).decode()  # e.g. +// → -__
+        rows = _interpret(encoded)
+        assert _value(rows, "Encoding", "Base64 → bytes") == "fb ff fe"
+
+    def test_base64_binary_no_utf8(self) -> None:
+        # Pure binary payload that is not valid UTF-8
+        import base64 as _b64
+        encoded = _b64.b64encode(b"\xff\xfe\xfd").decode()
+        rows = _interpret(encoded)
+        assert _value(rows, "Encoding", "Base64 → bytes") == "ff fe fd"
+        assert _get(rows, "Encoding", "Base64 → UTF-8") is None
+
+    def test_no_base64_for_hex_string(self) -> None:
+        rows = _interpret("deadbeef")
+        assert not _present(rows, "Encoding", "Base64 → bytes")
+
+    def test_no_base64_for_plain_integer(self) -> None:
+        rows = _interpret("12345")
+        assert not _present(rows, "Encoding", "Base64 → bytes")
