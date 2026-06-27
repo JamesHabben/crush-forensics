@@ -7,6 +7,8 @@ import sqlite3
 import struct
 from pathlib import Path
 
+import pytest
+
 
 from crush.core.vfs import DirectoryVFS
 from crush.parsers.sqlite_parser import SQLiteParser
@@ -334,17 +336,30 @@ def _make_abx_bytes() -> bytes:
     return magic + start_doc + start_tag + attr + end_tag + end_doc
 
 
-def _make_atx_metadata_bytes() -> bytes:
+def _make_atx_head_chunk(width: int = 32, height: int = 16) -> bytes:
     head = bytearray(0x54)
-    struct.pack_into("<I", head, 0x18, 32)
-    struct.pack_into("<I", head, 0x1C, 16)
+    struct.pack_into("<I", head, 0x18, width)
+    struct.pack_into("<I", head, 0x1C, height)
     struct.pack_into("<I", head, 0x20, 1)
     struct.pack_into("<I", head, 0x28, 1)
     struct.pack_into("<I", head, 0x2C, 1)
     head[0x3C:0x4C] = bytes(range(16))
     struct.pack_into("<I", head, 0x4C, 3)
     struct.pack_into("<I", head, 0x50, 5)
-    return b"AAPL\r\n\x1a\n" + struct.pack("<I4s", len(head), b"HEAD") + bytes(head)
+    return struct.pack("<I4s", len(head), b"HEAD") + bytes(head)
+
+
+def _make_atx_metadata_bytes() -> bytes:
+    return b"AAPL\r\n\x1a\n" + _make_atx_head_chunk()
+
+
+def _make_atx_lzfs_bytes() -> bytes:
+    import liblzfse
+    astc_block = bytes(16)
+    compressed = liblzfse.compress(astc_block)
+    lzfs_inner = struct.pack("<I", len(astc_block)) + compressed
+    lzfs_chunk = struct.pack("<I4s", len(lzfs_inner), b"LZFS") + lzfs_inner
+    return b"AAPL\r\n\x1a\n" + _make_atx_head_chunk(width=4, height=4) + lzfs_chunk
 
 
 def test_abx_parser_parse(tmp_path: Path) -> None:
@@ -385,13 +400,30 @@ def test_image_parser_atx_metadata(tmp_path: Path) -> None:
     node = next(c for c in vfs.root().children if c.name == "poster.atx")
     result = ImageParser().parse(node, vfs)
 
-    assert result.viewer_type == "image"
+    assert result.viewer_type == "text"
     assert result.metadata["Format"] == "ATX"
     assert result.metadata["Width"] == 32
     assert result.metadata["Height"] == 16
     assert result.metadata["Pixel format"] == "ASTC 4x4"
     assert result.metadata["Chunks"] == "HEAD"
     assert result.metadata["Decode status"] == "ATX metadata parsed; image decode unavailable"
+
+
+def test_image_parser_atx_image_decode(tmp_path: Path) -> None:
+    pytest.importorskip("astc_decomp_faster")
+    atx_path = tmp_path / "poster.atx"
+    atx_path.write_bytes(_make_atx_lzfs_bytes())
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "poster.atx")
+    result = ImageParser().parse(node, vfs)
+
+    assert result.viewer_type == "image"
+    assert result.metadata["Format"] == "ATX"
+    assert result.metadata["Width"] == 4
+    assert result.metadata["Height"] == 4
+    assert result.metadata["Pixel format"] == "ASTC 4x4"
+    assert result.metadata["Decode status"] == "Decoded ATX to PNG"
 
 # ---------------------------------------------------------------------------
 # HexFallbackParser — format identification via FormatDatabase

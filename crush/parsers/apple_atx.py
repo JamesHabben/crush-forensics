@@ -22,7 +22,10 @@ import struct
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 AAPL_MAGIC = b"AAPL\r\n\x1a\n"
 HEAD_TAG = b"HEAD"
@@ -90,7 +93,7 @@ class DecodedImage:
     height: int
     pixels: bytes
 
-    def to_pil(self):
+    def to_pil(self) -> "PILImage":
         from PIL import Image
 
         return Image.frombytes("RGBA", (self.width, self.height), self.pixels)
@@ -114,7 +117,7 @@ class _Reader:
     def u32(self, offset: int) -> int:
         if offset + 4 > len(self.data):
             raise ValueError("unexpected end of ATX data")
-        return struct.unpack_from("<I", self.data, offset)[0]
+        return int(struct.unpack_from("<I", self.data, offset)[0])
 
     def slice(self, offset: int, size: int) -> bytes:
         if offset + size > len(self.data):
@@ -139,7 +142,7 @@ def decode_atx_file(path: str | Path, decode_image: bool = True) -> AtxDecodeRes
 def decode_atx(data: bytes, decode_image: bool = True) -> AtxDecodeResult:
     """Parse an ATX file and optionally decode supported ASTC 4x4 textures."""
 
-    warnings = []
+    warnings: list[str] = []
     if not is_atx(data):
         return AtxDecodeResult(None, tuple(), None, None, ("Not an AAPL ATX container",))
 
@@ -256,7 +259,7 @@ def _decode_image(header: AtxHeader, payload: TexturePayload, warnings: list[str
 
 
 def _linear_lzfs_payload(header: AtxHeader, payload: TexturePayload) -> tuple[bytes, int, int]:
-    import liblzfse
+    import liblzfse  # type: ignore[import-not-found]
 
     astc_data = liblzfse.decompress(payload.data)
     padded_width = _round_up(header.width, ASTC_BLOCK_WIDTH)
@@ -299,7 +302,7 @@ def _macro_tiled_payload(
     return bytes(linear), padded_width, padded_height
 
 
-def _decode_macro_tiled_payload(header: AtxHeader, payload: TexturePayload):
+def _decode_macro_tiled_payload(header: AtxHeader, payload: TexturePayload) -> tuple["PILImage", int, int]:
     candidates = []
     for swap_morton_xy in (False, True):
         astc_data, padded_width, padded_height = _macro_tiled_payload(
@@ -320,28 +323,29 @@ def _decode_macro_tiled_payload(header: AtxHeader, payload: TexturePayload):
     return image, padded_width, padded_height
 
 
-def _decode_astc_4x4(astc_data: bytes, width: int, height: int):
-    import astc_decomp_faster  # pylint: disable=unused-import
+def _decode_astc_4x4(astc_data: bytes, width: int, height: int) -> "PILImage":
+    import astc_decomp_faster  # type: ignore[import-not-found]  # noqa: F401  # registers PIL ASTC decoder on import
     from PIL import Image
 
     return Image.frombytes("RGBA", (width, height), astc_data, "astc", (4, 4, False))
 
 
-def _grid_seam_score(image, step: int) -> float:
+def _grid_seam_score(image: "PILImage", step: int) -> float:
     gray = image.convert("L")
     pixels = gray.load()
+    assert pixels is not None
     width, height = gray.size
     total = 0
     count = 0
 
     for x in range(step, width, step):
         for y in range(height):
-            total += abs(pixels[x, y] - pixels[x - 1, y])
+            total += abs(pixels[x, y] - pixels[x - 1, y])  # type: ignore[operator]
             count += 1
 
     for y in range(step, height, step):
         for x in range(width):
-            total += abs(pixels[x, y] - pixels[x, y - 1])
+            total += abs(pixels[x, y] - pixels[x, y - 1])  # type: ignore[operator]
             count += 1
 
     return total / count if count else 0
