@@ -70,6 +70,9 @@ def _detect_type(peek: bytes, ext: str) -> str:
         # JPEG / JPEG XL bare codestream
         if peek[:3] == b"\xFF\xD8\xFF" or peek[:2] == b"\xFF\x0A":
             return "image"
+        # Apple ATX texture archive
+        if peek[:8] == b"AAPL\r\n\x1a\n":
+            return "image"
         # PNG
         if peek[:8] == b"\x89PNG\r\n\x1a\n":
             return "image"
@@ -375,7 +378,10 @@ class _SearchProxy(QSortFilterProxyModel):
 # Map type-filter key → set of matching extensions
 _TYPE_EXTENSIONS: dict[str, set[str]] = {
     "sqlite":  {"db", "sqlite", "sqlite3", "db3"},
-    "image":   {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif", "avif", "jxl"},
+    "image":   {
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif",
+        "heic", "heif", "avif", "jxl", "atx",
+    },
     "media":   {"mp4", "mov", "avi", "mkv", "mp3", "m4a", "aac", "wav", "flac", "ogg"},
     "plist":   {"plist"},
     "json":    {"json"},

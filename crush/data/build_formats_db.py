@@ -891,6 +891,44 @@ FORMATS: list[dict[str, Any]] = [
         "status": "reviewed",
     },
     {
+        "name": "Apple ATX Texture Archive",
+        "short_name": "ATX",
+        "category": "document",
+        "forensic_relevance": (
+            "Apple AAPL texture container wrapping ASTC image payloads, including "
+            "some LZFSE-compressed variants. Found in iOS and macOS UI caches such as "
+            "wallpapers, PosterBoard snapshots, avatars, widgets, and app-generated "
+            "interface imagery. Decoding can expose visible user interface state or "
+            "cached imagery that standard image viewers miss because the file is not a "
+            "JPEG/PNG container."
+        ),
+        "platforms": ["iOS", "macOS"],
+        "parser_class": "ImageParser",
+        "magic": [
+            {
+                "offset": 0,
+                "value": b"\x41\x41\x50\x4c\x0d\x0a\x1a\x0a",
+                "description": "Apple ATX AAPL container signature",
+            }
+        ],
+        "extensions": [".atx"],
+        "links": [
+            (
+                "ATX reader reference implementation",
+                "https://github.com/galba-arueira/atx_reader",
+            ),
+            (
+                "ASTC texture compression overview (Khronos)",
+                "https://www.khronos.org/astc/",
+            ),
+            (
+                "Apple LZFSE compression algorithm",
+                "https://developer.apple.com/documentation/compression/algorithm/lzfse",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
         "name": "iOS Crash Report",
         "short_name": "IPS / crash",
         "category": "log",

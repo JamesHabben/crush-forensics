@@ -31,7 +31,7 @@ from crush.core.work_priority import background_io
 from crush.ui.wheel_scroll import install_horizontal_wheel_scroll
 
 _IMAGE_TYPE_LABELS: frozenset[str] = frozenset({
-    "image", "heic", "heif", "avif", "jxl",
+    "image", "heic", "heif", "avif", "jxl", "atx",
     "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif",
 })
 _MEDIA_TYPE_LABELS: frozenset[str] = frozenset({

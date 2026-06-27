@@ -21,6 +21,7 @@ _JXL_CONTAINER = b"\x00\x00\x00\x0C\x4A\x58\x4C\x20\x0D\x0A\x87\x0A" + b"\x00" *
 _JXL_BARE      = b"\xFF\x0A" + b"\x00" * 20
 _JPEG          = b"\xFF\xD8\xFF\xE0" + b"\x00" * 100
 _PNG           = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+_ATX           = b"AAPL\r\n\x1a\n" + b"\x00" * 100
 
 # ---------------------------------------------------------------------------
 # ISOBMFF image brands
@@ -69,6 +70,10 @@ def test_detect_jxl_container() -> None:
 
 def test_detect_jxl_bare_codestream() -> None:
     assert detect_fast_label(_JXL_BARE, "image.jxl") == "JXL"
+
+
+def test_detect_atx() -> None:
+    assert detect_fast_label(_ATX, "image.atx") == "ATX"
 
 # ---------------------------------------------------------------------------
 # OGG container codecs
