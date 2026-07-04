@@ -2,6 +2,13 @@
 
 All notable changes to Crush will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Frozen builds could fail to start entirely if `cryptography` failed to load** — `crush.core.vfs` imported `android_backup_crypto`/`ios_keybag` (and therefore `cryptography`) at module load time, so if `cryptography`'s compiled extension failed to load in a packaged build (observed on macOS: a PyInstaller dylib version mismatch — see below), the whole app crashed on startup for every user on that build, not just when opening an Android/iTunes backup. Both are now imported lazily, inside only the methods that actually need them, so a broken `cryptography` load degrades to a normal "Load error" dialog when opening a password-protected mobile backup instead of preventing the app from starting at all.
+- **macOS Intel build: app failed to start (`dlopen` symbol not found in `libssl.3.dylib`)** — under investigation; PyInstaller appears to bundle a stale system/interpreter-provided `libssl.3.dylib` instead of the one `cryptography`'s wheel ships, based on a [known PyInstaller issue pattern](https://github.com/pyinstaller/pyinstaller/issues/8797). The lazy-import fix above contains the blast radius in the meantime; the root cause in the build pipeline is not yet fixed.
+
 ## v0.13.0 - 2026-07-04
 
 **Focus: Mobile backup support (Android `.ab` / iTunes) with full password/encryption handling extended to ZIP and 7z archives; Apple ATX image decoding; hex/text search overhaul; Value Inspector expansion.**

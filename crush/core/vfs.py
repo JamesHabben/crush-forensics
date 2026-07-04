@@ -21,10 +21,19 @@ from dataclasses import dataclass, field
 import io
 from io import BytesIO
 from pathlib import Path
-from typing import IO, Any, Iterator, cast
+from typing import IO, TYPE_CHECKING, Any, Iterator, cast
 
-from crush.core import android_backup_crypto, ios_keybag
 from crush.core.passwords import PasswordRequiredError, WrongPasswordError
+
+if TYPE_CHECKING:
+    from crush.core import ios_keybag
+
+# android_backup_crypto and ios_keybag both import `cryptography`, whose
+# compiled extension can fail to even load on some frozen macOS builds (a
+# PyInstaller dylib-bundling quirk, not a Crush bug — see CHANGELOG). Both
+# are therefore imported lazily, inside the methods that need them, so a
+# broken build only fails when the user actually opens an Android/iTunes
+# backup instead of crashing on startup for every source type.
 
 
 class _AtimeRestoringIO:
@@ -601,6 +610,8 @@ class AndroidBackupVFS(TarVFS):
             master_key_blob = bytes.fromhex(f.readline().strip().decode("ascii"))
             ciphertext = f.read()
 
+        from crush.core import android_backup_crypto
+
         master_key, master_iv = android_backup_crypto.unwrap_master_key(
             password, user_salt, checksum_salt, rounds, user_iv, master_key_blob, version
         )
@@ -672,6 +683,8 @@ class ITunesBackupVFS(VFS):
         if "BackupKeyBag" not in manifest_plist:
             return raw  # Pre-iOS-10.2 backup: Manifest.db was never encrypted.
 
+        from crush.core import ios_keybag
+
         self._keybag = ios_keybag.BackupKeyBag(
             cast(bytes, manifest_plist["BackupKeyBag"]), self._password
         )
@@ -711,6 +724,8 @@ class ITunesBackupVFS(VFS):
                     nodes[parent_path].children.append(node)
                     nodes[virtual_path] = node
             if not is_leaf_dir and self._keybag is not None and file_blob:
+                from crush.core import ios_keybag
+
                 try:
                     protection = ios_keybag.extract_file_protection(file_blob)
                 except Exception:
@@ -749,6 +764,9 @@ class ITunesBackupVFS(VFS):
             return raw
         protection_class, encryption_key_entry = protection
         file_key = self._keybag.unwrap_file_key(protection_class, encryption_key_entry)
+
+        from crush.core import ios_keybag
+
         return ios_keybag.aes_cbc_decrypt_and_unpad(file_key, raw)
 
     def open(self, node: VFSNode) -> IO[bytes]:
