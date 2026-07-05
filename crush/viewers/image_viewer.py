@@ -6,7 +6,7 @@ from __future__ import annotations
 import io
 
 from PySide6.QtCore import Qt, QEvent, QPoint, QTimer
-from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QCursor
+from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QCursor, QTransform
 from PySide6.QtWidgets import (
     QLabel,
     QHBoxLayout,
@@ -69,6 +69,9 @@ class ImageViewer(QWidget):
         self._magnifier_on = False
         self._magnifier_zoom = 3.0
         self._magnifier_size = 180
+        self._rotation = 0
+        self._rotated_cache: QPixmap | None = None
+        self._rotated_cache_angle = -1
         self._build_ui()
         self._load(data)
 
@@ -85,6 +88,18 @@ class ImageViewer(QWidget):
         self._fit_btn = QPushButton("Fit")
         self._fit_btn.clicked.connect(self._fit)
         tb_layout.addWidget(self._fit_btn)
+
+        self._rotate_left_btn = QPushButton("↶")
+        self._rotate_left_btn.setFixedWidth(28)
+        self._rotate_left_btn.setToolTip("Rotate left 90°")
+        self._rotate_left_btn.clicked.connect(lambda: self._rotate(-90))
+        tb_layout.addWidget(self._rotate_left_btn)
+
+        self._rotate_right_btn = QPushButton("↷")
+        self._rotate_right_btn.setFixedWidth(28)
+        self._rotate_right_btn.setToolTip("Rotate right 90°")
+        self._rotate_right_btn.clicked.connect(lambda: self._rotate(90))
+        tb_layout.addWidget(self._rotate_right_btn)
 
         self._zoom_out = QPushButton("-")
         self._zoom_out.setFixedWidth(28)
@@ -155,27 +170,50 @@ class ImageViewer(QWidget):
         self._fit_to_window = True
         self._apply_fit_scale()
 
-    def _apply_fit_scale(self) -> None:
+    def _rotated_pixmap(self) -> QPixmap:
+        if self._rotation == 0:
+            return self._pixmap
+        if self._rotated_cache is not None and self._rotated_cache_angle == self._rotation:
+            return self._rotated_cache
+        transform = QTransform().rotate(self._rotation)
+        self._rotated_cache = self._pixmap.transformed(
+            transform, Qt.TransformationMode.SmoothTransformation
+        )
+        self._rotated_cache_angle = self._rotation
+        return self._rotated_cache
+
+    def _rotate(self, degrees: int) -> None:
         if self._pixmap.isNull():
+            return
+        self._rotation = (self._rotation + degrees) % 360
+        if self._fit_to_window:
+            self._apply_fit_scale()
+        else:
+            self._set_scale(self._scale)
+
+    def _apply_fit_scale(self) -> None:
+        pixmap = self._rotated_pixmap()
+        if pixmap.isNull():
             return
         viewport = self._scroll.viewport().size()
         if viewport.width() <= 0 or viewport.height() <= 0:
             self._set_scale(1.0, from_fit=True)
             return
-        scale_x = viewport.width() / self._pixmap.width()
-        scale_y = viewport.height() / self._pixmap.height()
+        scale_x = viewport.width() / pixmap.width()
+        scale_y = viewport.height() / pixmap.height()
         scale = min(scale_x, scale_y)
         self._set_scale(scale, from_fit=True)
 
     def _set_scale(self, scale: float, from_fit: bool = False) -> None:
-        if self._pixmap.isNull():
+        pixmap = self._rotated_pixmap()
+        if pixmap.isNull():
             return
         self._fit_to_window = from_fit
         scale = max(0.1, min(scale, 4.0))
         self._scale = scale
-        scaled = self._pixmap.scaled(
-            int(self._pixmap.width() * scale),
-            int(self._pixmap.height() * scale),
+        scaled = pixmap.scaled(
+            int(pixmap.width() * scale),
+            int(pixmap.height() * scale),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
@@ -228,10 +266,11 @@ class ImageViewer(QWidget):
     def _update_magnifier(self, pos: QPoint) -> None:
         if not self._magnifier_on or self._pixmap.isNull():
             return
-        # Map cursor position in scaled label to original image coordinates
+        # Map cursor position in scaled label to rotated-image coordinates
         label_pix = self._image_label.pixmap()
         if label_pix is None:
             return
+        pixmap = self._rotated_pixmap()
         label_pos = self._image_label.mapFrom(self._scroll.viewport(), pos)
         if label_pos.x() < 0 or label_pos.y() < 0:
             return
@@ -242,9 +281,9 @@ class ImageViewer(QWidget):
         half = int(self._magnifier_size / (2 * self._magnifier_zoom))
         x0 = max(0, src_x - half)
         y0 = max(0, src_y - half)
-        x1 = min(self._pixmap.width(), src_x + half)
-        y1 = min(self._pixmap.height(), src_y + half)
-        crop = self._pixmap.copy(x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+        x1 = min(pixmap.width(), src_x + half)
+        y1 = min(pixmap.height(), src_y + half)
+        crop = pixmap.copy(x0, y0, max(1, x1 - x0), max(1, y1 - y0))
         mag = crop.scaled(
             self._magnifier_size,
             self._magnifier_size,

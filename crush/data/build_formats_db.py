@@ -2294,7 +2294,7 @@ FORMATS: list[dict[str, Any]] = [
         "forensic_relevance": (
             "Apple's Segmented Binary format — the on-disk storage container for iOS "
             "and macOS Biome data, which replaced much of KnowledgeC from iOS 16 onwards. "
-            "Two versions: SEGB v1 (iOS 15-16, 56-byte header ending with 'SEGB' in ASCII, "
+            "Two versions: SEGB v1 (iOS 14-16, 56-byte header ending with 'SEGB' in ASCII, "
             "32-byte record headers with two Mac Absolute Time timestamps) and "
             "SEGB v2 (iOS 17+, 32-byte header, entries + trailer section). "
             "Each record payload is a protobuf — requiring schema knowledge for full decoding. "

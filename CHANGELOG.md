@@ -4,10 +4,17 @@ All notable changes to Crush will be documented in this file.
 
 ## [Unreleased]
 
+### New Features
+
+- **Image rotation** — the image viewer now has rotate-left and rotate-right buttons (90° steps), useful for photos with incorrect orientation metadata.
+- **Copy Path / Copy File Name** — the filesystem panel's context menu gained a "Copy" submenu with "Copy Path" (full virtual path) and "Copy File Name" entries, grouped under one submenu rather than two more top-level items to keep the already-long menu manageable.
+- **Filesystem panel: hover tooltips for truncated names/paths** — the tree view's Name column and the search results' Name and Path columns now show the full value as a tooltip on hover, so you no longer have to widen the column to read a long file name or path.
+
 ### Bug Fixes
 
 - **Frozen builds could fail to start entirely if `cryptography` failed to load** — `crush.core.vfs` imported `android_backup_crypto`/`ios_keybag` (and therefore `cryptography`) at module load time, so if `cryptography`'s compiled extension failed to load in a packaged build (observed on macOS: a PyInstaller dylib version mismatch — see below), the whole app crashed on startup for every user on that build, not just when opening an Android/iTunes backup. Both are now imported lazily, inside only the methods that actually need them, so a broken `cryptography` load degrades to a normal "Load error" dialog when opening a password-protected mobile backup instead of preventing the app from starting at all.
 - **macOS Intel build: app failed to start (`dlopen` symbol not found in `libssl.3.dylib`)** — under investigation; PyInstaller appears to bundle a stale system/interpreter-provided `libssl.3.dylib` instead of the one `cryptography`'s wheel ships, based on a [known PyInstaller issue pattern](https://github.com/pyinstaller/pyinstaller/issues/8797). The lazy-import fix above contains the blast radius in the meantime; the root cause in the build pipeline is not yet fixed.
+- **SEGB v1 supported iOS range corrected** — the Format Reference entry stated iOS 15-16; SEGB v1 is actually used from iOS 14.
 
 ## v0.13.0 - 2026-07-04
 

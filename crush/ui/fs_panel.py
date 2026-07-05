@@ -11,7 +11,7 @@ import threading
 import time
 
 from PySide6.QtCore import QModelIndex, QSettings, QStringListModel, Qt, Signal, QSortFilterProxyModel, QTimer
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCompleter,
@@ -288,6 +288,7 @@ class FilesystemPanel(QWidget):
         name_item.setData(vfs, _ROLE_VFS)
         name_item.setData(False, _ROLE_LOADED)
         name_item.setEditable(False)
+        name_item.setToolTip(node.name)
 
         size_item = QStandardItem(_format_size(node.size) if not node.is_dir else "")
         size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -467,6 +468,10 @@ class FilesystemPanel(QWidget):
             menu.addSeparator()
             reveal_action = menu.addAction("Open Containing Folder")
         menu.addSeparator()
+        copy_menu = menu.addMenu("Copy")
+        copy_path_action = copy_menu.addAction("Copy Path")
+        copy_name_action = copy_menu.addAction("Copy File Name")
+        menu.addSeparator()
         format_info_action = menu.addAction("Show Format Info")
         menu.addSeparator()
         export_action = menu.addAction("Export…")
@@ -503,6 +508,10 @@ class FilesystemPanel(QWidget):
             self.open_external_requested.emit(node, vfs, "choose")
         elif action == reveal_action:
             self._open_containing_folder(node, vfs)
+        elif action == copy_path_action:
+            QGuiApplication.clipboard().setText(node.path)
+        elif action == copy_name_action:
+            QGuiApplication.clipboard().setText(node.name)
         elif action == format_info_action:
             self.format_info_requested.emit(node, vfs)
         elif action == export_action:
@@ -657,10 +666,12 @@ class FilesystemPanel(QWidget):
             name_item.setData(vfs, _ROLE_VFS)
             name_item.setData(node.name.lower(), _ROLE_SORT)
             name_item.setEditable(False)
+            name_item.setToolTip(node.name)
 
             path_item = QStandardItem(r['path'])
             path_item.setData(r['path'].lower(), _ROLE_SORT)
             path_item.setEditable(False)
+            path_item.setToolTip(r['path'])
 
             size_item = QStandardItem(_format_size(node.size) if not node.is_dir else "")
             size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
