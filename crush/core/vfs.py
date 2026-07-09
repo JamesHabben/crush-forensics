@@ -850,7 +850,16 @@ class SevenZipVFS(VFS):
             self._zf = py7zr.SevenZipFile(self._path, "r", password=password or None)
         except py7zr.exceptions.PasswordRequired as exc:
             raise PasswordRequiredError(f"7z archive is password-protected: {path}") from exc
-        except TypeError as exc:
+        except (TypeError, py7zr.exceptions.Bad7zFile) as exc:
+            # Decrypting the header with the wrong AES key yields garbage
+            # that fails to parse as a valid 7z header structure -- py7zr
+            # has no way to tell "wrong password" apart from "corrupt file"
+            # here, and *which* parse step trips first (and so which
+            # exception type surfaces) is not stable across py7zr versions
+            # or even across archives on different platforms: observed as a
+            # bare TypeError ("Unknown field: ...") on Linux and a
+            # Bad7zFile ("end id expected but ... found") on Windows CI for
+            # the same wrong-password fixture.
             if password:
                 raise WrongPasswordError("Incorrect 7z archive password") from exc
             raise
