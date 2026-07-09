@@ -45,7 +45,7 @@ import math
 import re
 import struct
 import uuid as _uuid_mod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from crush.core.vfs import VFS, VFSNode
@@ -516,10 +516,21 @@ def _derive_row_count(
     cd_eb: int,
     file_size: int,
 ) -> int | None:
-    """Fallback row-count heuristic, used only when a leaf's key slot
+    """Corruption-recovery fallback, used only when a leaf's key slot
     (child[0], handled by _read_cluster_key_info) cannot be read at all —
-    e.g. a corrupt or partially-overwritten file. Takes the most common
-    element count across the leaf's non-ref (scalar) column children.
+    e.g. a corrupt or partially-overwritten file; the primary, spec-driven
+    read has already failed by the time this runs.
+
+    This is not shape-guessing: in a well-formed Cluster leaf every scalar
+    column array holds exactly one entry per row, so all of them share the
+    same declared Element count — that equality is a real structural
+    invariant of cluster.hpp, not an assumption about what the data
+    "usually" looks like. Taking the most common count is a vote across
+    those redundant, independently-stored copies to recover the true count
+    even if corruption skewed a minority of them — the same logic as
+    reconstructing a value from redundant/parity copies. The caller flags
+    the affected table's row_count as estimated (row_count_estimated) so
+    this is never presented to the analyst as an authoritative figure.
     """
     from collections import Counter
     counts: list[int] = []
@@ -1480,23 +1491,31 @@ def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None
     return results
 
 
-def _decode_timestamp(val: int) -> str:
-    """Convert a Realm Timestamp seconds value to a readable UTC string.
+_UNIX_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-    Auto-detects unit by magnitude: seconds → milliseconds → nanoseconds.
-    Falls back to the raw integer string if the value is out of any useful range.
+
+def _decode_timestamp(val: int) -> str:
+    """Convert a Realm Timestamp value (whole seconds since the Unix epoch)
+    to a readable UTC string.
+
+    array_timestamp.hpp always stores a Timestamp as a separate (seconds,
+    nanoseconds) pair; both call sites already combine that pair into whole
+    seconds before calling this, so the unit is known from the spec, not
+    guessed from magnitude. Negative values (dates before 1970) are valid
+    and decoded the same way, not just positive/"plausible" ones.
+
+    Computed via epoch + timedelta rather than datetime.fromtimestamp():
+    fromtimestamp() delegates to the platform C library (gmtime/localtime),
+    and Windows' CRT rejects negative and far-future timestamps that glibc
+    accepts fine (OSError: [Errno 22] Invalid argument) — pure Python
+    date arithmetic gives the same, platform-independent result everywhere.
+    Falls back to the raw integer string only if it's outside what
+    datetime can represent at all (year 1 - 9999).
     """
     try:
-        if 0 < val < 10_000_000_000:          # seconds (1970 – ~2286)
-            dt = datetime.fromtimestamp(val, tz=timezone.utc)
-        elif 0 < val < 10_000_000_000_000:    # milliseconds
-            dt = datetime.fromtimestamp(val / 1_000, tz=timezone.utc)
-        elif 0 < val < 10_000_000_000_000_000_000:  # nanoseconds
-            dt = datetime.fromtimestamp(val / 1_000_000_000, tz=timezone.utc)
-        else:
-            return str(val)
+        dt = _UNIX_EPOCH_UTC + timedelta(seconds=val)
         return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-    except (OSError, OverflowError, ValueError):
+    except (OverflowError, ValueError):
         return str(val)
 
 
@@ -1653,6 +1672,7 @@ def _extract_table_data(
         columns: dict[int, list[Any]] = {info["user_col_idx"]: [] for info in col_infos}
         obj_keys: list[Any] = []
         row_count_total = 0
+        row_count_estimated = False
 
         for leaf_ref, key_offset in leaves:
             leaf_hdr = _parse_array_header(data, leaf_ref)
@@ -1665,6 +1685,7 @@ def _extract_table_data(
                 data, leaf_ref, leaf_eb, file_size
             )
             if leaf_row_count is None:
+                row_count_estimated = True
                 leaf_row_count = _derive_row_count(
                     data, leaf_ref, num_cluster, leaf_eb, file_size
                 ) or 0
@@ -1697,6 +1718,7 @@ def _extract_table_data(
             {
                 "name": schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]",
                 "row_count": row_count_total,
+                "row_count_estimated": row_count_estimated,
                 "columns": columns,
                 "column_names": col_names,
                 "column_types": col_type_names,
