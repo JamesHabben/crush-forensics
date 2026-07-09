@@ -14,7 +14,15 @@ import shutil
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QUrl, QSettings, QTimer
-from PySide6.QtGui import QCloseEvent, QPalette, QColor, QAction, QGuiApplication
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QPalette,
+    QColor,
+    QAction,
+    QGuiApplication,
+)
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
@@ -411,6 +419,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setAcceptDrops(True)
         self._open_windows.append(self)
         self.destroyed.connect(self._remove_window_reference)
         self.session = Session()
@@ -1507,6 +1516,25 @@ class MainWindow(QMainWindow):
     def _about(self) -> None:
         from crush.ui.about_dialog import AboutDialog
         AboutDialog(self).exec()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls() and any(
+            url.isLocalFile() for url in event.mimeData().urls()
+        ):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        # Same load path as "Open file"/"Open folder" (_load_source), so a
+        # dropped item follows the exact same append-vs-replace rule already
+        # in _on_load_finished: a single flat file appends to the current
+        # tree, a folder or archive (anything whose VFS root is a directory)
+        # replaces it — nothing drag & drop specific to decide here.
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if not paths:
+            return
+        event.acceptProposedAction()
+        for path in paths:
+            self._load_source(path, open_after_load=True, append_to_tree=True)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status.showMessage("Closing…")

@@ -19,6 +19,8 @@ Use the **File** menu to load a source:
 
 Opening a file (**Open file…**) appends it to the existing tree as a new root node, so multiple files can be open side by side. Opening a folder replaces the current tree.
 
+You can also **drag and drop** files, archives, or folders straight onto the Crush window instead of using the File menu — it follows the exact same rule: a dropped file appends, a dropped folder or archive (anything that opens as its own browsable tree) replaces. Dropping several items at once loads them one after another. Works the same on Windows, macOS, and Linux.
+
 ---
 
 ## The Interface
