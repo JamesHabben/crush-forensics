@@ -48,6 +48,14 @@ class AbstractParser(ABC):
     SUPPORTED_MIME_TYPES: list[str] = []
     DISPLAY_NAME: str = ""
 
+    # Set True on a parser whose parse() accepts an optional `password`
+    # kwarg for content that's encrypted at the file level (as opposed to
+    # a whole VFS source being password-protected, handled separately via
+    # crush.core.passwords at the VFS layer). The UI only passes `password`
+    # to parsers that declare this, so it stays opt-in per format and the
+    # base parse() signature doesn't force every parser to accept it.
+    SUPPORTS_PASSWORD: bool = False
+
     @abstractmethod
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:
         """Return True if this parser can handle the file.
@@ -59,7 +67,17 @@ class AbstractParser(ABC):
 
     @abstractmethod
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
-        """Parse the file and return a ParseResult."""
+        """Parse the file and return a ParseResult.
+
+        Implementations that set SUPPORTS_PASSWORD = True should additionally
+        accept an optional `password: str | None = None` kwarg, and raise
+        crush.core.passwords.WrongPasswordError if it fails to unlock the
+        content (crush.core.passwords.PasswordRequiredError is for the VFS
+        layer's whole-source case and does not apply here — a per-file
+        "Open as <Format> (Encrypted)…" action always prompts before
+        calling parse(), so there is no password=None-but-needed case to
+        signal).
+        """
         ...
 
     def _ext_match(self, path: str) -> bool:

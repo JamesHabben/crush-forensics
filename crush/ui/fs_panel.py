@@ -433,8 +433,14 @@ class FilesystemPanel(QWidget):
         open_in_new_window_action = None
         if not node.is_dir:
             open_in_new_window_action = menu.addAction("Open in New Window")
-        open_hex_action = menu.addAction("Open in Hex")
-        open_text_action = menu.addAction("Open as Plain Text")
+        open_as_menu = menu.addMenu("Open as")
+        open_hex_action = open_as_menu.addAction("Hex")
+        open_text_action = open_as_menu.addAction("Text")
+        open_proto_action = open_as_menu.addAction("Protobuf")
+        open_realm_encrypted_action = None
+        if not node.is_dir:
+            open_as_menu.addSeparator()
+            open_realm_encrypted_action = open_as_menu.addAction("Realm DB (Encrypted)…")
         open_logs_folder_action = None
         open_multi_log_action   = None
         add_multi_log_action    = None
@@ -456,7 +462,6 @@ class FilesystemPanel(QWidget):
         else:
             open_multi_log_action = menu.addAction("Open in Multi-Log Studio")
             add_multi_log_action  = menu.addAction("Add to Multi-Log Studio")
-        open_proto_action = menu.addAction("Open as Protobuf Viewer")
         open_external_default = None
         open_external_choose = None
         if not node.is_dir:
@@ -502,6 +507,8 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "multi_log_add")
         elif action == open_proto_action:
             self.open_requested.emit(node, vfs, "protobuf")
+        elif action == open_realm_encrypted_action:
+            self.open_requested.emit(node, vfs, "realm_encrypted")
         elif action == open_external_default:
             self.open_external_requested.emit(node, vfs, "default")
         elif action == open_external_choose:

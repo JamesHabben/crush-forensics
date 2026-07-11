@@ -16,7 +16,8 @@ array_blobs_*.hpp, array_timestamp.hpp/.cpp, array_fixed_bytes.hpp,
 array_decimal128.hpp, array_key.hpp, array_basic*.hpp,
 column_type_traits.hpp, bplustree.hpp/.cpp, collection_parent.hpp,
 list.hpp, lnklst.hpp, array_typed_link.hpp, array_mixed.hpp/.cpp,
-data_type.hpp. File-relative citations are in each function's docstring.
+data_type.hpp, dictionary.hpp/.cpp. File-relative citations are in each
+function's docstring.
 
 List and Set columns (including LinkList — Realm's on-disk type code 13,
 a pre-Collections marker that predates the modern ColumnType enum but
@@ -26,17 +27,36 @@ see _walk_bplustree_leaves) and reusing the same per-type leaf decoders
 as regular columns.
 
 Mixed and TypedLink are decoded too (_read_array_mixed,
-_read_array_typed_link), including as a List/Set element type, though
-_read_array_mixed carries an extra caveat in its own docstring: unlike
-everything else in this module it has not been cross-checked against a
-real Realm-produced sample (none existed in the file this parser was
-diagnosed against).
+_read_array_typed_link), including as a List/Set element type. A Mixed
+value that itself holds a nested List/Set/Dictionary is also expanded,
+not shown as a placeholder (array_mixed.hpp's m_refs slot, DataType
+type_List=19/type_Set=20/type_Dictionary=21 — see _read_array_mixed,
+_read_collection_at_ref, _read_dictionary_at_ref), recursing back into
+this same dispatch with a depth cap (_MIXED_MAX_NEST_DEPTH) against a
+corrupt/malicious reference chain. Only a data_type this dispatch
+genuinely doesn't recognise (e.g. Geospatial, which turns out to have no
+case in array_mixed.cpp's store() at all) falls through to a clearly
+labelled "<mixed: unsupported type_N>" marker — never silently.
 
-Not yet decoded: Dictionary<K,V> columns — a genuinely different
-structure (two independent BPlusTrees, for keys and values, whose exact
-linking layout was not confirmed from source) with no sample file
-available to validate against. Their column name/type is still shown;
-values are left as None rather than guessed.
+Dictionary<K,Mixed> columns (_read_dictionary_column) are decoded too: a
+per-row 2-slot "dictionary top" array whose slot 0/1 are BPlusTree roots
+for keys and values respectively, paired by identical index position
+(dictionary.cpp); the key's declared type is read from the spec's
+m_types array rather than the colkey (spec.hpp/.cpp
+get_dictionary_key_type — see _extract_column_info) for a top-level
+Dictionary column, or hardcoded to String for a Dictionary nested inside
+a Mixed value (dictionary.cpp's ref-only constructor initializes
+`m_key_type(type_String)` unconditionally — there is no Spec column to
+consult in that case).
+
+None of the above has a confirming real-world sample in this project's
+test data (only hand-built synthetic fixtures matching the on-disk
+format spec) — everything is dispatched from the declared type either
+way, never guessed from shape, but "spec-derived" and "cross-checked
+against a real Realm-produced file" are different claims. Where a
+detail could not be pinned down by the C++ source itself, the exact gap
+is documented at the point it was needed (e.g. _decode_bid's caveat
+about its own BID-decode arithmetic, not about Realm's file layout).
 """
 from __future__ import annotations
 
@@ -671,6 +691,52 @@ def _read_collection_column(
     return results
 
 
+def _read_dictionary_column(
+    data: bytes,
+    col_ref: int,
+    file_size: int,
+    key_type: int | None,
+) -> list[dict[Any, Any]] | None:
+    """Decode a Dictionary<K,Mixed> column: a flat ref array, one ref per
+    row (0 = empty/no dictionary), each pointing directly to that row's own
+    2-slot "dictionary top" array — no indirection (dictionary.cpp:
+    `if (ref) { m_dictionary_top->init_from_ref(ref); m_keys->init_from_parent();
+    m_values->init_from_parent(); }`).
+
+    Slot 0 of that array is a BPlusTree<K> root for the keys, slot 1 a
+    BPlusTree<Mixed> root for the values (dictionary.cpp constructor:
+    `m_keys->set_parent(m_dictionary_top.get(), 0);
+    m_values->set_parent(m_dictionary_top.get(), 1);` — values are always
+    Mixed-typed regardless of the declared key type). The two trees are
+    paired by identical index position, not an explicit key->value link
+    (dictionary.cpp: `REALM_ASSERT(m_keys->size() == m_values->size())`).
+
+    *key_type* is the DataType read from the spec's m_types array by the
+    caller (_extract_column_info) — dispatched through the same
+    _decode_column_values used for regular columns, since DataType and
+    ColumnType share the same integer values for scalar types. Returns
+    None (not a per-row failure) if the key type could not be determined,
+    since keys cannot be decoded at all without it. Per-instance decoding
+    (the 2-slot top array itself) is shared with Dictionaries nested
+    inside a Mixed value via _read_dictionary_at_ref.
+    """
+    if key_type is None:
+        return None
+    hdr = _parse_array_header(data, col_ref)
+    if hdr is None or not hdr["has_refs"]:
+        return None
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+    count = hdr["Element count (size)"]
+
+    results: list[dict[Any, Any]] = []
+    for i in range(count):
+        top_ref = _read_ref(data, col_ref + 8, i, eb)
+        results.append(_read_dictionary_at_ref(data, top_ref, file_size, key_type))
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Spec / column metadata
 # ---------------------------------------------------------------------------
@@ -745,6 +811,17 @@ def _extract_column_info(
     ColumnAttr). This replaces separately reading and cross-referencing the
     spec's type-code array — the type is already embedded in the colkey.
 
+    For Dictionary columns, the *key* type isn't in the colkey at all —
+    it's packed into the upper 16 bits of the matching entry in the spec's
+    m_types array (spec child[0]), one entry per column in the same full
+    index space as colkeys (including hidden BackLink columns), set by
+    Spec::set_dictionary_key_type / read by Spec::get_dictionary_key_type
+    (spec.hpp/.cpp): `(type & 0xFFFF) + (int64_t(key_type) << 16)`.
+    DataType and ColumnType share the same integer values for the basic
+    scalar types (data_type.hpp: "Value assignments must be kept in sync
+    with column_type.h"), so the extracted key type can be dispatched with
+    the same type_code machinery used for regular columns.
+
     Hidden BackLink columns (type 14) are skipped, matching the public
     column order used by _extract_column_names. Returns None on failure.
     """
@@ -765,9 +842,12 @@ def _extract_column_info(
     if not colkeys:
         return None
 
+    types_ref = _read_ref(data, spec_ref + 8, 0, spec_eb)
+    raw_types = _read_scalar_leaf(data, types_ref, file_size) if 0 < types_ref < file_size else None
+
     infos: list[dict[str, Any]] = []
     user_col_idx = 0
-    for colkey in colkeys:
+    for spec_idx, colkey in enumerate(colkeys):
         if colkey is None:
             continue
         colkey = int(colkey)
@@ -775,6 +855,10 @@ def _extract_column_info(
         if type_code in _HIDDEN_COL_TYPES:
             continue
         attrs = (colkey >> 22) & 0xFF
+        is_dictionary = bool(attrs & _COL_ATTR_DICTIONARY)
+        dictionary_key_type = None
+        if is_dictionary and raw_types and spec_idx < len(raw_types) and raw_types[spec_idx] is not None:
+            dictionary_key_type = (int(raw_types[spec_idx]) >> 16) & 0xFFFF
         infos.append({
             "user_col_idx": user_col_idx,
             "col_index": colkey & 0xFFFF,
@@ -782,8 +866,9 @@ def _extract_column_info(
             "type_code": type_code,
             "nullable": bool(attrs & _COL_ATTR_NULLABLE),
             "is_list": bool(attrs & _COL_ATTR_LIST),
-            "is_dictionary": bool(attrs & _COL_ATTR_DICTIONARY),
+            "is_dictionary": is_dictionary,
             "is_set": bool(attrs & _COL_ATTR_SET),
+            "dictionary_key_type": dictionary_key_type,
         })
         user_col_idx += 1
     return infos if infos else None
@@ -1217,11 +1302,13 @@ def _decode_bid(raw_int: int, total_bits: int) -> str:
     of the combination field alongside 2 exponent bits, so the full
     coefficient reconstructs as msd * 2**t_width + trailing_significand.
 
-    NOTE: implemented directly from the written IEEE 754-2008 encoding
-    rules, not cross-validated against a real Realm-produced Decimal128
-    sample (none appeared in the file this parser was diagnosed against).
-    Treat output with appropriate care and verify against known BID test
-    vectors before relying on it for casework.
+    NOTE: this is a hand-implementation of the public IEEE 754-2008 BID
+    arithmetic itself (combination-field/exponent/coefficient decode), not
+    something Realm's own source needs to define -- the *storage* format
+    (word order, low/high placement) is confirmed from Realm Core source
+    (see _read_array_mixed), but this function's own arithmetic has not
+    been run against known IEEE 754-2008 BID test vectors. Treat output
+    with appropriate care until that verification happens.
     """
     if total_bits == 64:
         g_width, t_width, bias = 13, 50, 398
@@ -1364,7 +1451,12 @@ _MIXED_PAYLOAD_IDX_MASK = 0b1110_0000
 _MIXED_DATA_SHIFT = 8
 
 
-def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None:
+_MIXED_MAX_NEST_DEPTH = 16  # guard against a corrupt/malicious Mixed<->collection reference chain
+
+
+def _read_array_mixed(
+    data: bytes, ref: int, file_size: int, _nest_depth: int = 0,
+) -> list[Any] | None:
     """Decode a Realm ArrayMixed leaf (array_mixed.hpp/.cpp).
 
     Outer array slots: [0]=m_composite (one packed int64 per row — see the
@@ -1374,15 +1466,37 @@ def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None
     TypedLink table+obj key), [3]=m_strings (String/Binary/ObjectId/UUID
     raw bytes, ArrayString-shaped so the trailing zero-terminator is
     stripped the same way a real string column strips it), [4]=m_refs
-    (nested List/Dictionary/Set stored *inside* a Mixed — not decoded here,
-    shown as a placeholder).
+    (List/Set/Dictionary held *inside* a Mixed — array_mixed.hpp's
+    payload_idx enum: payload_idx_ref=4 selects this array; data_type.hpp
+    defines type_List=19/type_Set=20/type_Dictionary=21 as regular
+    DataType values beyond the scalar ones, which is exactly what lands in
+    this dispatch's data_type field).
 
-    NOTE: no Mixed-typed column or list existed in the file this parser was
-    diagnosed against, so this decoder (unlike everything else in this
-    module) has not been cross-checked against a real Realm-produced
-    sample — verify against known test data before relying on it for
-    casework, and treat the Decimal128 word order (w[0]=low, w[1]=high)
-    here as a documented best-effort assumption.
+    List/Set-in-Mixed always has Mixed-typed elements (no static element
+    type exists once nested in a Mixed) and its ref points directly at a
+    BPlusTree<Mixed> root — the same shape _read_collection_column decodes
+    per-row for a top-level List/Set column, just entered directly since
+    here there is exactly one collection per Mixed value.
+
+    Dictionary-in-Mixed is always String-keyed: dictionary.cpp's ref-only
+    constructor (`Dictionary(Allocator&, ColKey, ref_type)`, used when
+    there is no owning Spec column to consult) initializes
+    `m_key_type(type_String)` unconditionally — confirmed from that
+    constructor's body, not assumed.
+
+    Geospatial (type_Geospatial=22) has no case in array_mixed.cpp's
+    store() at all — it isn't a distinct low-level Mixed payload here, so
+    any occurrence falls through to the same "unsupported type" marker as
+    a genuinely unknown value, never silently.
+
+    NOTE: no Mixed-typed column or list has appeared in a real file this
+    parser has been run against yet, only hand-built synthetic fixtures
+    matching the on-disk format spec — dispatch here is still entirely
+    from the format spec, not guessed. The Decimal128 word order
+    (w[0]=low, w[1]=high) is confirmed, not assumed: array_mixed.cpp's
+    write path does `m_int_pairs.add(t.raw()->w[0]); m_int_pairs.add(t.raw()->w[1]);`,
+    and decimal128.hpp's own accessors read `get_coefficient_low()` from
+    w[0] and `get_coefficient_high()` from w[1].
     """
     hdr = _parse_array_header(data, ref)
     if hdr is None or not hdr["has_refs"] or hdr["Element count (size)"] < 4:
@@ -1395,6 +1509,7 @@ def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None
     ints_ref = _read_ref(data, ref + 8, 1, eb)
     pairs_ref = _read_ref(data, ref + 8, 2, eb)
     strings_ref = _read_ref(data, ref + 8, 3, eb)
+    refs_ref = _read_ref(data, ref + 8, 4, eb) if hdr["Element count (size)"] >= 5 else 0
 
     composite = _read_scalar_leaf(data, composite_ref, file_size)
     if composite is None:
@@ -1402,11 +1517,18 @@ def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None
 
     ints = _read_scalar_leaf(data, ints_ref, file_size) if 0 < ints_ref < file_size else None
     pairs = _read_scalar_leaf(data, pairs_ref, file_size) if 0 < pairs_ref < file_size else None
+    refs = _read_scalar_leaf(data, refs_ref, file_size) if 0 < refs_ref < file_size else None
     raw_strings: list[Any] | None = None
     if 0 < strings_ref < file_size:
         raw_strings = _read_array_string_or_binary(
             data, strings_ref, file_size, is_string=False, nullable=False,
         )
+
+    def ref_payload(idx: int) -> int | None:
+        if not refs or idx >= len(refs):
+            return None
+        v = refs[idx]
+        return int(v) if v is not None else None
 
     def string_payload(idx: int) -> bytes | None:
         if not raw_strings or idx >= len(raw_strings):
@@ -1486,9 +1608,98 @@ def _read_array_mixed(data: bytes, ref: int, file_size: int) -> list[Any] | None
         elif data_type == 17:  # UUID
             raw = string_payload(payload_val)
             results.append(_format_uuid(raw) if raw is not None else None)
+        elif data_type in (19, 20):  # List, Set (elements are always Mixed once nested)
+            r = ref_payload(payload_val)
+            if r is None:
+                results.append(None)
+            elif _nest_depth >= _MIXED_MAX_NEST_DEPTH:
+                results.append(f"<mixed: nesting depth limit ({_MIXED_MAX_NEST_DEPTH}) reached>")
+            else:
+                results.append(_read_collection_at_ref(data, r, file_size, _nest_depth + 1))
+        elif data_type == 21:  # Dictionary (always String-keyed -- see docstring)
+            r = ref_payload(payload_val)
+            if r is None:
+                results.append(None)
+            elif _nest_depth >= _MIXED_MAX_NEST_DEPTH:
+                results.append(f"<mixed: nesting depth limit ({_MIXED_MAX_NEST_DEPTH}) reached>")
+            else:
+                results.append(_read_dictionary_at_ref(data, r, file_size, 2, _nest_depth + 1))
         else:
-            results.append(f"<mixed: nested collection or unsupported type_{data_type}>")
+            results.append(f"<mixed: unsupported type_{data_type}>")
     return results
+
+
+def _read_collection_at_ref(
+    data: bytes, row_ref: int, file_size: int, _nest_depth: int,
+) -> list[Any]:
+    """Decode one List/Set instance held inside a Mixed value, from its
+    BPlusTree<Mixed> root ref. Same on-disk shape as a top-level List/Set
+    column's per-row ref (_read_collection_column) — entered directly here
+    since there is exactly one collection per Mixed value, not one per
+    Cluster row.
+    """
+    if row_ref <= 0 or row_ref >= file_size:
+        return []
+    element_info = {
+        "type_code": 6, "nullable": False, "is_list": False,
+        "is_dictionary": False, "is_set": False,
+    }
+    values: list[Any] = []
+    for leaf_ref, _off in _walk_bplustree_leaves(data, row_ref, file_size):
+        leaf_vals = _decode_column_values(data, leaf_ref, file_size, element_info, _nest_depth)
+        if leaf_vals:
+            values.extend(leaf_vals)
+    return values
+
+
+def _read_dictionary_at_ref(
+    data: bytes, top_ref: int, file_size: int, key_type: int, _nest_depth: int = 0,
+) -> dict[Any, Any]:
+    """Decode one Dictionary instance from its 2-slot "dictionary top" ref
+    (dictionary.cpp: slot 0 = keys BPlusTree root, slot 1 = values
+    BPlusTree<Mixed> root, paired by index). Shared by top-level Dictionary
+    columns (_read_dictionary_column, key type read from the spec's
+    m_types) and Dictionaries held inside a Mixed value (_read_array_mixed,
+    key type always String — see its docstring).
+    """
+    if top_ref <= 0 or top_ref >= file_size:
+        return {}
+    top_hdr = _parse_array_header(data, top_ref)
+    if top_hdr is None or not top_hdr["has_refs"] or top_hdr["Element count (size)"] < 2:
+        return {}
+    top_eb = _elem_bytes(top_hdr)
+    if top_eb < 1:
+        return {}
+    keys_root = _read_ref(data, top_ref + 8, 0, top_eb)
+    values_root = _read_ref(data, top_ref + 8, 1, top_eb)
+
+    key_info = {
+        "type_code": key_type, "nullable": False, "is_list": False,
+        "is_dictionary": False, "is_set": False,
+    }
+    value_info = {
+        "type_code": 6, "nullable": False, "is_list": False,
+        "is_dictionary": False, "is_set": False,
+    }
+
+    keys: list[Any] = []
+    if 0 < keys_root < file_size:
+        for leaf_ref, _off in _walk_bplustree_leaves(data, keys_root, file_size):
+            leaf_vals = _decode_column_values(data, leaf_ref, file_size, key_info)
+            if leaf_vals:
+                keys.extend(leaf_vals)
+
+    values: list[Any] = []
+    if 0 < values_root < file_size:
+        for leaf_ref, _off in _walk_bplustree_leaves(data, values_root, file_size):
+            leaf_vals = _decode_column_values(data, leaf_ref, file_size, value_info, _nest_depth)
+            if leaf_vals:
+                values.extend(leaf_vals)
+
+    return {
+        (key if key is not None else f"<null key {j}>"): (values[j] if j < len(values) else None)
+        for j, key in enumerate(keys)
+    }
 
 
 _UNIX_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -1524,16 +1735,19 @@ def _decode_column_values(
     col_ref: int,
     file_size: int,
     info: dict[str, Any],
+    _nest_depth: int = 0,
 ) -> list[Any] | None:
     """Dispatch to the exact decoder for one column's leaf array, based on
     its declared (type, nullable, collection) from the colkey — no
-    structural guessing. Returns None only for Dictionary<K,V> columns
-    (a List/Set/Dictionary of Mixed is also left undecoded for its
-    per-element Mixed content, since Mixed cannot itself hold a
-    Dictionary's key/value pairing without that decoder).
+    structural guessing. *_nest_depth* only matters for Mixed columns: it
+    is threaded through to _read_array_mixed, which increments it each
+    time it descends into a List/Set/Dictionary held *inside* a Mixed
+    value, so a corrupt or maliciously crafted chain of
+    Mixed-holding-collection-holding-Mixed-... cannot recurse unbounded
+    (see _MIXED_MAX_NEST_DEPTH).
     """
     if info["is_dictionary"]:
-        return None  # Dictionary<K,V>: different structure, not yet decoded
+        return _read_dictionary_column(data, col_ref, file_size, info.get("dictionary_key_type"))
 
     type_code = info["type_code"]
     nullable = info["nullable"]
@@ -1571,7 +1785,7 @@ def _decode_column_values(
         raw = _read_array_fixed_bytes(data, col_ref, file_size, 16)
         return None if raw is None else [None if v is None else _format_uuid(v) for v in raw]
     if type_code == 6:  # Mixed
-        return _read_array_mixed(data, col_ref, file_size)
+        return _read_array_mixed(data, col_ref, file_size, _nest_depth)
     if type_code == 16:  # TypedLink
         return _read_array_typed_link(data, col_ref, file_size)
     return None  # unknown type code
@@ -1645,10 +1859,24 @@ def _extract_table_data(
         if not col_infos:
             continue
         col_infos_by_idx = sorted(col_infos, key=lambda info: info["user_col_idx"])
-        col_type_names = [
-            _REALM_COL_TYPES.get(info["type_code"], f"type_{info['type_code']}")
-            for info in col_infos_by_idx
-        ]
+        col_type_names = []
+        for info in col_infos_by_idx:
+            base_type = _REALM_COL_TYPES.get(info["type_code"], f"type_{info['type_code']}")
+            # Dictionary is a ColumnAttr bit on top of a base type_code (usually
+            # Mixed), not its own type_code -- without this, a Dictionary<K,V>
+            # column is unlabelled and looks identical to a plain Mixed column
+            # in the Schema tab. Values are always Mixed (dictionary.cpp); the
+            # key type comes from the spec's m_types array (see
+            # _extract_column_info) and is shown when it was readable.
+            if info["is_dictionary"]:
+                key_type_code = info.get("dictionary_key_type")
+                key_type_name = (
+                    _REALM_COL_TYPES.get(key_type_code, f"type_{key_type_code}")
+                    if key_type_code is not None else "?"
+                )
+                col_type_names.append(f"dictionary<{key_type_name}, mixed>")
+            else:
+                col_type_names.append(base_type)
         col_target_tables: list[str | None] = [None] * len(col_infos_by_idx)
         if table_key_map and any(info["type_code"] in (12, 13) for info in col_infos_by_idx):
             opposite_keys = _read_opposite_table_keys(data, table_ref, t_eb, file_size)
@@ -1764,6 +1992,7 @@ def _scan_strings(data: bytes, min_len: int = 20) -> list[str]:
 class RealmParser(AbstractParser):
     SUPPORTED_EXTENSIONS = [".realm"]
     DISPLAY_NAME = "Realm Database"
+    SUPPORTS_PASSWORD = True
 
     def can_parse(self, path: str, peek_bytes: bytes) -> bool:
         if len(peek_bytes) >= _HEADER_SIZE and peek_bytes[16:20] == _MNEMONIC:
@@ -1773,11 +2002,36 @@ class RealmParser(AbstractParser):
     # Cap for the hex-preview panel; full file is read separately for structure analysis
     _HEX_PREVIEW_BYTES = 1024 * 256  # 256 KB
 
-    def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
+    def parse(self, node: VFSNode, vfs: VFS, password: str | None = None) -> ParseResult:
         # Read the full file so columns near the end of large Realm files are not missed.
         # A separate 256 KB slice is kept for the HexViewer tab.
         with vfs.open(node) as src:
             full_data = src.read()
+
+        if password is not None:
+            # Explicit "Open as Realm DB (Encrypted)…" path only -- the normal
+            # open flow never passes a password, since a header that doesn't
+            # decode is equally consistent with "encrypted" and "corrupt/
+            # non-standard", and only the explicit action means the caller
+            # actually has a key to try (see WrongPasswordError below for the
+            # retry loop that action drives).
+            from crush.core.realm_crypto import decrypt_realm_file, parse_hex_key
+
+            key = parse_hex_key(password)
+            full_data = decrypt_realm_file(full_data, key)
+            if len(full_data) < _HEADER_SIZE or full_data[16:20] != _MNEMONIC:
+                from crush.core.passwords import WrongPasswordError
+
+                raise WrongPasswordError(
+                    "Decrypted data doesn't look like a Realm file (wrong key?)"
+                )
+
+        # Not node.size: after decryption full_data is the plaintext buffer,
+        # shorter than the on-disk encrypted file (metadata pages stripped
+        # out) -- every offset bounds-check below must be against the
+        # buffer that's actually being read, not the physical file size.
+        file_size = len(full_data)
+
         preview = full_data[: self._HEX_PREVIEW_BYTES]
 
         header_info = _parse_realm_header(full_data)
@@ -1795,8 +2049,8 @@ class RealmParser(AbstractParser):
 
             hdr0 = _parse_array_header(full_data, top_ref0_val)
             hdr1 = _parse_array_header(full_data, top_ref1_val)
-            children0 = _extract_root_children(full_data, top_ref0_val, node.size)
-            children1 = _extract_root_children(full_data, top_ref1_val, node.size)
+            children0 = _extract_root_children(full_data, top_ref0_val, file_size)
+            children1 = _extract_root_children(full_data, top_ref1_val, file_size)
 
             top_refs = {
                 "top_ref_0": {
@@ -1817,25 +2071,25 @@ class RealmParser(AbstractParser):
             active_offset = top_ref1_val if active_idx == 1 else top_ref0_val
             inactive_offset = top_ref0_val if active_idx == 1 else top_ref1_val
             inactive_ref_idx = 0 if active_idx == 1 else 1
-            schema = _extract_schema(full_data, active_offset, node.size)
-            inactive_schema = _extract_schema(full_data, inactive_offset, node.size)
+            schema = _extract_schema(full_data, active_offset, file_size)
+            inactive_schema = _extract_schema(full_data, inactive_offset, file_size)
 
         strings = _scan_strings(full_data)
 
         tables: list[dict[str, Any]] = []
         if header_info and schema:
-            table_key_map = _build_table_key_map(full_data, active_offset, schema, node.size)
+            table_key_map = _build_table_key_map(full_data, active_offset, schema, file_size)
             tables = _extract_table_data(
-                full_data, active_offset, schema, node.size, table_key_map
+                full_data, active_offset, schema, file_size, table_key_map
             )
 
         inactive_tables: list[dict[str, Any]] = []
         if header_info and inactive_schema:
             inactive_table_key_map = _build_table_key_map(
-                full_data, inactive_offset, inactive_schema, node.size
+                full_data, inactive_offset, inactive_schema, file_size
             )
             inactive_tables = _extract_table_data(
-                full_data, inactive_offset, inactive_schema, node.size, inactive_table_key_map
+                full_data, inactive_offset, inactive_schema, file_size, inactive_table_key_map
             )
 
         # Inject schema-level diff into top_refs so the viewer can display it.
@@ -1859,8 +2113,8 @@ class RealmParser(AbstractParser):
         # Free-list extraction from both refs — merged with source tagging.
         freed_blocks: list[dict[str, Any]] = []
         if header_info:
-            active_fl  = _extract_free_list(full_data, active_offset,   node.size)
-            inactive_fl = _extract_free_list(full_data, inactive_offset, node.size)
+            active_fl  = _extract_free_list(full_data, active_offset,   file_size)
+            inactive_fl = _extract_free_list(full_data, inactive_offset, file_size)
             # Merge: prefer the entry object from whichever ref has it;
             # "both" wins over individual, active-only appears last (most recently freed)
             seen: dict[tuple[int, int], dict[str, Any]] = {}
@@ -1895,6 +2149,9 @@ class RealmParser(AbstractParser):
             "Format": "Realm Database",
             "File size": f"{node.size:,} B",
         }
+        if password is not None:
+            meta["Encrypted"] = "Yes (AES-256, key supplied)"
+            meta["Decrypted size"] = f"{file_size:,} B"
         if header_info:
             meta["Header mnemonic"] = header_info.get("Mnemonic", "?")
             meta["File format"] = (

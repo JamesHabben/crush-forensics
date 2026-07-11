@@ -228,6 +228,54 @@ def test_realm_schema_extraction(tmp_path: Path) -> None:
     assert result.metadata.get("Tables found") == "2"
 
 
+def test_realm_parser_decrypts_with_correct_key(tmp_path: Path) -> None:
+    """RealmParser.parse(..., password=hex_key) decrypts an encrypted file
+    and parses it exactly like the equivalent plaintext file -- end-to-end
+    through the real parser, not just the isolated crypto module."""
+    import os
+
+    from crush.core.realm_crypto import _PAGE_SIZE
+    from crush.tests.test_realm_crypto import _encrypt_realm_file
+
+    SCHEMA_OFFSET = 24
+    ROOT_OFFSET = SCHEMA_OFFSET + 72
+    entry0 = b"metadata\x00" + b"\x00" * 23
+    entry1 = b"class_Task\x00" + b"\x00" * 21
+    schema_hdr = b"\x41\x41\x41\x41\x0E" + (2).to_bytes(3, "big")
+    schema_array = schema_hdr + entry0 + entry1
+    root_hdr_bytes = b"\x41\x41\x41\x41\x46" + (1).to_bytes(3, "big")
+    ref_payload = SCHEMA_OFFSET.to_bytes(4, "little") + b"\x00" * 4
+    root_array = root_hdr_bytes + ref_payload
+    file_hdr = (
+        (0).to_bytes(8, "little")
+        + ROOT_OFFSET.to_bytes(8, "little")
+        + b"T-DB"
+        + bytes([24, 24, 0, 0x01])
+    )
+    plaintext = file_hdr + schema_array + root_array
+    plaintext += b"\x00" * (-len(plaintext) % _PAGE_SIZE)  # pad to a full page
+
+    key = os.urandom(64)
+    encrypted = _encrypt_realm_file(plaintext, key)
+
+    realm_path = tmp_path / "encrypted.realm"
+    realm_path.write_bytes(encrypted)
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "encrypted.realm")
+
+    parser = RealmParser()
+    result = parser.parse(node, vfs, password=key.hex())
+
+    assert result.viewer_type == "realm"
+    assert "class_Task" in result.data["schema"]
+    assert result.metadata.get("Encrypted", "").startswith("Yes")
+
+    from crush.core.passwords import WrongPasswordError
+
+    with pytest.raises(WrongPasswordError):
+        parser.parse(node, vfs, password=os.urandom(64).hex())
+
+
 def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> None:
     """When a leaf's key slot (child[0]) is unreadable (e.g. corruption),
     row_count falls back to _derive_row_count and the table is flagged
@@ -279,6 +327,181 @@ def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> N
     assert t["row_count_estimated"] is True
     assert t["row_count"] == 2  # recovered via the column-element-count vote
     assert t["columns"][0] == [10, 20]
+
+
+def test_extract_table_data_decodes_dictionary_column() -> None:
+    """Dictionary<String, Mixed> column, one row: {"k": 5}.
+
+    Exercises the full chain from dictionary.cpp/spec.cpp: colkey attrs bit
+    0x40 (is_dictionary) selects _read_dictionary_column; the key type
+    (String=2) comes from the spec's m_types array (upper 16 bits, per
+    Spec::get_dictionary_key_type), not the colkey; the per-row ref points
+    directly at a 2-slot "dictionary top" array (slot 0 = keys BPlusTree
+    root, slot 1 = values BPlusTree root); the single Mixed value is
+    decoded via the composite-encoding inline-Int path (data_type=0,
+    payload_idx_flag=0, payload_val=5).
+    """
+    from crush.parsers.realm_parser import _extract_table_data
+
+    buf = bytearray(b"\x00" * 8)
+
+    def emit(b: bytes) -> int:
+        off = len(buf)
+        buf.extend(b)
+        return off
+
+    # -- keys leaf: ArrayStringShort, one entry "k" (width=8, content_area=7,
+    #    content_len=1 -> pad=6, matching test_read_array_string_short_inline)
+    key_entry = b"k" + b"\x00" * 6 + bytes([6])
+    keys_leaf_ref = emit(_array_hdr(0x0C, 1) + key_entry)
+
+    # -- values leaf: ArrayMixed, one row, inline Int(5):
+    #    composite = (5 << 8) | (0 << 5) | (0 + 1) = 1281
+    composite_ref = emit(_array_hdr(0x0C, 1) + _pad8((1281).to_bytes(8, "little", signed=True)))
+    values_leaf_ref = emit(_array_hdr(0x46, 4) + _pad8(
+        composite_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") * 3
+    ))
+
+    # -- per-row "dictionary top" array: slot 0 = keys root, slot 1 = values root
+    top_ref = emit(_array_hdr(0x46, 2) + _pad8(
+        keys_leaf_ref.to_bytes(4, "little") + values_leaf_ref.to_bytes(4, "little")
+    ))
+
+    # -- column-level flat ref array, one row -> top_ref
+    dict_col_ref = emit(_array_hdr(0x46, 1) + _pad8(top_ref.to_bytes(4, "little")))
+
+    # -- cluster leaf: child[0] = tagged row count (1<<1)|1 = 3 (compact form)
+    cluster_root_ref = emit(_array_hdr(0x46, 2) + _pad8(
+        (3).to_bytes(4, "little") + dict_col_ref.to_bytes(4, "little")
+    ))
+
+    names_ref = emit(_array_hdr(0x0C, 1) + _pad8(b"d\x00\x00\x00\x00\x00\x00\x00"))
+
+    # colkey: col_index=0, type_code=6 (Mixed), attrs=0x40 (is_dictionary)
+    colkey = (6 << 16) | (0x40 << 22)
+    colkeys_ref = emit(_array_hdr(0x0C, 1) + _pad8(colkey.to_bytes(8, "little", signed=True)))
+
+    # m_types[0]: base type (6=Mixed) in low 16 bits, key type (2=String) in high 16 bits
+    types_entry = 6 | (2 << 16)
+    types_ref = emit(_array_hdr(0x0C, 1) + _pad8(types_entry.to_bytes(8, "little", signed=True)))
+
+    spec_ref = emit(_array_hdr(0x46, 6) + _pad8(
+        types_ref.to_bytes(4, "little")
+        + names_ref.to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+        + colkeys_ref.to_bytes(4, "little")
+    ))
+
+    table_ref = emit(_array_hdr(0x46, 3) + _pad8(
+        spec_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") + cluster_root_ref.to_bytes(4, "little")
+    ))
+    table_refs_ref = emit(_array_hdr(0x46, 1) + _pad8(table_ref.to_bytes(4, "little")))
+    root_ref = emit(_array_hdr(0x46, 2) + _pad8(
+        (0).to_bytes(4, "little") + table_refs_ref.to_bytes(4, "little")
+    ))
+
+    data = bytes(buf)
+    tables = _extract_table_data(data, root_ref, ["class_Dict"], len(data))
+
+    assert len(tables) == 1
+    t = tables[0]
+    assert t["row_count_estimated"] is False
+    assert t["row_count"] == 1
+    assert t["columns"][0] == [{"k": 5}]
+    assert t["column_types"][0] == "dictionary<string, mixed>"
+
+
+def test_read_array_mixed_decodes_nested_list() -> None:
+    """A List held inside a Mixed value: composite data_type=19 (List),
+    payload_idx=payload_idx_ref(4) pointing into m_refs at an ArrayMixed
+    leaf (the List's own BPlusTree<Mixed> "root" -- non-inner, so
+    _walk_bplustree_leaves resolves it directly) holding one inline
+    Int(7) element."""
+    from crush.parsers.realm_parser import _read_array_mixed
+
+    buf = bytearray(b"\x00" * 8)
+
+    def emit(b: bytes) -> int:
+        off = len(buf)
+        buf.extend(b)
+        return off
+
+    # -- the List's single element: inline Int(7) -> composite = (7<<8)|(0<<5)|(0+1) = 1793
+    inner_composite_ref = emit(_array_hdr(0x0C, 1) + _pad8((1793).to_bytes(8, "little", signed=True)))
+    inner_mixed_ref = emit(_array_hdr(0x46, 4) + _pad8(
+        inner_composite_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") * 3
+    ))
+
+    # -- outer ArrayMixed: one row, data_type=19 (List), payload_idx_ref(4), payload_val=0
+    outer_composite_val = (0 << 8) | (4 << 5) | (19 + 1)
+    outer_composite_ref = emit(_array_hdr(0x0C, 1) + _pad8(
+        outer_composite_val.to_bytes(8, "little", signed=True)
+    ))
+    outer_refs_ref = emit(_array_hdr(0x0C, 1) + _pad8(
+        inner_mixed_ref.to_bytes(8, "little", signed=True)
+    ))
+    outer_mixed_ref = emit(_array_hdr(0x46, 5) + _pad8(
+        outer_composite_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") * 3
+        + outer_refs_ref.to_bytes(4, "little")
+    ))
+
+    data = bytes(buf)
+    assert _read_array_mixed(data, outer_mixed_ref, len(data)) == [[7]]
+
+
+def test_read_array_mixed_unknown_type_is_visible_not_silent() -> None:
+    """A data_type that isn't one of the known scalars or List/Set/Dictionary
+    (e.g. Geospatial=22, which has no case in array_mixed.cpp's store() at
+    all) must never disappear or read as a plain value -- it has to show
+    up as a clearly-flagged placeholder string."""
+    from crush.parsers.realm_parser import _read_array_mixed
+
+    buf = bytearray(b"\x00" * 8)
+
+    def emit(b: bytes) -> int:
+        off = len(buf)
+        buf.extend(b)
+        return off
+
+    composite_val = (0 << 8) | (0 << 5) | (22 + 1)  # data_type=22 (Geospatial)
+    composite_ref = emit(_array_hdr(0x0C, 1) + _pad8(composite_val.to_bytes(8, "little", signed=True)))
+    outer_mixed_ref = emit(_array_hdr(0x46, 4) + _pad8(
+        composite_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") * 3
+    ))
+
+    data = bytes(buf)
+    result = _read_array_mixed(data, outer_mixed_ref, len(data))
+    assert result == ["<mixed: unsupported type_22>"]
+
+
+def test_read_array_mixed_nested_collection_depth_limit_is_visible() -> None:
+    """A List-in-Mixed encountered once _nest_depth already reached
+    _MIXED_MAX_NEST_DEPTH must not recurse further (guards against a
+    corrupt/malicious Mixed<->collection reference chain) -- and must say
+    so visibly rather than silently returning an empty/truncated result."""
+    from crush.parsers.realm_parser import _MIXED_MAX_NEST_DEPTH, _read_array_mixed
+
+    buf = bytearray(b"\x00" * 8)
+
+    def emit(b: bytes) -> int:
+        off = len(buf)
+        buf.extend(b)
+        return off
+
+    inner_mixed_ref = emit(_array_hdr(0x46, 4) + _pad8((0).to_bytes(4, "little") * 4))
+    composite_val = (0 << 8) | (4 << 5) | (19 + 1)  # List, payload_idx_ref, payload_val=0
+    composite_ref = emit(_array_hdr(0x0C, 1) + _pad8(composite_val.to_bytes(8, "little", signed=True)))
+    refs_ref = emit(_array_hdr(0x0C, 1) + _pad8(inner_mixed_ref.to_bytes(8, "little", signed=True)))
+    outer_mixed_ref = emit(_array_hdr(0x46, 5) + _pad8(
+        composite_ref.to_bytes(4, "little") + (0).to_bytes(4, "little") * 3
+        + refs_ref.to_bytes(4, "little")
+    ))
+
+    data = bytes(buf)
+    result = _read_array_mixed(data, outer_mixed_ref, len(data), _nest_depth=_MIXED_MAX_NEST_DEPTH)
+    assert result == [f"<mixed: nesting depth limit ({_MIXED_MAX_NEST_DEPTH}) reached>"]
 
 
 def _array_hdr(flags: int, size: int) -> bytes:

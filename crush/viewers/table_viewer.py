@@ -835,6 +835,15 @@ class TableViewer(QWidget):
                         "\"v_<table>\" view for already-resolved link names."
                     )
                     cell.setData(val, Qt.ItemDataRole.UserRole)
+                elif isinstance(val, dict):
+                    # Realm Dictionary<K,Mixed> columns decode to a Python dict.
+                    cell = QStandardItem(str(val) if val else "{}")
+                    cell.setForeground(Qt.GlobalColor.gray if not val else QColor("#2a9d8f"))
+                    cell.setToolTip(
+                        f"Dictionary column — {len(val)} entrie(s). Stored as JSON text in "
+                        "SQL exports; query with json_each(..., 'value')."
+                    )
+                    cell.setData(val, Qt.ItemDataRole.UserRole)
                 else:
                     cell = QStandardItem(str(val))
                     if row_color:

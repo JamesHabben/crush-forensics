@@ -44,7 +44,7 @@ Limitations
 - Parse errors show an error node in the Tree Viewer.
 
 ### Protobuf (Explicit Only)
-- Open via context menu: **Open as Protobuf Viewer**.
+- Open via context menu: **Open as** → **Protobuf**.
 - Performs a schema-less wire-format decode and displays it in the Protobuf Viewer.
 
 Limitations
@@ -80,17 +80,18 @@ Limitations
 ### Realm Database
 - Parses `.realm` files and opens them in the Realm Viewer.
 - Extracts: file header metadata, schema/class list, top-ref comparison across header slots, and table/column data.
-- Column decoding is spec-driven — each column's on-disk layout (Cluster/ClusterTree B+-tree, and each of Int/Bool/String/Binary/Timestamp/Float/Double/Decimal128/ObjectId/UUID/Link/LinkList/Set) is dispatched from its actual declared type, not guessed from the data's shape.
+- Column decoding is spec-driven — each column's on-disk layout (Cluster/ClusterTree B+-tree, and each of Int/Bool/String/Binary/Timestamp/Float/Double/Decimal128/ObjectId/UUID/Link/LinkList/Set/Dictionary) is dispatched from its actual declared type, not guessed from the data's shape.
 - SQL queries run against a temporary SQLite representation of the data; the SQL editor supports autocomplete. Tables with Link/LinkList columns get a matching `v_<table>` view with those columns already resolved to the linked row's data.
 - Double-clicking a Summary row navigates directly to that table.
 - The Views tab resolves Link/LinkList columns to chosen columns of the linked table interactively, opened as a new tab (no SQL needed).
 - BLOB column cells expose raw bytes in the Blob Inspector on double-click.
+- Encrypted `.realm` files (Realm's built-in AES-256-CBC + HMAC-SHA224 per-page encryption) are supported when the 64-byte encryption key is known — right-click the file → **Open as** → **Realm DB (Encrypted)…**, enter the key as a hex string. This is a raw key the app itself generates and stores (e.g. Keychain/Keystore), not a password — there is no key-derivation step. Auto-detection on a normal double-click open is intentionally not attempted (a header that fails to decode is equally consistent with "encrypted" and "corrupt/non-standard", and content alone can't distinguish the two), so encrypted files are only recognized as `.realm` at all via their extension.
 
 Limitations
-- Encrypted `.realm` files (Realm's built-in AES-256 database encryption) are not supported — only unencrypted files are parsed.
-- Dictionary-typed columns are not yet decoded (shown as raw/undecoded) — they use a different two-BPlusTree key/value structure that isn't covered yet.
-- Mixed and TypedLink values are decoded on their own or as a List/Set element, but a Mixed value that itself holds a nested List/Dictionary/Set is shown as a placeholder, not expanded.
-- Some column types (Decimal128, ObjectId, UUID, Mixed, Float/Double) are verified against hand-built synthetic test data matching the on-disk format spec, not a confirmed real-world sample of that type — none appeared in the files this parser has been tested against so far.
+- An encrypted file without a `.realm` extension cannot be identified as a Realm database at all — its content is ciphertext, indistinguishable from random bytes without the key, so there is no reliable content-based signal to fall back on the way there is for unencrypted files (the "T-DB" mnemonic).
+- Dictionary<K,Mixed> columns are decoded — a per-row 2-slot array whose slots are independent BPlusTree roots for keys and values, paired by index position (dictionary.cpp), with the key's declared type read from the spec's `m_types` array rather than the colkey. Values are always Mixed, same decoder/limitations as Mixed columns below.
+- Mixed and TypedLink values are decoded on their own or as a List/Set/Dictionary-value element. A Mixed value that itself holds a nested List/Set/Dictionary is expanded too (recursively, up to a depth cap that guards against a corrupt/malicious reference chain), with a nested Dictionary always treated as String-keyed since there is no Spec column to read a key type from in that case. Geospatial values (`type_Geospatial`) have no dedicated on-disk case in Realm Core's Mixed storage at all, so any occurrence falls through to a clearly labelled "unsupported type" marker rather than being silently dropped or shown as blank.
+- Decimal128, ObjectId, UUID, Mixed, Float/Double, and Dictionary are all dispatched from the declared type same as every other column — none of them are guessed from shape. They are verified against hand-built synthetic test data matching the on-disk format spec (and, for Mixed's Decimal128 word order and UUID's byte order specifically, against the relevant Realm Core source directly) rather than a confirmed real-world sample of that type, since none has appeared in the files this parser has been tested against so far.
 - On a corrupt or partially-overwritten file, if a Cluster leaf's own row-count slot can't be read, the row count is recovered by cross-checking the (still spec-defined) element counts of that leaf's column arrays instead — a corruption-recovery vote across redundant copies, not a guess on well-formed data. Affected tables are marked "(estimated — file corruption)" in the Schema tab and get a note in the Summary tab; this never happens on an intact file.
 - Parse failures fall back to Hex Viewer.
 

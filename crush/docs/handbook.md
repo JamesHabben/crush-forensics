@@ -67,11 +67,13 @@ The left panel shows the loaded archive or folder as a tree.
 - **Right-click** a file or folder for options:
   - **Open** — best viewer for the format
   - **Open in New Window** — loads the file into a fresh Crush window without affecting the current session. Works for any file, including ones nested inside an already-open ZIP/TAR/7z archive — the file is transparently extracted to a temp location for the new window
-  - **Open in Hex** — force raw hex view
-  - **Open as Plain Text** — force text view
+  - **Open as** — submenu to force a specific viewer regardless of auto-detection:
+    - **Hex** — force raw hex view
+    - **Text** — force text view
+    - **Protobuf** — schema-less Protobuf decode (optionally load a `.proto` schema)
+    - **Realm DB (Encrypted)…** — decrypt and open a Realm database given its 64-byte encryption key (as a hex string). This is the only way to open an encrypted `.realm` file — a normal double-click never prompts for a key, since a header that fails to decode is equally consistent with "encrypted" and "corrupt/non-standard" and can't be told apart from content alone
   - **Open in Multi-Log Studio** — structured log viewer with level/time/text filtering and multi-source support
   - **Add to Multi-Log Studio** — adds the file as an additional source to the currently open studio tab
-  - **Open as Protobuf Viewer** — schema-less Protobuf decode (optionally load a `.proto` schema)
   - **Open External (Default)** — hand off to the OS default application
   - **Open External (Choose App…)** — pick an application
   - **Show Format Info** — opens a popup showing the identified format name, category, platforms, parser support status, and forensic relevance. For known formats an **Open Reference…** button links to the format specification. Also updates the Properties panel. Works for unsupported formats — useful for quickly understanding what a file is before deciding how to examine it
@@ -515,7 +517,7 @@ The temporary file is deleted automatically when the viewer is closed.
 
 ### Protobuf Viewer
 
-Opens via right-click → **Open as Protobuf Viewer**. Performs a schema-less wire-format decode showing field numbers, wire types, and values.
+Opens via right-click → **Open as** → **Protobuf**. Performs a schema-less wire-format decode showing field numbers, wire types, and values.
 
 **Multi-interpretation display** — because the wire format carries no type information, every numeric field shows all plausible readings as dimmed child rows. An interpretation is only shown when the value falls within a plausible range; out-of-range candidates are suppressed silently.
 

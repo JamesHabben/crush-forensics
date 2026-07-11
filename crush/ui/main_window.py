@@ -523,6 +523,7 @@ class MainWindow(QMainWindow):
 
         # Right dock: properties panel
         self._props_panel = PropertiesPanel(self)
+        self._props_panel.format_info_requested.connect(self._show_format_info)
         self._props_dock = QDockWidget("Properties", self)
         self._props_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self._props_dock.setFeatures(
@@ -1043,7 +1044,7 @@ class MainWindow(QMainWindow):
             result = parser.parse(node, vfs)
             result = self._enrich_with_format_info(parser, node, vfs, result)
             self._show_result(node, result, vfs)
-            self._props_panel.update_properties(node, result.metadata)
+            self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(
                 f"{node.path}  [{parser.DISPLAY_NAME}]"
             )
@@ -1062,7 +1063,7 @@ class MainWindow(QMainWindow):
             result = ParseResult(viewer_type="hex", data=hex_bytes)
             result = self._enrich_with_format_info(None, node, vfs, result)
             self._show_result(node, result, vfs)
-            self._props_panel.update_properties(node, result.metadata)
+            self._props_panel.update_properties(node, result.metadata, vfs)
             return
         if mode == "text":
             self._hash_node_if_integrity(node, vfs)
@@ -1075,7 +1076,7 @@ class MainWindow(QMainWindow):
             result = ParseResult(viewer_type="text", data=text)
             result = self._enrich_with_format_info(None, node, vfs, result)
             self._show_result(node, result, vfs)
-            self._props_panel.update_properties(node, result.metadata)
+            self._props_panel.update_properties(node, result.metadata, vfs)
             return
         if mode == "multi_log":
             self._hash_node_if_integrity(node, vfs)
@@ -1131,7 +1132,7 @@ class MainWindow(QMainWindow):
                 result = parser.parse(node, vfs)
                 result = self._enrich_with_format_info(parser, node, vfs, result)
                 self._show_result(node, result, vfs)
-                self._props_panel.update_properties(node, result.metadata)
+                self._props_panel.update_properties(node, result.metadata, vfs)
                 self._status.showMessage(
                     f"{node.path}  [{parser.DISPLAY_NAME}]"
                 )
@@ -1139,7 +1140,42 @@ class MainWindow(QMainWindow):
                 self._status.showMessage(f"Protobuf parse error: {exc}")
                 QMessageBox.warning(self, "Protobuf parse error", str(exc))
             return
+        if mode == "realm_encrypted":
+            self._hash_node_if_integrity(node, vfs)
+            self._open_encrypted_realm(node, vfs)
+            return
         self._open_node(node, vfs)
+
+    def _open_encrypted_realm(self, node: VFSNode, vfs: VFS, was_wrong: bool = False) -> None:
+        from crush.core.passwords import WrongPasswordError
+        from crush.parsers.realm_parser import RealmParser
+
+        title = "Incorrect Key" if was_wrong else "Realm Encryption Key"
+        prompt = (
+            "Incorrect key. Please try again (64-byte key as a hex string):"
+            if was_wrong
+            else "Enter the 64-byte Realm encryption key as a hex string:"
+        )
+        key_text, ok = QInputDialog.getText(self, title, prompt, QLineEdit.EchoMode.Normal)
+        if not ok or not key_text:
+            self._status.showMessage("Load cancelled: encryption key required")
+            return
+
+        parser = RealmParser()
+        try:
+            result = parser.parse(node, vfs, password=key_text)
+        except WrongPasswordError:
+            self._open_encrypted_realm(node, vfs, was_wrong=True)
+            return
+        except Exception as exc:
+            self._status.showMessage(f"Realm decrypt error: {exc}")
+            QMessageBox.warning(self, "Realm decrypt error", str(exc))
+            return
+
+        result = self._enrich_with_format_info(parser, node, vfs, result)
+        self._show_result(node, result, vfs)
+        self._props_panel.update_properties(node, result.metadata, vfs)
+        self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME} — decrypted]")
 
     def _open_multi_log_window(self, node: VFSNode, vfs: VFS) -> QWidget:
         """Open *node* in a new, standalone Multi-Log Studio window.
@@ -1238,7 +1274,7 @@ class MainWindow(QMainWindow):
         try:
             result = parser.parse(node, vfs)
             self._show_result(node, result, vfs)
-            self._props_panel.update_properties(node, result.metadata)
+            self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(f"Opened pasted data  [{parser.DISPLAY_NAME}]")
         except Exception as exc:
             self._status.showMessage(f"Parse error: {exc}")
@@ -1258,7 +1294,7 @@ class MainWindow(QMainWindow):
         try:
             result = parser.parse(node, vfs)
             self._show_result(node, result, vfs)
-            self._props_panel.update_properties(node, result.metadata)
+            self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(f"Opened artifact: {name}  [{parser.DISPLAY_NAME}]")
         except Exception as exc:
             self._status.showMessage(f"Artifact parse error: {exc}")
@@ -1323,7 +1359,7 @@ class MainWindow(QMainWindow):
             metadata["Total size"] = _format_size(vfs.total_size(node))
         else:
             metadata["Size"] = _format_size(node.size)
-        self._props_panel.update_properties(node, metadata)
+        self._props_panel.update_properties(node, metadata, vfs)
 
     def _show_result(self, node: VFSNode, result: ParseResult, vfs: VFS) -> None:
         from crush.ui.viewer_factory import make_viewer
@@ -1461,8 +1497,6 @@ class MainWindow(QMainWindow):
                 fmt_meta["Platforms"] = fmt.platforms.replace(",", ", ")
             if fmt.forensic_relevance:
                 fmt_meta["Forensic relevance"] = fmt.forensic_relevance
-            if fmt.links:
-                fmt_meta["Reference"] = fmt.links[0][1]
             # Parser metadata takes precedence over format defaults
             merged = {**fmt_meta, **result.metadata}  # type: ignore[union-attr]
             return ParseResult(
@@ -1500,9 +1534,7 @@ class MainWindow(QMainWindow):
                 if fmt.forensic_relevance:
                     meta["Forensic relevance"] = fmt.forensic_relevance
                 meta["Parser support"] = "Supported" if fmt.parser_class else "Not yet supported"
-                if fmt.links:
-                    meta["Reference"] = fmt.links[0][1]
-                self._props_panel.update_properties(node, meta)
+                self._props_panel.update_properties(node, meta, vfs)
                 self._props_dock.show()
                 self._props_dock.raise_()
         except Exception as exc:
