@@ -857,8 +857,10 @@ def _extract_column_info(
         attrs = (colkey >> 22) & 0xFF
         is_dictionary = bool(attrs & _COL_ATTR_DICTIONARY)
         dictionary_key_type = None
-        if is_dictionary and raw_types and spec_idx < len(raw_types) and raw_types[spec_idx] is not None:
-            dictionary_key_type = (int(raw_types[spec_idx]) >> 16) & 0xFFFF
+        if is_dictionary and raw_types and spec_idx < len(raw_types):
+            raw_type_val = raw_types[spec_idx]
+            if raw_type_val is not None:
+                dictionary_key_type = (int(raw_type_val) >> 16) & 0xFFFF
         infos.append({
             "user_col_idx": user_col_idx,
             "col_index": colkey & 0xFFFF,
