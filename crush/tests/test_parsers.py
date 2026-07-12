@@ -59,6 +59,204 @@ def test_sqlite_parser_parse(tmp_path: Path) -> None:
     assert result.data["messages"]["rows"][0][1] == "hello"
 
 
+def _make_sqlcipher(path: Path, password: str, *, wal: bool = False) -> None:
+    from sqlcipher3 import dbapi2 as sqlcipher
+
+    conn = sqlcipher.connect(str(path))
+    conn.execute(f"PRAGMA key = '{password}'")
+    if wal:
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, sender TEXT, body TEXT)")
+    conn.executemany(
+        "INSERT INTO messages (sender, body) VALUES (?, ?)",
+        [("alice@example.com", "Hello Bob"), ("bob@example.com", "Hi Alice")],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_sqlcipher_can_parse_returns_false_without_a_key(tmp_path: Path) -> None:
+    """An encrypted file's content -- including the first 16 bytes, which
+    would be the SQLite magic header on a plaintext file -- is ciphertext,
+    indistinguishable from corrupt/other binary data. can_parse() must stay
+    False so a normal double-click open never auto-prompts for a password;
+    only the explicit "Open as -> SQLite DB (SQLCipher)…" action tries."""
+    db_path = tmp_path / "encrypted.db"
+    _make_sqlcipher(db_path, "hunter2")
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    assert parser.can_parse(node.path, vfs.peek(node)) is False
+
+
+def test_sqlcipher_wrong_password_raises_wrong_password_error(tmp_path: Path) -> None:
+    from crush.core.passwords import WrongPasswordError
+
+    db_path = tmp_path / "encrypted.db"
+    _make_sqlcipher(db_path, "hunter2")
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    with pytest.raises(WrongPasswordError):
+        parser.parse(node, vfs, password="wrong-password")
+
+
+def test_sqlcipher_correct_password_parses_tables(tmp_path: Path) -> None:
+    db_path = tmp_path / "encrypted.db"
+    _make_sqlcipher(db_path, "hunter2")
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    result = parser.parse(node, vfs, password="hunter2")
+
+    assert result.viewer_type == "table"
+    assert result.data["messages"]["columns"] == ["id", "sender", "body"]
+    assert result.data["messages"]["rows"] == [
+        [1, "alice@example.com", "Hello Bob"],
+        [2, "bob@example.com", "Hi Alice"],
+    ]
+    assert result.metadata["Encrypted"] == "Yes (SQLCipher, password supplied)"
+
+
+def test_sqlcipher_wal_companion_is_decrypted_and_merged(tmp_path: Path) -> None:
+    """A SQLCipher database's WAL frames are encrypted the same way as
+    regular pages -- unlike a plaintext SQLite WAL, they can't just be
+    copied next to the decrypted main file, since there's no decrypted
+    main file here at all. Relying on the real linked SQLCipher engine
+    (rather than a hand-rolled decrypt) means the existing WAL-companion
+    file copying (unchanged) plus the engine's own checkpoint-on-open
+    already just works -- including data that only ever made it into the
+    WAL, not yet checkpointed into the main file (the realistic forensic
+    case: a device seized mid-session, before the app closed its DB
+    connection and triggered SQLite's own auto-checkpoint-on-close)."""
+    from sqlcipher3 import dbapi2 as sqlcipher
+
+    live_path = tmp_path / "live.db"
+    conn = sqlcipher.connect(str(live_path))
+    conn.execute("PRAGMA key = 'hunter2'")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, sender TEXT, body TEXT)")
+    conn.execute(
+        "INSERT INTO messages (sender, body) VALUES (?, ?)",
+        ("alice@example.com", "Hello Bob"),
+    )
+    conn.commit()
+    # Capture bytes with the connection still open -- committed WAL frames
+    # are on disk and independently readable, but not yet checkpointed into
+    # the main file (closing the connection would auto-checkpoint and merge
+    # them, defeating the point of this test).
+    main_bytes = live_path.read_bytes()
+    wal_bytes = Path(str(live_path) + "-wal").read_bytes()
+    conn.close()
+    assert wal_bytes, "test setup: expected non-empty WAL bytes before checkpoint"
+
+    db_path = tmp_path / "encrypted.db"
+    db_path.write_bytes(main_bytes)
+    Path(str(db_path) + "-wal").write_bytes(wal_bytes)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    result = parser.parse(node, vfs, password="hunter2")
+
+    assert result.data["messages"]["rows"] == [[1, "alice@example.com", "Hello Bob"]]
+
+
+def test_sqlcipher_raw_key_opens_via_advanced_params(tmp_path: Path) -> None:
+    """Raw key mode (PRAGMA key = "x'<hex>'", skipping the passphrase KDF
+    entirely) is SQLCipher's own recommended approach for a key "managed
+    externally (e.g. keystore, keychain...) not via user input" -- exactly
+    the case for an Android app pulling its DB key out of the Keystore.
+    raw_key must stand alone (no "Advanced" cipher_params needed) since it's
+    orthogonal to those tuning parameters -- deliberately NOT testing it
+    bundled with cipher_params, to catch a regression where raw_key only
+    took effect together with Advanced."""
+    from sqlcipher3 import dbapi2 as sqlcipher
+
+    raw_key_hex = "a1" * 32  # 32 bytes / 256 bits, a plausible Keystore-derived key
+    db_path = tmp_path / "encrypted.db"
+    conn = sqlcipher.connect(str(db_path))
+    conn.execute(f"PRAGMA key = \"x'{raw_key_hex}'\"")
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+    conn.execute("INSERT INTO messages (body) VALUES (?)", ("secret",))
+    conn.commit()
+    conn.close()
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    result = parser.parse(node, vfs, password=raw_key_hex, raw_key=True)
+
+    assert result.data["messages"]["rows"] == [[1, "secret"]]
+    assert result.metadata["Encrypted"] == "Yes (SQLCipher, raw key supplied)"
+
+    # Same raw key, but treated as a passphrase (raw_key=False, the
+    # default) must NOT open the file -- proving raw_key actually changes
+    # behavior rather than being a no-op.
+    from crush.core.passwords import WrongPasswordError
+
+    with pytest.raises(WrongPasswordError):
+        parser.parse(node, vfs, password=raw_key_hex)
+
+
+def test_sqlcipher_signal_style_custom_kdf_iter_opens(tmp_path: Path) -> None:
+    """Signal and its forks (Session, Molly) manage a high-entropy key via
+    the platform keystore and set kdf_iter=1 to skip the now-pointless
+    passphrase-stretching cost -- a real, common combination none of the
+    standard cipher_compatibility presets (1-4) cover, since it isn't one
+    of SQLCipher's own bundled version defaults."""
+    from sqlcipher3 import dbapi2 as sqlcipher
+
+    from crush.parsers.sqlite_parser import SQLCipherParams
+
+    db_path = tmp_path / "encrypted.db"
+    conn = sqlcipher.connect(str(db_path))
+    conn.execute("PRAGMA key = 'signal-derived-key'")
+    conn.execute("PRAGMA cipher_page_size = 4096")
+    conn.execute("PRAGMA kdf_iter = 1")
+    conn.execute("PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512")
+    conn.execute("PRAGMA cipher_hmac_algorithm = HMAC_SHA512")
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+    conn.execute("INSERT INTO messages (body) VALUES (?)", ("signal message",))
+    conn.commit()
+    conn.close()
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "encrypted.db")
+
+    parser = SQLiteParser()
+    result = parser.parse(
+        node,
+        vfs,
+        password="signal-derived-key",
+        cipher_params=SQLCipherParams(kdf_iter=1, kdf_algorithm="SHA512", hmac_algorithm="SHA512"),
+    )
+
+    assert result.data["messages"]["rows"] == [[1, "signal message"]]
+
+    # The standard preset auto-try (no cipher_params) must NOT be able to
+    # open this file -- proving the custom-params path is actually doing
+    # something the default 4-preset search can't.
+    from crush.core.passwords import WrongPasswordError
+
+    with pytest.raises(WrongPasswordError):
+        parser.parse(node, vfs, password="signal-derived-key")
+
+
 def test_plist_parser_binary(tmp_path: Path) -> None:
     data = {"key": "value", "number": 42}
     plist_path = tmp_path / "test.plist"

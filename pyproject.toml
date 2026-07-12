@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crush"
-version = "0.13.0"
+version = "0.14.0"
 description = "Crush — Digital Forensic Analysis Workbench"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -39,6 +39,7 @@ dependencies = [
     "py7zr>=0.21",
     "cryptography>=42.0",
     "pyzipper>=0.3.6",
+    "sqlcipher3>=0.6.2",
 ]
 
 [project.optional-dependencies]
@@ -84,4 +85,8 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = ["pyzipper", "pyzipper.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sqlcipher3", "sqlcipher3.*"]
 ignore_missing_imports = true

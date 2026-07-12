@@ -1144,7 +1144,45 @@ class MainWindow(QMainWindow):
             self._hash_node_if_integrity(node, vfs)
             self._open_encrypted_realm(node, vfs)
             return
+        if mode == "sqlcipher":
+            self._hash_node_if_integrity(node, vfs)
+            self._open_encrypted_sqlite(node, vfs)
+            return
         self._open_node(node, vfs)
+
+    def _open_encrypted_sqlite(self, node: VFSNode, vfs: VFS, was_wrong: bool = False) -> None:
+        from crush.core.passwords import WrongPasswordError
+        from crush.parsers.sqlite_parser import SQLiteParser
+        from crush.ui.sqlcipher_dialog import SQLCipherCredentialsDialog
+
+        dialog = SQLCipherCredentialsDialog(self, was_wrong=was_wrong)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._status.showMessage("Load cancelled: password required")
+            return
+        key_text = dialog.key_text()
+        if not key_text:
+            self._status.showMessage("Load cancelled: password required")
+            return
+        raw_key = dialog.is_raw_key()
+        cipher_params = dialog.cipher_params()
+
+        parser = SQLiteParser()
+        try:
+            result = parser.parse(
+                node, vfs, password=key_text, raw_key=raw_key, cipher_params=cipher_params
+            )
+        except WrongPasswordError:
+            self._open_encrypted_sqlite(node, vfs, was_wrong=True)
+            return
+        except Exception as exc:
+            self._status.showMessage(f"SQLCipher decrypt error: {exc}")
+            QMessageBox.warning(self, "SQLCipher decrypt error", str(exc))
+            return
+
+        result = self._enrich_with_format_info(parser, node, vfs, result)
+        self._show_result(node, result, vfs)
+        self._props_panel.update_properties(node, result.metadata, vfs)
+        self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME} — decrypted]")
 
     def _open_encrypted_realm(self, node: VFSNode, vfs: VFS, was_wrong: bool = False) -> None:
         from crush.core.passwords import WrongPasswordError
@@ -1821,12 +1859,68 @@ class MainWindow(QMainWindow):
         self._log_view.setTextCursor(cursor)
         self._log_view.ensureCursorVisible()
 
+    @staticmethod
+    def _checkbox_qss(pal: QPalette) -> str:
+        """QSS override for QCheckBox/QRadioButton indicators.
+
+        The Fusion style's built-in indicator painting shades its border
+        from palette roles (Light/Midlight/Mid/Dark/Shadow) that every
+        _*_palette() method below leaves mostly unset -- measured directly
+        (render to an offscreen QPixmap, sample the indicator's border vs.
+        fill pixels): border-vs-fill contrast comes out just ~60/255 in the
+        Light theme and ~1-8/255 in Dark/Geek, i.e. the checkbox border is
+        essentially invisible against its own interior in every theme, not
+        just one. Styling the indicator subcontrol directly, from the same
+        palette already tuned per theme, guarantees a clearly bordered box
+        (unchecked) vs. a solid Highlight-filled box (checked) regardless
+        of theme -- a deliberate trade of the native tick-mark glyph (which
+        QSS on this subcontract would otherwise suppress anyway without a
+        bundled checkmark image asset) for guaranteed contrast everywhere.
+        """
+        border = pal.color(QPalette.ColorRole.WindowText).name()
+        base = pal.color(QPalette.ColorRole.Base).name()
+        highlight = pal.color(QPalette.ColorRole.Highlight).name()
+        disabled_border = pal.color(QPalette.ColorRole.Mid).name()
+        disabled_bg = pal.color(QPalette.ColorRole.Window).name()
+        return f"""
+            QCheckBox::indicator, QRadioButton::indicator {{
+                width: 13px;
+                height: 13px;
+                border: 1px solid {border};
+                background: {base};
+            }}
+            QCheckBox::indicator {{ border-radius: 2px; }}
+            QRadioButton::indicator {{ border-radius: 7px; }}
+            QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+                background: {highlight};
+                border: 1px solid {highlight};
+            }}
+            QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+                border: 1px solid {highlight};
+            }}
+            QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+                border: 1px solid {disabled_border};
+                background: {disabled_bg};
+            }}
+        """
+
+    def _apply_palette(self, pal: QPalette) -> None:
+        """Set the application palette and, alongside it, a matching
+        checkbox/radio-button stylesheet (see _checkbox_qss) -- the two
+        must always change together or a theme switch leaves stale
+        indicator colors from the previous theme."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(pal)
+        app.setStyleSheet(self._checkbox_qss(pal))
+
     def _set_theme_system(self) -> None:
         self._stop_animated_themes()
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self.style().standardPalette())
+        self._apply_palette(self.style().standardPalette())
         self._settings.setValue("theme", "system")
         self._logger.info("Theme set to system default")
 
@@ -1911,7 +2005,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self._light_palette())
+        self._apply_palette(self._light_palette())
         self._settings.setValue("theme", "light")
         self._logger.info("Theme set to light")
 
@@ -1920,7 +2014,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self._dark_palette())
+        self._apply_palette(self._dark_palette())
         self._settings.setValue("theme", "dark")
         self._logger.info("Theme set to dark")
 
@@ -2063,7 +2157,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self._geek_palette())
+        self._apply_palette(self._geek_palette())
         self._settings.setValue("theme", "geek")
         self._logger.info("Theme set to geek")
 
@@ -2103,7 +2197,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self._purple_palette())
+        self._apply_palette(self._purple_palette())
         self._settings.setValue("theme", "purple")
         self._logger.info("Theme set to purple")
 
@@ -2143,7 +2237,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        app.setPalette(self._ocean_palette())
+        self._apply_palette(self._ocean_palette())
         self._settings.setValue("theme", "ocean")
         self._logger.info("Theme set to ocean")
 
@@ -2197,7 +2291,7 @@ class MainWindow(QMainWindow):
         if app is None:
             return
         self._rainbow_hue = (self._rainbow_hue + 0.004) % 1.0
-        app.setPalette(self._rainbow_palette(self._rainbow_hue))
+        self._apply_palette(self._rainbow_palette(self._rainbow_hue))
 
     def _rainbow_palette(self, hue: float) -> QPalette:
         text = QColor.fromHsvF(hue, 0.85, 1.0)
@@ -2265,7 +2359,7 @@ class MainWindow(QMainWindow):
         )
         if self._america_intro_step < 9:
             letter, color, text_color = chant[self._america_intro_step % len(chant)]
-            app.setPalette(self._america_show_palette(letter))
+            self._apply_palette(self._america_show_palette(letter))
             self._america_show_btn.setText(f" ★ ★ ★   {letter}   ★ ★ ★ ")
             self._america_show_btn.setStyleSheet(
                 f"color: {text_color}; background-color: {color.name()};"
@@ -2282,7 +2376,7 @@ class MainWindow(QMainWindow):
             )
             self._america_intro_step += 1
             self._america_timer.setInterval(self._AMERICA_FINALE_MS)
-            app.setPalette(self._america_palette(0.0))
+            self._apply_palette(self._america_palette(0.0))
             return
         elif self._america_intro_step == 10:
             self._america_show_btn.setText(" ★  Replay Show  ★ ")
@@ -2295,7 +2389,7 @@ class MainWindow(QMainWindow):
 
         self._america_chill_elapsed_ms += self._america_timer.interval()
         phase = self._america_chill_phase(self._america_chill_elapsed_ms)
-        app.setPalette(self._america_palette(phase))
+        self._apply_palette(self._america_palette(phase))
 
     @classmethod
     def _america_chill_phase(cls, elapsed_ms: int) -> float:
@@ -2384,7 +2478,7 @@ class MainWindow(QMainWindow):
             self._custom_theme_action.setVisible(True)
             app = QApplication.instance()
             if app:
-                app.setPalette(self._rainbow_palette(hue))
+                self._apply_palette(self._rainbow_palette(hue))
             self._settings.setValue("theme", "custom")
             self._logger.info("Custom theme '%s' saved (hue=%.3f)", name, hue)
         else:
@@ -2396,7 +2490,7 @@ class MainWindow(QMainWindow):
         hue = self._settings.value("custom_theme_hue", 0.0, type=float)
         app = QApplication.instance()
         if app:
-            app.setPalette(self._rainbow_palette(hue))
+            self._apply_palette(self._rainbow_palette(hue))
         self._settings.setValue("theme", "custom")
         self._logger.info("Theme set to custom")
 
