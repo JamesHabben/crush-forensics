@@ -290,21 +290,158 @@ def _create_realm_sqlite(
         return None
 
 
+# A LinkConfig is (link_col_name, target_table, selected_cols, nested_configs)
+# — nested_configs holds further LinkConfig tuples for any of selected_cols
+# that are themselves Link/LinkList columns the user chose to resolve too
+# (RealmViewer's Views tab lets this nest arbitrarily deep), so a chain like
+# message -> attachment -> uploader resolves in one pass instead of only
+# ever the first hop.
+LinkConfig = tuple[str, dict[str, Any], list[str], list[Any]]
+
+
+def _build_link_resolver(
+    target_table: dict[str, Any],
+    selected_cols: list[str],
+    nested_configs: list[LinkConfig],
+) -> dict[Any, str]:
+    """Build a {target_objkey: "col=val, col=val, ..."} lookup for one hop,
+    recursively inlining any *nested_configs* instead of leaving those
+    columns as raw ObjKey references. See _build_resolved_view for the
+    top-level entry point and the "col=val" convention this shares with
+    _display_expr (the SQL-view equivalent, single-hop only by design).
+    """
+    target_names: list[str] = target_table.get("column_names") or []
+    target_cols_dict: dict[int, list] = target_table.get("columns") or {}
+    target_obj_keys: list = target_table.get("obj_keys") or []
+    name_to_idx = {n: i for i, n in enumerate(target_names)}
+    selected_idx = [(c, name_to_idx[c]) for c in selected_cols if c in name_to_idx]
+
+    nested_resolvers: list[tuple[str, int, dict[Any, str]]] = []
+    for link_col_name, nested_target, nested_selected, nested_nested in nested_configs:
+        ci = name_to_idx.get(link_col_name)
+        if ci is None:
+            continue
+        nested_resolvers.append(
+            (link_col_name, ci, _build_link_resolver(nested_target, nested_selected, nested_nested))
+        )
+
+    def _format_row(row_idx: int) -> str:
+        parts = []
+        for col_name, ci in selected_idx:
+            vals = target_cols_dict.get(ci) or []
+            val = vals[row_idx] if row_idx < len(vals) else None
+            parts.append(f"{col_name}={'' if val is None else val}")
+        for link_col_name, ci, resolver in nested_resolvers:
+            vals = target_cols_dict.get(ci) or []
+            raw_val = vals[row_idx] if row_idx < len(vals) else None
+            if isinstance(raw_val, list):
+                resolved = [resolver.get(k) for k in raw_val if k in resolver]
+                text = "; ".join(v for v in resolved if v is not None)
+            else:
+                text = resolver.get(raw_val) or ""
+            parts.append(f"{link_col_name}=[{text}]")
+        return ", ".join(parts)
+
+    target_by_key: dict[Any, str] = {}
+    for r, key in enumerate(target_obj_keys):
+        if key is None:
+            continue
+        target_by_key[key] = _format_row(r)
+    return target_by_key
+
+
+def _build_link_row_expander(
+    target_table: dict[str, Any],
+    selected_cols: list[str],
+    nested_configs: list[LinkConfig],
+    prefix: str,
+) -> tuple[list[str], dict[Any, list[Any]]]:
+    """Expand a to-one Link hop into its own *named* columns instead of one
+    flattened text cell — e.g. a "messageAttributes" link resolving to
+    "messageAttributes.subject", "messageAttributes.content", ... side by
+    side, each independently sortable/filterable in the table grid, rather
+    than a single unreadable "subject=..., content=..., ..." blob. Only
+    sensible for to-one hops: a to-many (LinkList) selected column has a
+    variable number of target rows per source row, so it can't become a
+    fixed set of columns without either exploding rows or padding with
+    blanks — it stays collapsed to one flattened text cell instead (via
+    _build_link_resolver, same convention as before), same for a nested
+    LinkList several hops down.
+
+    Returns (output_column_names, {target_objkey: [values in that column
+    order]}); a to-one nested config recurses into its own further-prefixed
+    set of columns, so a chain like message -> attributes -> spamInfo
+    expands to "attributes.spamInfo.reason" etc.
+    """
+    target_names: list[str] = target_table.get("column_names") or []
+    target_cols_dict: dict[int, list] = target_table.get("columns") or {}
+    target_obj_keys: list = target_table.get("obj_keys") or []
+    target_types: list[str] = target_table.get("column_types") or []
+    name_to_idx = {n: i for i, n in enumerate(target_names)}
+
+    out_names: list[str] = [f"{prefix}{c}" for c in selected_cols]
+    plain_idx = [name_to_idx.get(c) for c in selected_cols]
+
+    # Each nested config contributes either one flattened text column
+    # ("list") or its own recursively-expanded set of columns ("link").
+    nested_blocks: list[tuple[int | None, list[str], str, Any]] = []
+    for link_col_name, nested_target, nested_selected, nested_nested in nested_configs:
+        ci = name_to_idx.get(link_col_name)
+        ctype = target_types[ci] if ci is not None and ci < len(target_types) else ""
+        if ctype == "linklist":
+            resolver = _build_link_resolver(nested_target, nested_selected, nested_nested)
+            sub_names = [f"{prefix}{link_col_name}"]
+            nested_blocks.append((ci, sub_names, "list", resolver))
+        else:
+            sub_names, sub_map = _build_link_row_expander(
+                nested_target, nested_selected, nested_nested, f"{prefix}{link_col_name}."
+            )
+            nested_blocks.append((ci, sub_names, "link", sub_map))
+        out_names.extend(sub_names)
+
+    result: dict[Any, list[Any]] = {}
+    for r, key in enumerate(target_obj_keys):
+        if key is None:
+            continue
+        row_vals: list[Any] = []
+        for ci in plain_idx:
+            vals = target_cols_dict.get(ci) or [] if ci is not None else []
+            row_vals.append(vals[r] if ci is not None and r < len(vals) else None)
+        for ci, sub_names, kind, payload in nested_blocks:
+            raw = None
+            if ci is not None:
+                vals = target_cols_dict.get(ci) or []
+                raw = vals[r] if r < len(vals) else None
+            if kind == "list":
+                resolver = payload
+                if isinstance(raw, list):
+                    resolved = [resolver.get(k) for k in raw if k in resolver]
+                    row_vals.append("; ".join(v for v in resolved if v is not None) or None)
+                else:
+                    row_vals.append(resolver.get(raw))
+            else:
+                sub_map = payload
+                row_vals.extend(sub_map.get(raw, [None] * len(sub_names)))
+        result[key] = row_vals
+    return out_names, result
+
+
 def _build_resolved_view(
     source_table: dict[str, Any],
-    link_configs: list[tuple[str, dict[str, Any], list[str]]],
+    link_configs: list[LinkConfig],
 ) -> dict[str, Any]:
-    """Resolve one or more Link/LinkList columns to only the
-    caller-selected target columns each, computed directly from the
-    already-decoded parser output (no SQL round-trip). Uses the same
-    "col=val, col=val" text convention as _display_expr above, just
-    restricted per column to its own selected_cols and picked interactively
-    (RealmViewer's Views tab) instead of showing every column.
+    """Resolve one or more Link/LinkList columns — and, recursively, any of
+    their own Link/LinkList columns the user chose to follow too — computed
+    directly from the already-decoded parser output (no SQL round-trip).
 
-    *link_configs* is a list of (link_col_name, target_table, selected_cols)
-    — a table with several Link/LinkList columns (e.g. from/to/cc/
-    attachments) is resolved in one pass, each with its own target table
-    and column selection, rather than one tab per column.
+    *link_configs* is a list of LinkConfig — a table with several
+    Link/LinkList columns (e.g. from/to/cc/attachments) is resolved in one
+    pass, each with its own target table, column selection, and further
+    nested LinkConfigs, rather than one tab per column or per hop.
+
+    A configured to-one Link column expands into its own named columns
+    (see _build_link_row_expander); a to-many LinkList column stays a
+    single flattened text cell, same convention as before.
 
     Returns a single table's {"columns", "rows", "__obj_keys"} dict, ready
     to hand to TableViewer as one entry of its data mapping.
@@ -312,55 +449,56 @@ def _build_resolved_view(
     src_names: list[str] = source_table.get("column_names") or []
     src_cols_dict: dict[int, list] = source_table.get("columns") or {}
     src_obj_keys: list = source_table.get("obj_keys") or []
+    src_types: list[str] = source_table.get("column_types") or []
     n_rows: int = source_table.get("row_count") or 0
 
-    # Precompute one {target_objkey: "col=val, col=val"} lookup per configured
-    # link column -- each may point at a different target table/selection.
-    resolvers: dict[int, dict[Any, str]] = {}
-    for link_col_name, target_table, selected_cols in link_configs:
-        if link_col_name not in src_names:
+    config_by_col = {cfg[0]: cfg for cfg in link_configs}
+
+    out_names: list[str] = []
+    # Per source column: ("plain",) unconfigured passthrough,
+    # ("list", resolver) to-many collapsed to one text cell, or
+    # ("link", sub_names, sub_map) to-one expanded into its own columns.
+    col_plan: list[tuple[Any, ...]] = []
+    for ci, name in enumerate(src_names):
+        cfg = config_by_col.get(name)
+        if cfg is None:
+            out_names.append(name)
+            col_plan.append(("plain",))
             continue
-        link_idx = src_names.index(link_col_name)
-
-        target_names: list[str] = target_table.get("column_names") or []
-        target_cols_dict: dict[int, list] = target_table.get("columns") or {}
-        target_obj_keys: list = target_table.get("obj_keys") or []
-        name_to_idx = {n: i for i, n in enumerate(target_names)}
-        selected_idx = [(c, name_to_idx[c]) for c in selected_cols if c in name_to_idx]
-
-        def _format_target_row(
-            row_idx: int, selected_idx=selected_idx, target_cols_dict=target_cols_dict,
-        ) -> str:
-            parts = []
-            for col_name, ci in selected_idx:
-                vals = target_cols_dict.get(ci) or []
-                val = vals[row_idx] if row_idx < len(vals) else None
-                parts.append(f"{col_name}={'' if val is None else val}")
-            return ", ".join(parts)
-
-        target_by_key: dict[Any, str] = {}
-        for r, key in enumerate(target_obj_keys):
-            if key is None:
-                continue
-            target_by_key[key] = _format_target_row(r)
-        resolvers[link_idx] = target_by_key
+        _link_col, target_table, selected_cols, nested_configs = cfg
+        ctype = src_types[ci] if ci < len(src_types) else ""
+        if ctype == "linklist":
+            resolver = _build_link_resolver(target_table, selected_cols, nested_configs)
+            out_names.append(name)
+            col_plan.append(("list", resolver))
+        else:
+            sub_names, sub_map = _build_link_row_expander(
+                target_table, selected_cols, nested_configs, f"{name}."
+            )
+            out_names.extend(sub_names)
+            col_plan.append(("link", sub_names, sub_map))
 
     rows: list[list[Any]] = []
     for r in range(n_rows):
         row: list[Any] = []
-        for ci in range(len(src_names)):
+        for ci, plan in enumerate(col_plan):
             vals = src_cols_dict.get(ci) or []
-            row.append(vals[r] if r < len(vals) else None)
-        for link_idx, target_by_key in resolvers.items():
-            raw_link_val = row[link_idx]
-            if isinstance(raw_link_val, list):
-                resolved = [target_by_key.get(k) for k in raw_link_val if k in target_by_key]
-                row[link_idx] = "; ".join(v for v in resolved if v is not None) or None
+            raw = vals[r] if r < len(vals) else None
+            if plan[0] == "plain":
+                row.append(raw)
+            elif plan[0] == "list":
+                resolver = plan[1]
+                if isinstance(raw, list):
+                    resolved = [resolver.get(k) for k in raw if k in resolver]
+                    row.append("; ".join(v for v in resolved if v is not None) or None)
+                else:
+                    row.append(resolver.get(raw))
             else:
-                row[link_idx] = target_by_key.get(raw_link_val)
+                _kind, sub_names, sub_map = plan
+                row.extend(sub_map.get(raw, [None] * len(sub_names)))
         rows.append(row)
 
-    return {"columns": src_names, "rows": rows, "__obj_keys": src_obj_keys}
+    return {"columns": out_names, "rows": rows, "__obj_keys": src_obj_keys}
 
 
 class RealmViewer(QWidget):
@@ -555,30 +693,55 @@ class RealmViewer(QWidget):
             viewer_data["__db_path"] = str(tmp)
         return TableViewer(viewer_data, parent, show_db_tabs=False, summary_nav_table="Summary")
 
+    # Roles tagged onto QTreeWidgetItem.data(0, UserRole) in the Views tab's
+    # tree, so _extract_link_configs/_on_item_expanded can tell a resolvable
+    # link node from a plain leaf column and from the lazy-load placeholder.
+    _LINK_ROLE = "link"
+    _DUMMY_ROLE = "dummy"
+    # Hard backstop against a pathological/cyclic Link/LinkList schema (e.g.
+    # Message -> Thread -> Message) -- the per-path _table_link_columns
+    # already-visited check makes this unreachable in practice, but a user
+    # manually expanding node after node still deserves a floor.
+    _LINK_VIEW_MAX_DEPTH = 8
+
     def _build_views_tab(self, tables: list[dict], parent: QWidget) -> QWidget:
         """Interactive Link/LinkList resolver: pick a table, configure
         *every* one of its Link/LinkList columns at once (each with its own
         target-column checklist), and open the whole table resolved in a
-        single new tab -- no SQL needed. Complements the always-on,
-        all-columns "v_<table>" SQL views (_create_realm_sqlite) with a
-        user-configurable, Python-side alternative reached from its own tab
+        single new tab -- no SQL needed. A target column that's itself a
+        Link/LinkList lazily expands into its own checklist (populated on
+        first expand, capped by _LINK_VIEW_MAX_DEPTH and never revisiting a
+        table already on the current chain), so a multi-hop relationship
+        (e.g. message -> attachment -> uploader) resolves in one view
+        instead of stopping after the first hop. Complements the always-on,
+        all-columns "v_<table>" SQL views (_create_realm_sqlite) -- those
+        stay single-hop by design, since chaining them further is already
+        straightforward by hand with json_each() once you're writing SQL
+        anyway; this tab is the no-SQL alternative reached from its own tab
         rather than the Schema tab.
         """
         table_by_name: dict[str, dict] = {t.get("name", ""): t for t in tables}
+
+        def _table_link_columns(table_name: str) -> list[tuple[str, str]]:
+            t = table_by_name.get(table_name)
+            if not t:
+                return []
+            col_names: list[str] = t.get("column_names") or []
+            col_types: list[str] = t.get("column_types") or []
+            col_targets: list[str | None] = t.get("column_target_tables") or []
+            out: list[tuple[str, str]] = []
+            for i, col in enumerate(col_names):
+                ctype = col_types[i] if i < len(col_types) else ""
+                target = col_targets[i] if i < len(col_targets) else None
+                if ctype in ("link", "linklist") and target and target in table_by_name:
+                    out.append((col, target))
+            return out
 
         # table name -> [(link_column, target_table_name), ...]
         table_links: dict[str, list[tuple[str, str]]] = {}
         for t in tables:
             name = t.get("name") or "?"
-            col_names: list[str] = t.get("column_names") or []
-            col_types: list[str] = t.get("column_types") or []
-            col_targets: list[str | None] = t.get("column_target_tables") or []
-            links: list[tuple[str, str]] = []
-            for i, col in enumerate(col_names):
-                ctype = col_types[i] if i < len(col_types) else ""
-                target = col_targets[i] if i < len(col_targets) else None
-                if ctype in ("link", "linklist") and target and target in table_by_name:
-                    links.append((col, target))
+            links = _table_link_columns(name)
             if links:
                 table_links[name] = links
 
@@ -606,9 +769,13 @@ class RealmViewer(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.addWidget(
-            QLabel("Link columns and which target columns to include (unchecked = leave raw):")
+        hint_label = QLabel(
+            "Link columns and target columns to include (unchecked = leave raw). "
+            "A link target expands (▸) to resolve one hop further: a single-target "
+            "link becomes its own column, a to-many list stays one combined cell."
         )
+        hint_label.setWordWrap(True)
+        right_layout.addWidget(hint_label)
         sel_row = QHBoxLayout()
         all_btn = QPushButton("Select All")
         none_btn = QPushButton("Deselect All")
@@ -627,34 +794,129 @@ class RealmViewer(QWidget):
 
         layout.addWidget(splitter)
 
+        def _add_link_group(
+            container: QTreeWidget | QTreeWidgetItem,
+            col: str,
+            target: str,
+            depth: int,
+            path: tuple[str, ...],
+        ) -> None:
+            group = QTreeWidgetItem([f"{col}  →  {target}"])
+            group.setFlags(
+                group.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate
+            )
+            group.setData(0, Qt.ItemDataRole.UserRole, (self._LINK_ROLE, col, target, depth, path))
+            if isinstance(container, QTreeWidget):
+                container.addTopLevelItem(group)
+            else:
+                container.addChild(group)
+            group.setCheckState(0, Qt.CheckState.Checked)
+            _add_group_children(group, target, depth, path)
+
+        def _add_group_children(
+            group: QTreeWidgetItem, target: str, depth: int, path: tuple[str, ...]
+        ) -> None:
+            """Populate *group*'s direct children: plain leaves for scalar
+            target columns, and -- for a target column that's itself a
+            resolvable Link/LinkList, capped by _LINK_VIEW_MAX_DEPTH and
+            never revisiting a table already in *path* -- a further link
+            group holding only a lazy-load placeholder, populated for real
+            on first expand (see _on_item_expanded) rather than eagerly, so
+            a densely cross-referenced schema can't blow up the tree before
+            the user has drilled into any of it.
+            """
+            target_cols: list[str] = (table_by_name.get(target) or {}).get("column_names") or []
+            nested_links = dict(_table_link_columns(target))
+            for c in target_cols:
+                nested_target = nested_links.get(c)
+                if nested_target and depth < self._LINK_VIEW_MAX_DEPTH and nested_target not in path:
+                    placeholder = QTreeWidgetItem([f"{c}  →  {nested_target}"])
+                    placeholder.setFlags(
+                        placeholder.flags()
+                        | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsAutoTristate
+                    )
+                    placeholder.setCheckState(0, Qt.CheckState.Checked)
+                    placeholder.setData(
+                        0,
+                        Qt.ItemDataRole.UserRole,
+                        (self._LINK_ROLE, c, nested_target, depth + 1, path + (nested_target,)),
+                    )
+                    dummy = QTreeWidgetItem(["…"])
+                    dummy.setData(0, Qt.ItemDataRole.UserRole, (self._DUMMY_ROLE,))
+                    placeholder.addChild(dummy)
+                    group.addChild(placeholder)
+                else:
+                    child = QTreeWidgetItem([c])
+                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.CheckState.Checked)
+                    group.addChild(child)
+
+        def _on_item_expanded(item: QTreeWidgetItem) -> None:
+            if item.childCount() != 1:
+                return  # already populated for real, or a plain leaf
+            dummy = item.child(0)
+            dummy_data = dummy.data(0, Qt.ItemDataRole.UserRole)
+            if not dummy_data or dummy_data[0] != self._DUMMY_ROLE:
+                return
+            item.removeChild(dummy)
+            _role, _col, target, depth, path = item.data(0, Qt.ItemDataRole.UserRole)
+            _add_group_children(item, target, depth, path)
+
         def _populate_tree() -> None:
             tree.clear()
             item = table_list.currentItem()
             if item is None:
                 open_btn.setEnabled(False)
                 return
-            for col, target in table_links.get(item.text(), []):
-                group = QTreeWidgetItem([f"{col}  →  {target}"])
-                group.setFlags(
-                    group.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate
-                )
-                group.setData(0, Qt.ItemDataRole.UserRole, (col, target))
-                target_cols = (table_by_name.get(target) or {}).get("column_names") or []
-                for c in target_cols:
-                    child = QTreeWidgetItem([c])
-                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.CheckState.Checked)
-                    group.addChild(child)
-                tree.addTopLevelItem(group)
-                group.setCheckState(0, Qt.CheckState.Checked)
-                group.setExpanded(True)
+            table_name = item.text()
+            for col, target in table_links.get(table_name, []):
+                _add_link_group(tree, col, target, 0, (table_name, target))
+            for i in range(tree.topLevelItemCount()):
+                tree.topLevelItem(i).setExpanded(True)
             open_btn.setEnabled(tree.topLevelItemCount() > 0)
 
         def _set_all(state: Qt.CheckState) -> None:
+            def _walk(parent_item: QTreeWidgetItem) -> None:
+                for j in range(parent_item.childCount()):
+                    child = parent_item.child(j)
+                    data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if data and data[0] == self._DUMMY_ROLE:
+                        continue
+                    child.setCheckState(0, state)
+                    _walk(child)
+
             for i in range(tree.topLevelItemCount()):
-                group = tree.topLevelItem(i)
+                top = tree.topLevelItem(i)
+                top.setCheckState(0, state)
+                _walk(top)
+
+        def _extract_link_configs(items: list[QTreeWidgetItem]) -> list[LinkConfig]:
+            configs: list[LinkConfig] = []
+            for group in items:
+                data = group.data(0, Qt.ItemDataRole.UserRole)
+                if not data or data[0] != self._LINK_ROLE:
+                    continue
+                _role, col, target, _depth, _path = data
+                target_table = table_by_name.get(target)
+                if not target_table:
+                    continue
+                plain_cols: list[str] = []
+                nested_groups: list[QTreeWidgetItem] = []
                 for j in range(group.childCount()):
-                    group.child(j).setCheckState(0, state)
+                    child = group.child(j)
+                    child_data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if child_data and child_data[0] == self._DUMMY_ROLE:
+                        continue
+                    if child_data and child_data[0] == self._LINK_ROLE:
+                        if child.checkState(0) != Qt.CheckState.Unchecked:
+                            nested_groups.append(child)
+                    elif child.checkState(0) == Qt.CheckState.Checked:
+                        plain_cols.append(child.text(0))
+                nested_configs = _extract_link_configs(nested_groups)
+                if plain_cols or nested_configs:
+                    configs.append((col, target_table, plain_cols, nested_configs))
+            return configs
 
         def _open_view() -> None:
             table_item = table_list.currentItem()
@@ -663,31 +925,30 @@ class RealmViewer(QWidget):
             source_table = table_by_name.get(table_item.text())
             if not source_table:
                 return
-            link_configs: list[tuple[str, dict, list[str]]] = []
-            for i in range(tree.topLevelItemCount()):
-                group = tree.topLevelItem(i)
-                col, target = group.data(0, Qt.ItemDataRole.UserRole)
-                selected = [
-                    group.child(j).text(0)
-                    for j in range(group.childCount())
-                    if group.child(j).checkState(0) == Qt.CheckState.Checked
-                ]
-                if not selected:
-                    continue  # left raw, as documented in the column header above
-                target_table = table_by_name.get(target)
-                if not target_table:
-                    continue
-                link_configs.append((col, target_table, selected))
+            top_groups = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+            link_configs = _extract_link_configs(top_groups)
             if not link_configs:
                 return
             resolved = _build_resolved_view(source_table, link_configs)
-            cols_desc = ", ".join(c for c, _t, _s in link_configs)
-            self.open_table_requested.emit(f"{table_item.text()} ({cols_desc})", resolved)
+            cols_desc = ", ".join(col for col, _t, _s, _n in link_configs)
+            title = f"{table_item.text()} ({cols_desc})"
+            # Back the opened tab with a real (single-table) temp SQLite file
+            # -- same _create_realm_sqlite helper the Tables tab uses, since
+            # it already accepts exactly this {"columns", "rows",
+            # "__obj_keys"} shape -- so the tab's own SQL box can run
+            # `SELECT col_a, col_c FROM ...` to pick/reorder/export a subset
+            # of the resolved columns, without touching the Views tab's own
+            # configuration or any other opened tab.
+            tmp = _create_realm_sqlite({table_item.text(): resolved})
+            if tmp:
+                resolved["__db_path"] = str(tmp)
+            self.open_table_requested.emit(title, resolved)
 
         table_list.currentItemChanged.connect(lambda *_args: _populate_tree())
         all_btn.clicked.connect(lambda: _set_all(Qt.CheckState.Checked))
         none_btn.clicked.connect(lambda: _set_all(Qt.CheckState.Unchecked))
         open_btn.clicked.connect(_open_view)
+        tree.itemExpanded.connect(_on_item_expanded)
 
         table_list.setCurrentRow(0)
         return widget

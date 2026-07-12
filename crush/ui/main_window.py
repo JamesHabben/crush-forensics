@@ -1309,7 +1309,17 @@ class MainWindow(QMainWindow):
 
         vfs = BytesVFS(b"", name=title)
         node = vfs.root()
-        result = ParseResult(viewer_type="table", data={title: viewer_data})
+        # __db_path (if the caller backed this table with a temp SQLite
+        # file, e.g. the Realm Views tab does) has to sit at the top level
+        # of `data`, alongside the table entry, not nested inside it --
+        # TableViewer only ever reads data.get("__db_path").
+        data: dict = {title: viewer_data}
+        db_path = viewer_data.pop("__db_path", None)
+        if db_path:
+            data["__db_path"] = db_path
+        result = ParseResult(
+            viewer_type="table", data=data, viewer_hints={"show_db_tabs": False}
+        )
         self._show_result(node, result, vfs)
         self._status.showMessage(f"Opened view: {title}")
 

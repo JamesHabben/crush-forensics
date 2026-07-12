@@ -97,15 +97,27 @@ class HexViewer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        toolbar = QHBoxLayout()
+        # Two rows instead of one -- crammed into a single QHBoxLayout, this
+        # toolbar's ~15 widgets forced a combined minimum width of ~1177px
+        # (the sum of every button's own minimum), which a QTabWidget then
+        # propagates as ITS minimum width even for tabs that never show this
+        # HexViewer at all (Qt sizes a tab widget from the largest page, not
+        # just the current one) -- most visible in the Realm viewer, which
+        # embeds a HexViewer in both its "Hex Preview" and "Freed Data" tabs
+        # alongside much narrower ones. Splitting into two rows roughly
+        # halves that floor.
+        toolbar = QVBoxLayout()
         toolbar.setContentsMargins(6, 6, 6, 0)
-        toolbar.setSpacing(8)
+        toolbar.setSpacing(4)
 
-        toolbar.addWidget(QLabel("Search as:"))
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+
+        search_row.addWidget(QLabel("Search as:"))
         self._search_mode = QComboBox()
         self._search_mode.addItems(["ASCII", "Hex"])
         self._search_mode.currentIndexChanged.connect(self._on_search_mode_changed)
-        toolbar.addWidget(self._search_mode)
+        search_row.addWidget(self._search_mode)
 
         self._hex_validator = QRegularExpressionValidator(
             QRegularExpression(r"[0-9a-fA-F\s:]*")
@@ -113,63 +125,68 @@ class HexViewer(QWidget):
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search text…")
         self._search_input.returnPressed.connect(self._do_search)
-        toolbar.addWidget(self._search_input, stretch=1)
+        search_row.addWidget(self._search_input, stretch=1)
 
         self._find_btn = QPushButton("Find")
         self._find_btn.clicked.connect(self._do_search)
-        toolbar.addWidget(self._find_btn)
+        search_row.addWidget(self._find_btn)
 
         self._search_prev_btn = QToolButton()
         self._search_prev_btn.setText("↑")
         self._search_prev_btn.setToolTip("Previous match")
         self._search_prev_btn.clicked.connect(self._find_prev)
-        toolbar.addWidget(self._search_prev_btn)
+        search_row.addWidget(self._search_prev_btn)
 
         self._search_next_btn = QToolButton()
         self._search_next_btn.setText("↓")
         self._search_next_btn.setToolTip("Next match")
         self._search_next_btn.clicked.connect(self._find_next)
-        toolbar.addWidget(self._search_next_btn)
+        search_row.addWidget(self._search_next_btn)
 
         self._count_label = QLabel("")
         self._count_label.setMinimumWidth(90)
-        toolbar.addWidget(self._count_label)
+        search_row.addWidget(self._count_label)
 
         self._show_all_btn = QToolButton()
         self._show_all_btn.setText("Show all")
         self._show_all_btn.setCheckable(True)
         self._show_all_btn.toggled.connect(self._toggle_result_panel)
-        toolbar.addWidget(self._show_all_btn)
+        search_row.addWidget(self._show_all_btn)
 
         self._status = QLabel("")
-        toolbar.addWidget(self._status)
+        search_row.addWidget(self._status)
+        search_row.addStretch(1)
+        toolbar.addLayout(search_row)
 
-        toolbar.addStretch(1)
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(8)
 
         self._prev_btn = QPushButton("◀ Prev")
         self._prev_btn.clicked.connect(self._prev_page)
-        toolbar.addWidget(self._prev_btn)
+        nav_row.addWidget(self._prev_btn)
 
         self._page_label = QLabel("")
-        toolbar.addWidget(self._page_label)
+        nav_row.addWidget(self._page_label)
 
         self._next_btn = QPushButton("Next ▶")
         self._next_btn.clicked.connect(self._next_page)
-        toolbar.addWidget(self._next_btn)
+        nav_row.addWidget(self._next_btn)
 
-        toolbar.addSpacing(8)
+        nav_row.addSpacing(8)
 
         self._copy_hex_btn = QPushButton("Copy Hex")
         self._copy_hex_btn.clicked.connect(self._copy_hex)
-        toolbar.addWidget(self._copy_hex_btn)
+        nav_row.addWidget(self._copy_hex_btn)
 
         self._copy_ascii_btn = QPushButton("Copy ASCII")
         self._copy_ascii_btn.clicked.connect(self._copy_ascii)
-        toolbar.addWidget(self._copy_ascii_btn)
+        nav_row.addWidget(self._copy_ascii_btn)
 
         self._copy_all_btn = QPushButton("Copy All")
         self._copy_all_btn.clicked.connect(self._copy_all)
-        toolbar.addWidget(self._copy_all_btn)
+        nav_row.addWidget(self._copy_all_btn)
+        nav_row.addStretch(1)
+        toolbar.addLayout(nav_row)
 
         layout.addLayout(toolbar)
 
