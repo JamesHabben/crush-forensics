@@ -1908,12 +1908,21 @@ class MainWindow(QMainWindow):
         """Set the application palette and, alongside it, a matching
         checkbox/radio-button stylesheet (see _checkbox_qss) -- the two
         must always change together or a theme switch leaves stale
-        indicator colors from the previous theme."""
+        indicator colors from the previous theme.
+
+        Skips the stylesheet half while a menu/popup is open: QApplication-wide
+        setStyleSheet() forces a full re-polish of every top-level widget,
+        which briefly closes and reopens any open QMenu (visible as a flicker
+        during animated themes like Rainbow, whose timer calls this every
+        50ms). The palette itself still updates every tick; the checkbox QSS
+        just catches up on the next tick after the popup closes.
+        """
         app = QApplication.instance()
         if app is None:
             return
         app.setPalette(pal)
-        app.setStyleSheet(self._checkbox_qss(pal))
+        if app.activePopupWidget() is None:
+            app.setStyleSheet(self._checkbox_qss(pal))
 
     def _set_theme_system(self) -> None:
         self._stop_animated_themes()
