@@ -2,6 +2,16 @@
 
 All notable changes to Crush will be documented in this file.
 
+## Unreleased
+
+### New Features
+
+- **Properties panel shows the original iTunes backup file ID** — the raw `fileID`-named path (e.g. `ab/ab54f7c9...e1`) is now shown alongside the resolved `domain/relativePath`, for files only. Addresses [#41](https://github.com/kalink0/crush-forensics/issues/41).
+
+### Bug Fixes
+
+- **Rainbow/'Merica theme: dialog buttons stopped responding to clicks** — the animated-theme timer's stylesheet refresh already skipped open menus to avoid a re-polish flicker, but not open modal dialogs (`QMessageBox` etc.), where the same re-polish could eat a button click. Now skipped for both.
+
 ## v0.14.0 - 2026-07-12
 
 **Focus: SQLCipher-encrypted SQLite support (raw key and Signal-style custom cipher parameters included); Realm viewer overhaul — rewritten B+-tree-correct parser, AES-256 file encryption, Dictionary/nested-Mixed decoding, and a new Views tab resolving multi-hop Link/LinkList relationships into a queryable result;**

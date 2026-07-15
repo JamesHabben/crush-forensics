@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crush.core.vfs import VFS, VFSNode
+from crush.core.vfs import VFS, ITunesBackupVFS, VFSNode
 from crush.ui.wheel_scroll import install_horizontal_wheel_scroll
 
 _SELECTABLE = (
@@ -71,6 +71,18 @@ class PropertiesPanel(QScrollArea):
         path_label.setWordWrap(True)
         path_label.setTextInteractionFlags(_SELECTABLE)
         self._layout.addRow("Path:", path_label)
+
+        # iTunes backups store files flat under a fileID (SHA1) sharded
+        # directory layout; the tree above shows the resolved domain/
+        # relativePath, but the original on-disk name is forensically
+        # relevant too.
+        if isinstance(vfs, ITunesBackupVFS):
+            original = vfs.original_backup_path(node)
+            if original is not None:
+                orig_label = QLabel(original)
+                orig_label.setWordWrap(True)
+                orig_label.setTextInteractionFlags(_SELECTABLE)
+                self._layout.addRow("Backup File ID:", orig_label)
 
         # Fixed position (not after the parser metadata, whose length varies)
         # and only shown once a format was actually identified.

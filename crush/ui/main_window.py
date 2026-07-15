@@ -1910,18 +1910,21 @@ class MainWindow(QMainWindow):
         must always change together or a theme switch leaves stale
         indicator colors from the previous theme.
 
-        Skips the stylesheet half while a menu/popup is open: QApplication-wide
-        setStyleSheet() forces a full re-polish of every top-level widget,
-        which briefly closes and reopens any open QMenu (visible as a flicker
-        during animated themes like Rainbow, whose timer calls this every
-        50ms). The palette itself still updates every tick; the checkbox QSS
-        just catches up on the next tick after the popup closes.
+        Skips the stylesheet half while a menu/popup or a modal dialog (e.g.
+        QMessageBox) is open: QApplication-wide setStyleSheet() forces a full
+        re-polish of every top-level widget, which briefly tears down and
+        recreates it. For a QMenu that's just a flicker, during animated
+        themes like Rainbow, whose timer calls this every 50ms; for a modal
+        dialog it also splits an in-flight mouse press/release into two
+        unrelated events, so clicks on its buttons stop registering. The
+        palette itself still updates every tick; the checkbox QSS just
+        catches up on the next tick after the popup/dialog closes.
         """
         app = QApplication.instance()
         if app is None:
             return
         app.setPalette(pal)
-        if app.activePopupWidget() is None:
+        if app.activePopupWidget() is None and app.activeModalWidget() is None:
             app.setStyleSheet(self._checkbox_qss(pal))
 
     def _set_theme_system(self) -> None:
