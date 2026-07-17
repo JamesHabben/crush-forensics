@@ -1979,15 +1979,19 @@ class MainWindow(QMainWindow):
         must always change together or a theme switch leaves stale
         indicator colors from the previous theme.
 
+        Only used by the static themes. Rainbow and 'Merica animate their
+        palette as often as every 50ms via _apply_palette_animated_tick(),
+        which deliberately skips the stylesheet half -- see that method's
+        docstring.
+
         Skips the stylesheet half while a menu/popup or a modal dialog (e.g.
         QMessageBox) is open: QApplication-wide setStyleSheet() forces a full
         re-polish of every top-level widget, which briefly tears down and
-        recreates it. For a QMenu that's just a flicker, during animated
-        themes like Rainbow, whose timer calls this every 50ms; for a modal
-        dialog it also splits an in-flight mouse press/release into two
-        unrelated events, so clicks on its buttons stop registering. The
-        palette itself still updates every tick; the checkbox QSS just
-        catches up on the next tick after the popup/dialog closes.
+        recreates it. For a QMenu that's just a flicker; for a modal dialog
+        it also splits an in-flight mouse press/release into two unrelated
+        events, so clicks on its buttons stop registering. The palette
+        itself still updates; the checkbox QSS just catches up on the next
+        static-theme switch after the popup/dialog closes.
         """
         app = QApplication.instance()
         if app is None:
@@ -1995,6 +1999,38 @@ class MainWindow(QMainWindow):
         app.setPalette(pal)
         if app.activePopupWidget() is None and app.activeModalWidget() is None:
             app.setStyleSheet(self._checkbox_qss(pal))
+
+    @staticmethod
+    def _apply_palette_animated_tick(pal: QPalette) -> None:
+        """Palette-only update for Rainbow/'Merica's per-tick timers.
+
+        The checkbox contrast fix (_checkbox_qss / _apply_palette) is meant
+        for the static themes only. Re-applying an app-wide stylesheet at
+        animation frequency (both themes tick as often as every 50ms) forces
+        a full widget re-polish on every tick, which is what caused the
+        flicker/click bugs in Rainbow and 'Merica mode. So these ticks only
+        ever touch the palette; see _clear_checkbox_qss() for how any
+        leftover stylesheet from a previous static theme gets removed once,
+        on entry into an animated theme.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(pal)
+
+    @staticmethod
+    def _clear_checkbox_qss() -> None:
+        """Drop any checkbox stylesheet left over from a static theme.
+
+        Called once when entering Rainbow or 'Merica, since their ticks use
+        _apply_palette_animated_tick() and never touch the stylesheet
+        themselves (see that method's docstring) -- without this, a stale
+        QSS from whatever static theme was active before would keep
+        painting checkboxes in the wrong colors throughout the animation.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet("")
 
     def _set_theme_system(self) -> None:
         self._stop_animated_themes()
@@ -2360,6 +2396,7 @@ class MainWindow(QMainWindow):
             return
         self._settings.setValue("theme", "rainbow")
         self._logger.info("Theme set to rainbow")
+        self._clear_checkbox_qss()
         if not hasattr(self, "_rainbow_timer"):
             self._rainbow_timer = QTimer(self)
             self._rainbow_timer.timeout.connect(self._step_rainbow)
@@ -2368,11 +2405,8 @@ class MainWindow(QMainWindow):
         self._rainbow_snapshot_btn.setVisible(True)
 
     def _step_rainbow(self) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
         self._rainbow_hue = (self._rainbow_hue + 0.004) % 1.0
-        self._apply_palette(self._rainbow_palette(self._rainbow_hue))
+        self._apply_palette_animated_tick(self._rainbow_palette(self._rainbow_hue))
 
     def _rainbow_palette(self, hue: float) -> QPalette:
         text = QColor.fromHsvF(hue, 0.85, 1.0)
@@ -2422,6 +2456,7 @@ class MainWindow(QMainWindow):
         self._start_america_show()
 
     def _start_america_show(self) -> None:
+        self._clear_checkbox_qss()
         self._america_intro_step = 0
         self._america_chill_elapsed_ms = 0
         self._america_timer.setInterval(self._AMERICA_INTRO_MS)
@@ -2430,9 +2465,6 @@ class MainWindow(QMainWindow):
         self._america_timer.start()
 
     def _step_america(self) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
         chant = (
             ("U", QColor(178, 34, 52), "white"),
             ("S", QColor(245, 245, 240), "#172554"),
@@ -2440,7 +2472,7 @@ class MainWindow(QMainWindow):
         )
         if self._america_intro_step < 9:
             letter, color, text_color = chant[self._america_intro_step % len(chant)]
-            self._apply_palette(self._america_show_palette(letter))
+            self._apply_palette_animated_tick(self._america_show_palette(letter))
             self._america_show_btn.setText(f" ★ ★ ★   {letter}   ★ ★ ★ ")
             self._america_show_btn.setStyleSheet(
                 f"color: {text_color}; background-color: {color.name()};"
@@ -2457,7 +2489,7 @@ class MainWindow(QMainWindow):
             )
             self._america_intro_step += 1
             self._america_timer.setInterval(self._AMERICA_FINALE_MS)
-            self._apply_palette(self._america_palette(0.0))
+            self._apply_palette_animated_tick(self._america_palette(0.0))
             return
         elif self._america_intro_step == 10:
             self._america_show_btn.setText(" ★  Replay Show  ★ ")
@@ -2470,7 +2502,7 @@ class MainWindow(QMainWindow):
 
         self._america_chill_elapsed_ms += self._america_timer.interval()
         phase = self._america_chill_phase(self._america_chill_elapsed_ms)
-        self._apply_palette(self._america_palette(phase))
+        self._apply_palette_animated_tick(self._america_palette(phase))
 
     @classmethod
     def _america_chill_phase(cls, elapsed_ms: int) -> float:

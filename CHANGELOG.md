@@ -13,7 +13,7 @@ All notable changes to Crush will be documented in this file.
 
 ### Bug Fixes
 
-- **Rainbow/'Merica theme: dialog buttons stopped responding to clicks** — the animated-theme timer's stylesheet refresh already skipped open menus to avoid a re-polish flicker, but not open modal dialogs (`QMessageBox` etc.), where the same re-polish could eat a button click. Now skipped for both.
+- **Rainbow/'Merica theme: flicker and dialog clicks not registering** — the checkbox-contrast fix's stylesheet refresh was re-applied on every animation tick (as often as every 50ms), forcing a full UI re-polish. It's now static-themes-only; Rainbow/'Merica just animate the palette.
 - **Protobuf Viewer's schema-based decode was broken on current protobuf versions** — `MessageFactory.GetPrototype` was removed in protobuf 6.x and `including_default_value_fields` was renamed to `always_print_fields_with_no_presence`; both call sites now use the current API.
 - **Opening a moved/deleted file from Open Recent showed "Unsupported source type"** — `open_vfs()` fell through to that generic error whenever a path didn't exist instead of checking existence first; now raises a clear "File no longer exists" error.
 
