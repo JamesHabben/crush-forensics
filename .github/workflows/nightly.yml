@@ -13,7 +13,58 @@ env:
   UL_VERSION: "0.5.1"
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new commits since last nightly/release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          head_sha="${{ github.sha }}"
+
+          # Reference points: the existing "nightly" tag and the latest stable
+          # (non-prerelease) release. Whichever is newer is the baseline.
+          nightly_sha=$(gh api "repos/${{ github.repository }}/commits/nightly" --jq .sha 2>/dev/null || true)
+          latest_tag=$(gh release list --repo "${{ github.repository }}" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          latest_sha=""
+          if [ -n "$latest_tag" ]; then
+            latest_sha=$(gh api "repos/${{ github.repository }}/commits/$latest_tag" --jq .sha 2>/dev/null || true)
+          fi
+
+          ref_sha=""
+          for sha in "$nightly_sha" "$latest_sha"; do
+            [ -z "$sha" ] && continue
+            if [ -z "$ref_sha" ] || [ "$(git show -s --format=%ct "$sha")" -gt "$(git show -s --format=%ct "$ref_sha")" ]; then
+              ref_sha="$sha"
+            fi
+          done
+
+          if [ -z "$ref_sha" ]; then
+            echo "No prior nightly tag or release found — running build."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          count=$(git rev-list "$ref_sha".."$head_sha" --count)
+          if [ "$count" -gt 0 ]; then
+            echo "$count new commit(s) since $ref_sha — running build."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits since $ref_sha — skipping nightly build."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || needs.check.outputs.should_run == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
@@ -381,7 +432,8 @@ jobs:
           retention-days: 1
 
   release:
-    needs: build
+    needs: [check, build]
+    if: github.event_name == 'workflow_dispatch' || needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
 
     steps:
