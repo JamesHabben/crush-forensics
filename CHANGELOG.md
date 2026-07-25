@@ -2,7 +2,9 @@
 
 All notable changes to Crush will be documented in this file.
 
-## Unreleased
+## v0.15.0 - 2026-07-26
+
+**Focus: PDF viewer overhaul — page rendering, extended metadata/attachments, and revision-history diffing; Blob Inspector schema-based Protobuf decode; theme and stability fixes.**
 
 ### New Features
 
