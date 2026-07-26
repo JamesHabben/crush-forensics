@@ -2346,6 +2346,11 @@ FORMATS: list[dict[str, Any]] = [
                 "https://www.magnetforensics.com/blog/bringing-it-back-with-biome-data/",
             ),
             (
+                "84 Streams Later: Exploring the Evolution of Apple Biome in iOS",
+                "https://blog.digital-forensics.it/2026/07/84-streams-later-exploring-evolution-of.html",
+            ),
+            
+            (
                 "Beyond the C — SEGB and Biome Forensics with crush (beBinary)",
                 "https://bebinary4n6.blogspot.com/2026/05/beyond-c-segb-and-biome-forensics-with.html",
             ),
