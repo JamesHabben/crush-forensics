@@ -33,6 +33,7 @@ class FormatReferenceDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle("Format Reference")
         self.resize(1000, 600)
         self._build_ui()

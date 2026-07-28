@@ -1659,8 +1659,7 @@ class MainWindow(QMainWindow):
 
     def _show_format_reference(self) -> None:
         from crush.ui.format_reference import FormatReferenceDialog
-        dlg = FormatReferenceDialog(self)
-        dlg.exec()
+        FormatReferenceDialog(self).show()
 
     def _about(self) -> None:
         from crush.ui.about_dialog import AboutDialog
@@ -1973,60 +1972,69 @@ class MainWindow(QMainWindow):
             }}
         """
 
-    def _apply_palette(self, pal: QPalette) -> None:
-        """Set the application palette and, alongside it, a matching
-        checkbox/radio-button stylesheet (see _checkbox_qss) -- the two
-        must always change together or a theme switch leaves stale
-        indicator colors from the previous theme.
+    def _set_palette_everywhere(self, pal: QPalette) -> None:
+        """Apply *pal* app-wide and directly to the dock widgets, filesystem
+        tree, and properties panel (and their viewports) of every open
+        window.
 
-        Only used by the static themes. Rainbow and 'Merica animate their
-        palette as often as every 50ms via _apply_palette_animated_tick(),
-        which deliberately skips the stylesheet half -- see that method's
-        docstring.
-
-        Skips the stylesheet half while a menu/popup or a modal dialog (e.g.
-        QMessageBox) is open: QApplication-wide setStyleSheet() forces a full
-        re-polish of every top-level widget, which briefly tears down and
-        recreates it. For a QMenu that's just a flicker; for a modal dialog
-        it also splits an in-flight mouse press/release into two unrelated
-        events, so clicks on its buttons stop registering. The palette
-        itself still updates; the checkbox QSS just catches up on the next
-        static-theme switch after the popup/dialog closes.
+        QApplication.setPalette() alone doesn't reliably reach these once
+        any app-wide stylesheet has been active, so they're updated
+        explicitly instead of relying on propagation.
         """
         app = QApplication.instance()
         if app is None:
             return
         app.setPalette(pal)
+        for window in self._open_windows:
+            if not isValid(window):
+                continue
+            if hasattr(window, "_fs_dock"):
+                window._fs_dock.setPalette(pal)
+            if hasattr(window, "_props_dock"):
+                window._props_dock.setPalette(pal)
+            if hasattr(window, "_log_dock"):
+                window._log_dock.setPalette(pal)
+            if hasattr(window, "_fs_panel"):
+                fs_panel = window._fs_panel
+                fs_panel._tree.setPalette(pal)
+                fs_panel._tree.viewport().setPalette(pal)
+                fs_panel._search_view.setPalette(pal)
+                fs_panel._search_view.viewport().setPalette(pal)
+            if hasattr(window, "_props_panel"):
+                props_panel = window._props_panel
+                props_panel.setPalette(pal)
+                props_panel.viewport().setPalette(pal)
+                props_panel._container.setPalette(pal)
+
+    def _apply_palette(self, pal: QPalette) -> None:
+        """Set the application palette and a matching checkbox/radio-button
+        stylesheet (see _checkbox_qss) -- the two must change together or a
+        theme switch leaves stale indicator colors.
+
+        Only used by the static themes. Rainbow and 'Merica update the
+        palette directly via _set_palette_everywhere() and never touch the
+        stylesheet, since re-applying an app-wide stylesheet at animation
+        frequency (up to every 50ms) causes flicker and swallows clicks.
+
+        Skips the stylesheet update while a popup or modal dialog is open:
+        QApplication-wide setStyleSheet() forces a full re-polish of every
+        top-level widget, which splits an in-flight mouse press/release on
+        a dialog button into two unrelated events. The palette itself still
+        updates; the checkbox QSS catches up on the next static-theme switch.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._set_palette_everywhere(pal)
         if app.activePopupWidget() is None and app.activeModalWidget() is None:
             app.setStyleSheet(self._checkbox_qss(pal))
-
-    @staticmethod
-    def _apply_palette_animated_tick(pal: QPalette) -> None:
-        """Palette-only update for Rainbow/'Merica's per-tick timers.
-
-        The checkbox contrast fix (_checkbox_qss / _apply_palette) is meant
-        for the static themes only. Re-applying an app-wide stylesheet at
-        animation frequency (both themes tick as often as every 50ms) forces
-        a full widget re-polish on every tick, which is what caused the
-        flicker/click bugs in Rainbow and 'Merica mode. So these ticks only
-        ever touch the palette; see _clear_checkbox_qss() for how any
-        leftover stylesheet from a previous static theme gets removed once,
-        on entry into an animated theme.
-        """
-        app = QApplication.instance()
-        if app is None:
-            return
-        app.setPalette(pal)
 
     @staticmethod
     def _clear_checkbox_qss() -> None:
         """Drop any checkbox stylesheet left over from a static theme.
 
-        Called once when entering Rainbow or 'Merica, since their ticks use
-        _apply_palette_animated_tick() and never touch the stylesheet
-        themselves (see that method's docstring) -- without this, a stale
-        QSS from whatever static theme was active before would keep
-        painting checkboxes in the wrong colors throughout the animation.
+        Called once when entering Rainbow or 'Merica, since they never set
+        a stylesheet themselves (see _apply_palette).
         """
         app = QApplication.instance()
         if app is not None:
@@ -2406,7 +2414,7 @@ class MainWindow(QMainWindow):
 
     def _step_rainbow(self) -> None:
         self._rainbow_hue = (self._rainbow_hue + 0.004) % 1.0
-        self._apply_palette_animated_tick(self._rainbow_palette(self._rainbow_hue))
+        self._set_palette_everywhere(self._rainbow_palette(self._rainbow_hue))
 
     def _rainbow_palette(self, hue: float) -> QPalette:
         text = QColor.fromHsvF(hue, 0.85, 1.0)
@@ -2472,7 +2480,7 @@ class MainWindow(QMainWindow):
         )
         if self._america_intro_step < 9:
             letter, color, text_color = chant[self._america_intro_step % len(chant)]
-            self._apply_palette_animated_tick(self._america_show_palette(letter))
+            self._set_palette_everywhere(self._america_show_palette(letter))
             self._america_show_btn.setText(f" ★ ★ ★   {letter}   ★ ★ ★ ")
             self._america_show_btn.setStyleSheet(
                 f"color: {text_color}; background-color: {color.name()};"
@@ -2489,7 +2497,7 @@ class MainWindow(QMainWindow):
             )
             self._america_intro_step += 1
             self._america_timer.setInterval(self._AMERICA_FINALE_MS)
-            self._apply_palette_animated_tick(self._america_palette(0.0))
+            self._set_palette_everywhere(self._america_palette(0.0))
             return
         elif self._america_intro_step == 10:
             self._america_show_btn.setText(" ★  Replay Show  ★ ")
@@ -2502,7 +2510,7 @@ class MainWindow(QMainWindow):
 
         self._america_chill_elapsed_ms += self._america_timer.interval()
         phase = self._america_chill_phase(self._america_chill_elapsed_ms)
-        self._apply_palette_animated_tick(self._america_palette(phase))
+        self._set_palette_everywhere(self._america_palette(phase))
 
     @classmethod
     def _america_chill_phase(cls, elapsed_ms: int) -> float:
