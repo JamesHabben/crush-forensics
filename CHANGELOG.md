@@ -2,6 +2,15 @@
 
 All notable changes to Crush will be documented in this file.
 
+## v0.15.1 - 2026-07-28
+
+**Focus: Rainbow/'Merica theme colors not reaching every panel; Format Reference no longer blocks the main window.**
+
+### Bug Fixes
+
+- **Rainbow/'Merica theme colors stuck on the filesystem panel, properties panel, and dock titles** — after any static theme (Dark, Geek, ...) had applied its checkbox-contrast stylesheet, `QApplication.setPalette()` alone no longer reliably reached these widgets, leaving them frozen on the previous theme's colors. Palette changes are now also pushed directly to the filesystem tree, properties panel, and dock widgets instead of relying on propagation.
+- **Format Reference blocked the main window** — opened as a modal dialog (`exec()`); it's now non-modal (`show()`), matching Value Inspector and Paste & Decode.
+
 ## v0.15.0 - 2026-07-26
 
 **Focus: PDF viewer overhaul — page rendering, extended metadata/attachments, and revision-history diffing; Blob Inspector schema-based Protobuf decode; theme and stability fixes.**
