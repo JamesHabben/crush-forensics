@@ -74,6 +74,12 @@ class AbxViewer(QWidget):
 
         xml_editor = QPlainTextEdit()
         xml_editor.setReadOnly(True)
+        # setReadOnly() only grants mouse-based selection in Qt6 — keyboard
+        # cursor movement and Shift-selection need TextSelectableByKeyboard too.
+        xml_editor.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         # Visual wrap to avoid horizontal scrolling; no actual line breaks inserted.
         xml_editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         xml_editor.setWordWrapMode(QTextOption.WrapMode.WordWrap)

@@ -566,7 +566,7 @@ def test_plist_fixture_known_output(plist_fixture: Path) -> None:
 
     result = PlistParser().parse(node, vfs)
 
-    assert result.viewer_type == "tree"
+    assert result.viewer_type == "tree_text"
     assert result.data["application"] == "crush-forensics"
     assert result.data["version"] == 1
     assert result.data["verified"] is True
@@ -1393,7 +1393,7 @@ def test_plist_parser_works_on_readonly_media(tmp_path: Path) -> None:
         vfs = DirectoryVFS(evidence_dir)
         node = next(c for c in vfs.root().children if c.name == "minimal_binary.plist")
         result = PlistParser().parse(node, vfs)
-        assert result.viewer_type == "tree"
+        assert result.viewer_type == "tree_text"
     finally:
         evidence_dir.chmod(0o755)
         plist.chmod(0o644)

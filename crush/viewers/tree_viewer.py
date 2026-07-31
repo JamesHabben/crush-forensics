@@ -78,6 +78,18 @@ class TreeViewer(QWidget):
         self._tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
         layout.addWidget(self._tree)
 
+        value_bar = QWidget()
+        vb_layout = QHBoxLayout(value_bar)
+        vb_layout.setContentsMargins(8, 4, 8, 4)
+        vb_layout.setSpacing(8)
+        vb_layout.addWidget(QLabel("Value:"))
+        self._value_field = QLineEdit()
+        self._value_field.setReadOnly(True)
+        vb_layout.addWidget(self._value_field, 1)
+        layout.addWidget(value_bar)
+
+        self._tree.selectionModel().selectionChanged.connect(self._update_value_field)
+
     def _expand_all(self) -> None:
         self._tree.expandAll()
 
@@ -85,6 +97,7 @@ class TreeViewer(QWidget):
         self._tree.collapseAll()
 
     def _load(self, data: Any) -> None:
+        self._value_field.clear()
         self._model.removeRows(0, self._model.rowCount())
         root = self._model.invisibleRootItem()
         if isinstance(data, dict):
@@ -212,6 +225,11 @@ class TreeViewer(QWidget):
         key = key_item.text()
         val = val_item.text() if val_item is not None else ""
         return key, val
+
+    def _update_value_field(self) -> None:
+        _, val = self._current_key_value()
+        self._value_field.setText(val)
+        self._value_field.setCursorPosition(0)
 
     def _current_obj_and_key(self) -> tuple[Any, str]:
         index = self._tree.currentIndex()

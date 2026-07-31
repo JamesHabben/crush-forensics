@@ -425,6 +425,10 @@ class _BlobPanel(QWidget):
 
         self._viewer = _BlobViewerEdit(self)
         self._viewer.setReadOnly(True)
+        self._viewer.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         install_horizontal_wheel_scroll(self._viewer, smooth_item_scroll=False)
         self._stack.addWidget(self._viewer)

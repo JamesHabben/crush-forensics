@@ -9,6 +9,7 @@ from crush.core.viewer_registry import ViewerRegistry
 def _register_builtin_viewers() -> None:
     from crush.viewers.table_viewer import TableViewer
     from crush.viewers.tree_viewer import TreeViewer
+    from crush.viewers.tree_text_viewer import TreeTextViewer
     from crush.viewers.hex_viewer import HexViewer
     from crush.viewers.text_viewer import TextView
     from crush.viewers.image_viewer import ImageViewer
@@ -19,6 +20,9 @@ def _register_builtin_viewers() -> None:
 
     ViewerRegistry.register("table", lambda r, n, v, p: TableViewer(r.data, p, **r.viewer_hints))
     ViewerRegistry.register("tree", lambda r, n, v, p: TreeViewer(r.data, p))
+    ViewerRegistry.register(
+        "tree_text", lambda r, n, v, p: TreeTextViewer(r.data, p, **r.viewer_hints)
+    )
     ViewerRegistry.register("hex", lambda r, n, v, p: HexViewer(r.data, p))
     ViewerRegistry.register("text", lambda r, n, v, p: TextView(r.data, p))
     ViewerRegistry.register("image", lambda r, n, v, p: ImageViewer(r.data, p))

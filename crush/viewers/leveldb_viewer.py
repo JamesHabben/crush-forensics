@@ -440,6 +440,10 @@ class LevelDbViewer(QWidget):
 
         text_view = QPlainTextEdit()
         text_view.setReadOnly(True)
+        text_view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         text_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         install_horizontal_wheel_scroll(text_view, smooth_item_scroll=False)
         text_view.document().setDefaultFont(QFont("Monospace", 9))

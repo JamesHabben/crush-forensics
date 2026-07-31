@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 import logging
 import plistlib
 from typing import Any, cast
@@ -33,6 +34,7 @@ class PlistParser(AbstractParser):
     def parse(self, node: VFSNode, vfs: VFS) -> ParseResult:
         try:
             raw = vfs.read(node)
+            raw_text: str | bytes
             if raw[:6] == _BPLIST_MAGIC:
                 fmt = "binary"
                 _set_object_converter = cast(Any, set_object_converter)
@@ -49,14 +51,19 @@ class PlistParser(AbstractParser):
                         logging.getLogger(__name__).warning(
                             "NSKeyedArchiver deserialization failed for %s: %s", node.path, nska_exc
                         )
+                # Binary plists have no source text of their own — reconstruct
+                # a readable form of the decoded structure for the Text tab.
+                raw_text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
             else:
                 fmt = "XML"
                 data = plistlib.loads(raw)
+                raw_text = raw
             return ParseResult(
-                viewer_type="tree",
+                viewer_type="tree_text",
                 data=data,
                 metadata={"Format": fmt, "File size": f"{node.size:,} B"},
                 text_index=_flatten_text(data),
+                viewer_hints={"raw_text": raw_text},
             )
         except Exception as exc:
             logging.getLogger(__name__).warning("Plist parse error for %s: %s", node.path, exc)

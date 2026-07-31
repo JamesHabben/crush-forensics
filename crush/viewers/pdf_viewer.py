@@ -309,6 +309,10 @@ class _PdfDiffView(QWidget):
 
         self._diff_view = QPlainTextEdit()
         self._diff_view.setReadOnly(True)
+        self._diff_view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         font = QFont("Courier New", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self._diff_view.setFont(font)

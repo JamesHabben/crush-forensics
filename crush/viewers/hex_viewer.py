@@ -194,6 +194,12 @@ class HexViewer(QWidget):
 
         self._text = _HexPlainTextEdit(self)
         self._text.setReadOnly(True)
+        # setReadOnly() only grants mouse-based selection in Qt6 — keyboard
+        # cursor movement and Shift-selection need TextSelectableByKeyboard too.
+        self._text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         install_horizontal_wheel_scroll(self._text, smooth_item_scroll=False)
 

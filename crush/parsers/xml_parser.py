@@ -29,11 +29,18 @@ class XmlParser(AbstractParser):
         except etree.XMLSyntaxError as exc:
             data = {"error": str(exc), "raw": raw[:500].decode("utf-8", errors="replace")}
             text = ""
+            return ParseResult(
+                viewer_type="tree",
+                data=data,
+                metadata={"File size": f"{node.size:,} B"},
+                text_index=text,
+            )
         return ParseResult(
-            viewer_type="tree",
+            viewer_type="tree_text",
             data=data,
             metadata={"File size": f"{node.size:,} B"},
             text_index=text,
+            viewer_hints={"raw_text": raw},
         )
 
 

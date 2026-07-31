@@ -30,10 +30,11 @@ class JsonParser(AbstractParser):
             data = json.loads(text)
             meta = {"File size": f"{node.size:,} B", "Format": "JSON"}
             return ParseResult(
-                viewer_type="tree",
+                viewer_type="tree_text",
                 data=data,
                 metadata=meta,
                 text_index=_flatten_text(data),
+                viewer_hints={"raw_text": text},
             )
         except json.JSONDecodeError as exc:
             data = {"error": str(exc), "raw": text[:500]}

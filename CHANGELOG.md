@@ -2,6 +2,17 @@
 
 All notable changes to Crush will be documented in this file.
 
+## Unreleased
+
+### New Features
+
+- **JSON/XML/Plist viewers now show a "Text" tab alongside "Decoded"** — a second tab shows the raw source text (or, for binary plists, a reconstructed readable form of the decoded structure) next to the existing tree view.
+- **Tree viewer shows the full value of the selected entry** — a field below the tree displays the currently selected entry's value in full and selectable, useful when it's too long for the Value column. Applies everywhere the tree viewer is used (JSON, XML, Plist, ABX, Protobuf, Realm, LevelDB).
+
+### Bug Fixes
+
+- **Keyboard cursor movement and Shift-selection didn't work in read-only text panes** — in Qt6, `setReadOnly(True)` only grants mouse-based selection, not keyboard. Fixed across the Text viewer, Hex viewer, ABX's reconstructed-XML pane, PDF diff view, Blob Inspector, LevelDB text views, Table viewer's cell detail pane, and Multi-Log viewer's preview/raw panels.
+
 ## v0.15.1 - 2026-07-28
 
 **Focus: Rainbow/'Merica theme colors not reaching every panel; Format Reference no longer blocks the main window.**

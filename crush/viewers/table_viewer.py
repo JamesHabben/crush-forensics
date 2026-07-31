@@ -713,6 +713,10 @@ class TableViewer(QWidget):
         cell_detail_layout.addWidget(self._cell_detail_label)
         self._cell_detail_view = QPlainTextEdit()
         self._cell_detail_view.setReadOnly(True)
+        self._cell_detail_view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._cell_detail_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         cell_detail_layout.addWidget(self._cell_detail_view, stretch=1)
 

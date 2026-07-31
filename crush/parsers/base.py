@@ -10,6 +10,7 @@ from crush.core.vfs import VFS, VFSNode
 ViewerType = Literal[
     "table",
     "tree",
+    "tree_text",
     "hex",
     "text",
     "media",

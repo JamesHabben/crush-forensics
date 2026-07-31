@@ -212,6 +212,12 @@ class TextView(QWidget):
 
         self._editor = _CodeEditor()
         self._editor.setReadOnly(True)
+        # setReadOnly() only grants mouse-based selection in Qt6 — keyboard
+        # cursor movement and Shift-selection need TextSelectableByKeyboard too.
+        self._editor.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         install_horizontal_wheel_scroll(self._editor, smooth_item_scroll=False)
 

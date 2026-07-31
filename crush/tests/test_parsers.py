@@ -270,7 +270,7 @@ def test_plist_parser_binary(tmp_path: Path) -> None:
     assert parser.can_parse(node.path, vfs.peek(node))
 
     result = parser.parse(node, vfs)
-    assert result.viewer_type == "tree"
+    assert result.viewer_type == "tree_text"
     assert result.data["key"] == "value"
     assert result.metadata["Format"] == "binary"
 

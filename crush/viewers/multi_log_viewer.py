@@ -315,6 +315,10 @@ class DefineFormatDialog(QDialog):
 
         self._preview = QTextEdit()
         self._preview.setReadOnly(True)
+        self._preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         install_horizontal_wheel_scroll(self._preview, smooth_item_scroll=False)
         font = self._preview.font()
@@ -1318,6 +1322,10 @@ class MultiLogViewer(QWidget):
 
         self._raw_panel = QPlainTextEdit()
         self._raw_panel.setReadOnly(True)
+        self._raw_panel.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self._raw_panel.setPlaceholderText("Select a row to see the original line…")
         self._raw_panel.setMinimumHeight(40)
         self._raw_panel.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
