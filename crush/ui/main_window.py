@@ -2016,6 +2016,20 @@ class MainWindow(QMainWindow):
         stylesheet, since re-applying an app-wide stylesheet at animation
         frequency (up to every 50ms) causes flicker and swallows clicks.
 
+        Clears any existing stylesheet before reapplying it, rather than
+        just replacing its content in place: once QStyleSheetStyle has
+        polished a widget against a stylesheet, later setPalette() calls on
+        that widget (including the explicit ones in
+        _set_palette_everywhere()) stop taking effect until the stylesheet
+        is actually removed and reapplied -- confirmed by probing
+        QTreeView.palette() after a setStyleSheet() -> setPalette() ->
+        setStyleSheet() sequence, which still reports the *first*
+        stylesheet's colors. Without the clear, switching between two
+        static themes leaves the filesystem tree and properties panel
+        stuck on whichever theme was active when a stylesheet was first
+        applied; only entering Rainbow/'Merica (which clears the
+        stylesheet via _clear_checkbox_qss()) breaks the staleness.
+
         Skips the stylesheet update while a popup or modal dialog is open:
         QApplication-wide setStyleSheet() forces a full re-polish of every
         top-level widget, which splits an in-flight mouse press/release on
@@ -2025,6 +2039,8 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
+        if app.activePopupWidget() is None and app.activeModalWidget() is None:
+            app.setStyleSheet("")
         self._set_palette_everywhere(pal)
         if app.activePopupWidget() is None and app.activeModalWidget() is None:
             app.setStyleSheet(self._checkbox_qss(pal))
