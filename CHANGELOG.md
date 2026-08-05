@@ -4,6 +4,10 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
+## v0.15.2 - 2026-08-05
+
+**Focus: JSON/XML/Plist Text tab and full-value tree field; keyboard selection fix for read-only text panes; FS/Properties panel theme-color bug.**
+
 ### New Features
 
 - **JSON/XML/Plist viewers now show a "Text" tab alongside "Decoded"** — a second tab shows the raw source text (or, for binary plists, a reconstructed readable form of the decoded structure) next to the existing tree view.
@@ -12,6 +16,7 @@ All notable changes to Crush will be documented in this file.
 ### Bug Fixes
 
 - **Keyboard cursor movement and Shift-selection didn't work in read-only text panes** — in Qt6, `setReadOnly(True)` only grants mouse-based selection, not keyboard. Fixed across the Text viewer, Hex viewer, ABX's reconstructed-XML pane, PDF diff view, Blob Inspector, LevelDB text views, Table viewer's cell detail pane, and Multi-Log viewer's preview/raw panels.
+- **FS/Properties panel stuck on previous static theme's color when switching between two static themes** — once `QStyleSheetStyle` had polished a widget against the checkbox-contrast stylesheet, later `setPalette()` calls on it stopped taking effect until the stylesheet was actually removed and reapplied, not just replaced in place. The stylesheet is now cleared before reapplying on every theme switch.
 
 ## v0.15.1 - 2026-07-28
 
