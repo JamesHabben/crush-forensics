@@ -4,6 +4,17 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
+### New Features
+
+- Added to SQLite Table viewer -> Support for freelist page recovery ("Freelist Recovery" tab): carves deleted rows out of freed database pages.
+- Added to SQLite Table viewer -> Support for freeblock recovery ("Freeblocks" tab): carves deleted rows still lingering in live pages.
+- Added to SQLite Table viewer -> Support for unallocated intra-page space ("Unallocated Space" tab): shows raw leftover bytes for manual review.
+- Added to SQLite Table viewer -> Support for overflow-page reconstruction in Freelist Recovery: values spilling onto overflow pages are recovered when those pages are still intact.
+
+### Removed
+
+- In SQLITE Tabler viewer - DB Info Tab: removed 16 PRAGMA rows that don't reflect the file's actual history, only the current connection's defaults.
+
 ## v0.15.2 - 2026-08-05
 
 **Focus: JSON/XML/Plist Text tab and full-value tree field; keyboard selection fix for read-only text panes; FS/Properties panel theme-color bug.**

@@ -15,6 +15,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
@@ -353,6 +354,7 @@ jobs:
 
       - name: Update winget manifest
         if: runner.os == 'Windows' && env.WINGET_PAT != ''
+        continue-on-error: true
         env:
           WINGET_CREATE_GITHUB_TOKEN: ${{ env.WINGET_PAT }}
         run: |

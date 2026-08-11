@@ -55,6 +55,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crush.core.sqlite_freeblocks import scan_database_freeblocks
+from crush.core.sqlite_freelist import (
+    carve_freelist_rows,
+    read_raw_page as _read_freelist_page,
+    walk_freelist_pages,
+)
+from crush.core.sqlite_unallocated import scan_database_unallocated
 from crush.core.sqlite_wal import (
     build_page_table_map,
     parse_table_leaf_page,
@@ -432,8 +439,6 @@ _PRAGMA_CATALOG: list[tuple[str, str, str, dict[int, str] | None, str]] = [
      "Application-defined schema version number"),
     ("schema_version",     "Schema version",           "int",  None,
      "Internal counter incremented on every schema change"),
-    ("data_version",       "Data version",             "int",  None,
-     "Increments on any write; compare across connections to detect changes"),
     ("encoding",           "Encoding",                 "str",  None,
      "Text encoding for all string data in this database"),
     ("page_size",          "Page size (B)",            "int",  None,
@@ -441,51 +446,19 @@ _PRAGMA_CATALOG: list[tuple[str, str, str, dict[int, str] | None, str]] = [
     ("page_count",         "Page count",               "int",  None,
      "Total allocated pages; multiply by page_size to get expected file size"),
     ("freelist_count",     "Free pages",               "int",  None,
-     "Unallocated pages that may contain deleted data — forensically significant"),
-    ("max_page_count",     "Max page count",           "int",  None,
-     "Upper limit on database size in pages (0 = default limit)"),
+     "Unallocated pages that may contain deleted data — forensically significant. "
+     "See the 'Freelist Recovery' tab to carve any leftover rows"),
     # Journal / safety
     ("journal_mode",       "Journal mode",             "str",  None,
-     "Rollback journal strategy (delete / wal / truncate / persist / memory / off)"),
-    ("journal_size_limit", "Journal size limit (B)",   "int",  None,
-     "Maximum journal file size in bytes; -1 = unlimited"),
-    ("synchronous",        "Synchronous",              "enum",
-     {0: "OFF", 1: "NORMAL", 2: "FULL", 3: "EXTRA"},
-     "How aggressively SQLite flushes writes to disk"),
-    ("locking_mode",       "Locking mode",             "str",  None,
-     "File locking strategy (NORMAL or EXCLUSIVE)"),
-    ("wal_autocheckpoint", "WAL autocheckpoint (pages)", "int", None,
-     "Pages accumulated in WAL file before automatic checkpoint is triggered"),
+     "Rollback journal strategy (delete / wal / truncate / persist / memory / off). "
+     "Only the WAL/non-WAL distinction is stored in the file header — that part is "
+     "reliable; any other value is this connection's default, not necessarily what "
+     "was active historically (though the specific non-WAL sub-mode has no effect "
+     "on recoverable data, only on journal file cleanup)"),
     # Vacuum / storage
     ("auto_vacuum",        "Auto vacuum",              "enum",
      {0: "NONE", 1: "FULL", 2: "INCREMENTAL"},
      "Automatic reclamation of free pages after DELETE"),
-    ("secure_delete",      "Secure delete",            "enum",
-     {0: "OFF", 1: "ON", 2: "FAST"},
-     "Overwrite deleted content with zeros before freeing pages"),
-    ("temp_store",         "Temp store",               "enum",
-     {0: "DEFAULT", 1: "FILE", 2: "MEMORY"},
-     "Storage location for temporary tables and indexes"),
-    ("mmap_size",          "Memory-mapped I/O (B)",    "int",  None,
-     "Maximum bytes used for memory-mapped I/O (0 = disabled)"),
-    # Schema / safety flags
-    ("foreign_keys",          "Foreign keys",          "bool", None,
-     "Whether foreign key constraints are enforced"),
-    ("recursive_triggers",    "Recursive triggers",    "bool", None,
-     "Allow trigger bodies to fire additional triggers"),
-    ("automatic_index",       "Automatic index",       "bool", None,
-     "Query planner may create transient covering indexes"),
-    ("trusted_schema",        "Trusted schema",        "bool", None,
-     "Allow SQL functions in schema objects (security-relevant setting)"),
-    ("read_uncommitted",      "Read uncommitted",      "bool", None,
-     "Read without waiting for shared-cache write locks"),
-    ("defer_foreign_keys",    "Defer foreign keys",    "bool", None,
-     "Delay FK enforcement until end of outermost transaction"),
-    ("query_only",            "Query only",            "bool", None,
-     "Prevents any data modification in this connection"),
-    # Cache (included for completeness)
-    ("cache_size",            "Cache size (pages)",    "int",  None,
-     "Pages kept in the in-memory page cache; negative value = KiB"),
 ]
 
 
@@ -525,8 +498,15 @@ class TableViewer(QWidget):
         self._db_structure_label = "DB Structure (generated)"
         self._db_info_label = "DB Info (generated)"
         self._wal_label = "WAL Frames (generated)"
+        self._freelist_label = "Freelist Recovery (generated)"
+        self._freeblocks_label = "Freeblocks (generated)"
+        self._unallocated_label = "Unallocated Space (generated)"
         self._wal_frames_cache: list[dict] | None = None
         self._wal_page_size: int = 0
+        self._db_page_size: int = 0
+        self._freelist_cache: tuple[list[dict], list[dict]] | None = None
+        self._freeblocks_cache: list[dict] | None = None
+        self._unallocated_cache: list[dict] | None = None
         self._page_table_map: dict[int, str] = {}  # page_num → table_name
         self._table_interaction_active = False
         self._build_ui()
@@ -540,6 +520,10 @@ class TableViewer(QWidget):
                     self._table_combo.addItem(self._db_info_label)
                     if self._db_path and Path(str(self._db_path) + "-wal").exists():
                         self._table_combo.addItem(self._wal_label)
+                    if self._db_path and self._has_freelist_pages():
+                        self._table_combo.addItem(self._freelist_label)
+                    self._table_combo.addItem(self._freeblocks_label)
+                    self._table_combo.addItem(self._unallocated_label)
                 self._table_combo.addItems(table_names)
                 if show_db_tabs:
                     conn = self._ensure_db()
@@ -749,6 +733,18 @@ class TableViewer(QWidget):
         if table_name == self._wal_label:
             self._wal_toggle.setVisible(False)
             self._load_wal_frames()
+            return
+        if table_name == self._freelist_label:
+            self._wal_toggle.setVisible(False)
+            self._load_freelist_recovery()
+            return
+        if table_name == self._freeblocks_label:
+            self._wal_toggle.setVisible(False)
+            self._load_freeblocks()
+            return
+        if table_name == self._unallocated_label:
+            self._wal_toggle.setVisible(False)
+            self._load_unallocated_space()
             return
         table = self._data.get(table_name)
         if table is None:
@@ -961,6 +957,9 @@ class TableViewer(QWidget):
             self._db_structure_label,
             self._db_info_label,
             self._wal_label,
+            self._freelist_label,
+            self._freeblocks_label,
+            self._unallocated_label,
         ):
             self._load_table(current)
 
@@ -972,6 +971,9 @@ class TableViewer(QWidget):
             self._db_structure_label,
             self._db_info_label,
             self._wal_label,
+            self._freelist_label,
+            self._freeblocks_label,
+            self._unallocated_label,
         ):
             self._load_table(current)
 
@@ -1292,6 +1294,324 @@ class TableViewer(QWidget):
         self._row_count_label.setText(f"({', '.join(parts)})")
         self._sql_status.setText("Double-click a row to open the raw page in the hex viewer")
 
+    def _get_page_size(self) -> int:
+        """Return (and cache) the database's page size via PRAGMA."""
+        if self._db_page_size:
+            return self._db_page_size
+        conn = self._ensure_db()
+        if conn is None:
+            return 0
+        try:
+            row = conn.execute("PRAGMA page_size").fetchone()
+            self._db_page_size = int(row[0]) if row else 0
+        except Exception:
+            self._db_page_size = 0
+        return self._db_page_size
+
+    def _has_freelist_pages(self) -> bool:
+        conn = self._ensure_db()
+        if conn is None:
+            return False
+        try:
+            row = conn.execute("PRAGMA freelist_count").fetchone()
+            return bool(row and row[0])
+        except Exception:
+            return False
+
+    def _get_freelist_data(self) -> tuple[list[dict], list[dict]]:
+        """Return (and cache) (freelist entries, carved leftover rows)."""
+        if self._freelist_cache is not None:
+            return self._freelist_cache
+        page_size = self._get_page_size()
+        if self._db_path is None or page_size == 0:
+            self._freelist_cache = ([], [])
+            return self._freelist_cache
+        entries = walk_freelist_pages(self._db_path, page_size)
+        carved = carve_freelist_rows(self._db_path, page_size, entries)
+        self._freelist_cache = (entries, carved)
+        return self._freelist_cache
+
+    def _table_column_counts(self, conn: sqlite3.Connection) -> dict[str, int]:
+        """Return {table_name: column_count} for every table in the schema."""
+        counts: dict[str, int] = {}
+        try:
+            names = [
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            ]
+        except Exception:
+            return counts
+        for name in names:
+            try:
+                cols = conn.execute(f"PRAGMA table_info([{name}])").fetchall()  # noqa: S608
+                counts[name] = len(cols)
+            except Exception:
+                continue
+        return counts
+
+    def _load_freelist_recovery(self) -> None:
+        """Carve leftover table-leaf rows out of freed (freelist) pages.
+
+        SQLite does not zero freed pages by default, so a page that used to
+        hold table data can still carry its old cells until reused. Since a
+        freed page is no longer referenced by any B-tree, the table it
+        originally belonged to cannot be determined with certainty —
+        "Candidate Tables" is a heuristic match by column count only, and
+        all matches are shown rather than guessing a single one.
+        """
+        self._source_model.clear()
+        conn = self._ensure_db()
+        page_size = self._get_page_size()
+
+        if conn is None or self._db_path is None or page_size == 0:
+            self._source_model.setHorizontalHeaderLabels(["Freelist Recovery (generated)"])
+            item = QStandardItem("Database file or page size unavailable")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        entries, carved = self._get_freelist_data()
+
+        if not entries:
+            self._source_model.setHorizontalHeaderLabels(["Freelist Recovery (generated)"])
+            item = QStandardItem("No freelist pages found")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        schema_cols = self._table_column_counts(conn)
+        max_cols = max(
+            (len(values) for c in carved for _rowid, values in c["rows"]), default=0
+        )
+        headers = ["Page", "Kind", "RowID", "Candidate Tables (by column count)"] + [
+            f"col{i}" for i in range(max_cols)
+        ]
+        self._source_model.setHorizontalHeaderLabels(headers)
+
+        total_rows = 0
+        for c in carved:
+            page, kind = c["page"], c["kind"]
+            for rowid, values in c["rows"]:
+                candidates = sorted(
+                    name for name, n in schema_cols.items() if n == len(values)
+                )
+                cand_text = ", ".join(candidates) if candidates else "—"
+
+                items = [
+                    QStandardItem(str(page)),
+                    QStandardItem(kind),
+                    QStandardItem(str(rowid)),
+                    QStandardItem(cand_text),
+                ]
+                for i in range(max_cols):
+                    if i < len(values):
+                        v = values[i]
+                        if v is None:
+                            text = ""
+                        elif isinstance(v, bytes):
+                            text = v.decode("utf-8", errors="replace")
+                        else:
+                            text = str(v)
+                    else:
+                        text = ""
+                    items.append(QStandardItem(text))
+                for it in items:
+                    it.setEditable(False)
+                self._source_model.appendRow(items)
+                total_rows += 1
+
+        self._resize_and_cap()
+        n_pages_with_data = len({c["page"] for c in carved})
+        self._row_count_label.setText(
+            f"({len(entries)} freelist pages, {n_pages_with_data} with recoverable data, "
+            f"{total_rows} rows carved)"
+        )
+        self._sql_status.setText(
+            "Candidate tables are a heuristic match by column count only — the source "
+            "table cannot be determined from a freed page. Values spilling onto overflow "
+            "pages are reconstructed when those pages are still on the freelist "
+            "unmodified; otherwise shown as '<OVERFLOW>'. Double-click a row to open the "
+            "raw page in the hex viewer."
+        )
+
+    def _get_page_table_map(self) -> dict[int, str]:
+        """Return (and cache) {page_num: table_name}, independent of WAL presence."""
+        if self._page_table_map:
+            return self._page_table_map
+        conn = self._ensure_db()
+        page_size = self._get_page_size()
+        if conn is None or page_size == 0:
+            return {}
+        try:
+            self._page_table_map = build_page_table_map(conn, None, page_size)
+        except Exception:
+            self._page_table_map = {}
+        return self._page_table_map
+
+    def _get_freeblocks_data(self) -> list[dict]:
+        """Return (and cache) every freeblock found anywhere in the database file."""
+        if self._freeblocks_cache is not None:
+            return self._freeblocks_cache
+        page_size = self._get_page_size()
+        if self._db_path is None or page_size == 0:
+            self._freeblocks_cache = []
+            return self._freeblocks_cache
+        self._freeblocks_cache = scan_database_freeblocks(self._db_path, page_size)
+        return self._freeblocks_cache
+
+    def _load_freeblocks(self) -> None:
+        """Carve leftover cell fragments out of in-page freeblocks.
+
+        Unlike the Freelist Recovery tab (whole freed pages), this catches
+        ordinary single-row DELETEs that never freed an entire page — SQLite
+        splices the deleted cell into the page's freeblock list instead of
+        zeroing it. The freeblock's own 4-byte header overwrites the start
+        of the old cell, so the leftover bytes are shown raw rather than
+        decoded into columns.
+        """
+        self._source_model.clear()
+        conn = self._ensure_db()
+        page_size = self._get_page_size()
+
+        if conn is None or self._db_path is None or page_size == 0:
+            self._source_model.setHorizontalHeaderLabels(["Freeblocks (generated)"])
+            item = QStandardItem("Database file or page size unavailable")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        freeblocks = self._get_freeblocks_data()
+
+        if not freeblocks:
+            self._source_model.setHorizontalHeaderLabels(["Freeblocks (generated)"])
+            item = QStandardItem("No freeblocks found")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        page_table_map = self._get_page_table_map()
+        freelist_pages = {e["page"] for e in self._get_freelist_data()[0]}
+
+        self._source_model.setHorizontalHeaderLabels(
+            ["Page", "Table", "Offset (B)", "Size (B)", "Data"]
+        )
+
+        for fb in freeblocks:
+            page = fb["page"]
+            if page in page_table_map:
+                origin = page_table_map[page]
+            elif page in freelist_pages:
+                origin = "Freelist"
+            else:
+                origin = "—"
+            text = fb["data"].decode("utf-8", errors="replace")
+
+            items = [
+                QStandardItem(str(page)),
+                QStandardItem(origin),
+                QStandardItem(str(fb["offset"])),
+                QStandardItem(str(fb["size"])),
+                QStandardItem(text),
+            ]
+            for it in items:
+                it.setEditable(False)
+            self._source_model.appendRow(items)
+
+        self._resize_and_cap()
+        self._row_count_label.setText(f"({len(freeblocks)} freeblocks)")
+        self._sql_status.setText(
+            "Raw leftover bytes from deleted cells still linked in each page's freeblock "
+            "list — not decoded into columns, since the freeblock's own header overwrites "
+            "the start of the original cell. Double-click a row to open the raw page in "
+            "the hex viewer."
+        )
+
+    def _get_unallocated_data(self) -> list[dict]:
+        """Return (and cache) every non-empty unallocated-space gap in the file."""
+        if self._unallocated_cache is not None:
+            return self._unallocated_cache
+        page_size = self._get_page_size()
+        if self._db_path is None or page_size == 0:
+            self._unallocated_cache = []
+            return self._unallocated_cache
+        self._unallocated_cache = scan_database_unallocated(self._db_path, page_size)
+        return self._unallocated_cache
+
+    def _load_unallocated_space(self) -> None:
+        """Show raw bytes from the gap between each table-leaf page's cell-pointer
+        array and its cell-content area.
+
+        Unlike Freeblocks, this space isn't a maintained structure — it's
+        just whatever bytes happen to be sitting there, and SQLite makes no
+        promise they're leftover row content rather than zeroed space or
+        stale pointer values from a shrunk pointer array. Shown raw and
+        unfiltered so the analyst can judge each entry themselves; entries
+        that were entirely zero are not shown at all (nothing to judge).
+        """
+        self._source_model.clear()
+        conn = self._ensure_db()
+        page_size = self._get_page_size()
+
+        if conn is None or self._db_path is None or page_size == 0:
+            self._source_model.setHorizontalHeaderLabels(["Unallocated Space (generated)"])
+            item = QStandardItem("Database file or page size unavailable")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        entries = self._get_unallocated_data()
+
+        if not entries:
+            self._source_model.setHorizontalHeaderLabels(["Unallocated Space (generated)"])
+            item = QStandardItem("No non-empty unallocated space found")
+            item.setEditable(False)
+            self._source_model.appendRow([item])
+            self._row_count_label.setText("")
+            return
+
+        page_table_map = self._get_page_table_map()
+        freelist_pages = {e["page"] for e in self._get_freelist_data()[0]}
+
+        self._source_model.setHorizontalHeaderLabels(
+            ["Page", "Table", "Offset (B)", "Size (B)", "Data"]
+        )
+
+        for entry in entries:
+            page = entry["page"]
+            if page in page_table_map:
+                origin = page_table_map[page]
+            elif page in freelist_pages:
+                origin = "Freelist"
+            else:
+                origin = "—"
+            text = entry["data"].decode("utf-8", errors="replace")
+
+            items = [
+                QStandardItem(str(page)),
+                QStandardItem(origin),
+                QStandardItem(str(entry["offset"])),
+                QStandardItem(str(entry["size"])),
+                QStandardItem(text),
+            ]
+            for it in items:
+                it.setEditable(False)
+            self._source_model.appendRow(items)
+
+        self._resize_and_cap()
+        self._row_count_label.setText(f"({len(entries)} pages with non-empty unallocated space)")
+        self._sql_status.setText(
+            "Raw bytes only, not verified as recoverable row content — SQLite doesn't "
+            "guarantee anything meaningful survives here, unlike Freeblocks. Often noise "
+            "(stale pointer values) or empty. Double-click a row to open the raw page in "
+            "the hex viewer."
+        )
+
     def _on_table_double_clicked(self, index: object) -> None:
         """Double-click handler: navigate to table from summary, open WAL page in hex viewer, or inspect bytes cell."""
         current = self._table_combo.currentText()
@@ -1325,6 +1645,63 @@ class TableViewer(QWidget):
             name_item = self._source_model.item(src_row, name_col)
             if name_item and self._table_combo.findText(name_item.text()) >= 0:
                 self._table_combo.setCurrentText(name_item.text())
+            return
+
+        if current == self._freelist_label:
+            if self._db_path is None:
+                return
+            page_size = self._get_page_size()
+            if page_size == 0:
+                return
+            row = self._proxy_model.mapToSource(self._proxy_model.index(index.row(), 0)).row()  # type: ignore[union-attr]
+            page_item = self._source_model.item(row, 0)
+            if page_item is None:
+                return
+            try:
+                page_num = int(page_item.text())
+            except ValueError:
+                return
+            page_bytes = _read_freelist_page(self._db_path, page_num, page_size)
+            if page_bytes:
+                self.open_bytes_requested.emit(page_bytes, f"Freelist page {page_num}")
+            return
+
+        if current == self._freeblocks_label:
+            if self._db_path is None:
+                return
+            page_size = self._get_page_size()
+            if page_size == 0:
+                return
+            row = self._proxy_model.mapToSource(self._proxy_model.index(index.row(), 0)).row()  # type: ignore[union-attr]
+            page_item = self._source_model.item(row, 0)
+            if page_item is None:
+                return
+            try:
+                page_num = int(page_item.text())
+            except ValueError:
+                return
+            page_bytes = _read_freelist_page(self._db_path, page_num, page_size)
+            if page_bytes:
+                self.open_bytes_requested.emit(page_bytes, f"Page {page_num} (freeblock)")
+            return
+
+        if current == self._unallocated_label:
+            if self._db_path is None:
+                return
+            page_size = self._get_page_size()
+            if page_size == 0:
+                return
+            row = self._proxy_model.mapToSource(self._proxy_model.index(index.row(), 0)).row()  # type: ignore[union-attr]
+            page_item = self._source_model.item(row, 0)
+            if page_item is None:
+                return
+            try:
+                page_num = int(page_item.text())
+            except ValueError:
+                return
+            page_bytes = _read_freelist_page(self._db_path, page_num, page_size)
+            if page_bytes:
+                self.open_bytes_requested.emit(page_bytes, f"Page {page_num} (unallocated space)")
             return
 
         if current != self._wal_label:

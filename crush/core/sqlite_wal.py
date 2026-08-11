@@ -3,7 +3,7 @@
 
 Implements:
   - SQLite varint decoder
-  - Record-format row extractor (serial-type decoder, no overflow chasing)
+  - Record-format row extractor (serial-type decoder, optional overflow chasing)
   - Table-leaf page parser (page type 0x0D)
   - Page→table attribution map built by walking B-tree interior pages
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +151,71 @@ PAGE_TYPE_INDEX_LEAF     = 0x0A
 PAGE_TYPE_INDEX_INTERIOR = 0x02
 
 
-def parse_table_leaf_page(page: bytes) -> list[tuple[int, list[Any]]] | None:
+def _payload_inline_size(payload_size: int, usable_size: int) -> int:
+    """Return how many payload bytes SQLite stores inline on the leaf page
+    itself; any remainder spills into the overflow page chain. Formula per
+    the SQLite file format spec (section 1.5), same as SQLite's own
+    `btreeParseCellPtr()`.
+    """
+    U = usable_size
+    P = payload_size
+    X = U - 35
+    if P <= X:
+        return P
+    M = ((U - 12) * 32) // 255 - 23
+    K = M + (P - M) % (U - 4)
+    return K if K <= X else M
+
+
+def _follow_overflow_chain(
+    first_page: int,
+    remaining: int,
+    usable_size: int,
+    overflow_reader: Callable[[int], bytes | None],
+    max_pages: int = 10_000,
+) -> bytes:
+    """Follow an overflow page chain, collecting up to *remaining* bytes.
+
+    Stops early — returning whatever was collected so far — if the chain
+    breaks: a page can't be read, or a cycle is detected. *overflow_reader*
+    decides what counts as "readable"; callers that can only trust specific
+    pages (e.g. other pages still confirmed on the freelist) should return
+    None for anything else rather than risk splicing in unrelated live data.
+    """
+    collected = bytearray()
+    page_num = first_page
+    visited: set[int] = set()
+    per_page_capacity = usable_size - 4
+
+    while page_num and remaining > 0 and page_num not in visited and len(visited) < max_pages:
+        visited.add(page_num)
+        page = overflow_reader(page_num)
+        if page is None or len(page) < 4:
+            break
+        next_page = struct.unpack_from(">I", page, 0)[0]
+        take = min(remaining, per_page_capacity, len(page) - 4)
+        collected.extend(page[4:4 + take])
+        remaining -= take
+        page_num = next_page
+
+    return bytes(collected)
+
+
+def parse_table_leaf_page(
+    page: bytes,
+    *,
+    page_size: int = 0,
+    overflow_reader: Callable[[int], bytes | None] | None = None,
+) -> list[tuple[int, list[Any]]] | None:
     """Parse a SQLite table-leaf page (type 0x0D).
 
     Returns a list of (rowid, [values]) tuples, or None if the page is not a
-    table-leaf page or is corrupt.  Overflow content is returned as the
-    string '<OVERFLOW>' — overflow pages are not followed.
+    table-leaf page or is corrupt. Values whose payload extends beyond what
+    could be recovered are returned as the string '<OVERFLOW>'. By default
+    overflow pages are not followed (matching prior behavior); pass
+    *page_size* and *overflow_reader* to reconstruct values that spill onto
+    overflow pages — *overflow_reader(page_num)* should return that page's
+    raw bytes, or None if it can't be trusted/read.
     """
     if len(page) < 8:
         return None
@@ -172,6 +231,7 @@ def parse_table_leaf_page(page: bytes) -> list[tuple[int, list[Any]]] | None:
     # Cell pointer array starts at offset 8 (table-leaf has no rightmost-pointer)
     ptr_area_start = 8
     rows: list[tuple[int, list[Any]]] = []
+    usable_size = page_size or len(page)
 
     for i in range(cell_count):
         ptr_off = ptr_area_start + i * 2
@@ -186,11 +246,21 @@ def parse_table_leaf_page(page: bytes) -> list[tuple[int, list[Any]]] | None:
             pos += n
             rowid, n = _read_varint(page, pos)
             pos += n
-            # Inline payload: min(payload_size, max_inline)
-            # For leaf pages, max inline = page_size - 35; we just take what's there.
-            inline = min(payload_size, len(page) - pos)
-            payload = bytes(page[pos:pos + inline])
-            values = _decode_record(payload)
+
+            inline_size = _payload_inline_size(payload_size, usable_size)
+            inline_size = min(inline_size, len(page) - pos)  # never read past the page
+            payload = bytearray(page[pos:pos + inline_size])
+
+            remaining = payload_size - inline_size
+            if remaining > 0 and overflow_reader is not None:
+                overflow_ptr_off = pos + inline_size
+                if overflow_ptr_off + 4 <= len(page):
+                    next_page = struct.unpack_from(">I", page, overflow_ptr_off)[0]
+                    payload.extend(
+                        _follow_overflow_chain(next_page, remaining, usable_size, overflow_reader)
+                    )
+
+            values = _decode_record(bytes(payload))
             rows.append((rowid, values))
         except Exception:
             continue
