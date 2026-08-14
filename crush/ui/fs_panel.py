@@ -456,6 +456,7 @@ class FilesystemPanel(QWidget):
         if node.is_dir:
             from crush.parsers.unified_log_parser import is_ios_diagnostics_node
             _is_ios_diag = is_ios_diagnostics_node(node)
+        send_to_peach_action = None
         if _is_ios_diag:
             open_ios_diag_action = menu.addAction("Open as Unified Log Archive")
             add_ios_diag_action  = menu.addAction("Add to Multi-Log Studio as Unified Log Archive")
@@ -466,6 +467,8 @@ class FilesystemPanel(QWidget):
         else:
             open_multi_log_action = menu.addAction("Open in Multi-Log Studio")
             add_multi_log_action  = menu.addAction("Add to Multi-Log Studio")
+        if _is_logarchive or _is_ios_diag or not node.is_dir:
+            send_to_peach_action = menu.addAction("Send to Peach")
         open_external_default = None
         open_external_choose = None
         if not node.is_dir:
@@ -509,6 +512,8 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "multi_log")
         elif action == add_multi_log_action:
             self.open_requested.emit(node, vfs, "multi_log_add")
+        elif action == send_to_peach_action:
+            self.open_requested.emit(node, vfs, "send_to_peach")
         elif action == open_proto_action:
             self.open_requested.emit(node, vfs, "protobuf")
         elif action == open_realm_encrypted_action:

@@ -10,6 +10,7 @@ All notable changes to Crush will be documented in this file.
 - Added to SQLite Table viewer -> Support for freeblock recovery ("Freeblocks" tab): carves deleted rows still lingering in live pages.
 - Added to SQLite Table viewer -> Support for unallocated intra-page space ("Unallocated Space" tab): shows raw leftover bytes for manual review.
 - Added to SQLite Table viewer -> Support for overflow-page reconstruction in Freelist Recovery: values spilling onto overflow pages are recovered when those pages are still intact.
+- Added "Send to Peach" (right-click an AUL source, or any log file): hands the source off to the bundled peach-forensics log viewer.
 
 ### Removed
 

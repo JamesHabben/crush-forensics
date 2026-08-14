@@ -29,15 +29,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Version pinned inside scripts/download_peach_binaries.py itself (not
+      # an env var here, unlike UL_VERSION below) -- simplest done once in
+      # Python rather than duplicated across bash/pwsh per platform, and this
+      # is the single source of truth for the pinned version, not a second
+      # one to keep in sync. Downloads all 4 platforms regardless of runner
+      # OS (mildly wasteful, avoids OS-gating the one step needed).
+      - name: Download peach-forensics binaries
+        run: python scripts/download_peach_binaries.py
+
       # Set arch-specific variables for macOS builds
       - name: Set macOS build vars
         if: runner.os == 'macOS'
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
             echo "MACOS_UL_BINARY=unifiedlog_iterator-aarch64-apple-darwin" >> $GITHUB_ENV
+            echo "MACOS_PEACH_BINARY=peach-macos-arm" >> $GITHUB_ENV
             echo "MACOS_ARTIFACT=crush-macos-arm-${{ github.ref_name }}.zip" >> $GITHUB_ENV
           else
             echo "MACOS_UL_BINARY=unifiedlog_iterator-x86_64-apple-darwin" >> $GITHUB_ENV
+            echo "MACOS_PEACH_BINARY=peach-macos-intel" >> $GITHUB_ENV
             echo "MACOS_ARTIFACT=crush-macos-intel-${{ github.ref_name }}.zip" >> $GITHUB_ENV
           fi
 
@@ -161,6 +172,7 @@ jobs:
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush_icon_256.png:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-unknown-linux-gnu:crush/bin/unifiedlog_iterator/" \
+            --add-data "crush/bin/peach/peach-linux:crush/bin/peach/" \
             crush/__main__.py
 
       - name: Build (PyInstaller) macOS
@@ -197,6 +209,7 @@ jobs:
             --add-data "crush/data/formats.db:data" \
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}:crush/bin/unifiedlog_iterator/" \
+            --add-data "crush/bin/peach/${MACOS_PEACH_BINARY}:crush/bin/peach/" \
             crush/__main__.py
 
       - name: Strip unused Qt frameworks (macOS)
@@ -250,6 +263,7 @@ jobs:
             --add-data "crush/data/formats.db;data" `
             --add-data "crush/resources/icons/crush_icon_128.svg;crush/resources/icons/" `
             --add-data "crush/bin/unifiedlog_iterator/unifiedlog_iterator-x86_64-pc-windows-msvc.exe;crush/bin/unifiedlog_iterator/" `
+            --add-data "crush/bin/peach/peach-windows.exe;crush/bin/peach/" `
             crush/__main__.py
 
       - name: Package artifact (Linux → AppImage)

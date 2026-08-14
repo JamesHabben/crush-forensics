@@ -671,6 +671,7 @@ class MainWindow(QMainWindow):
         self._integrity_mode_action.toggled.connect(self._set_integrity_mode)
         tools_menu.addAction(self._integrity_mode_action)
         tools_menu.addAction("Indexing Threads…", self._set_prescan_workers)
+        tools_menu.addAction("Peach Binary Path…", self._set_peach_binary_path)
 
         help_menu = menu.addMenu("Help")
         help_menu.addAction("Format Reference…", self._show_format_reference)
@@ -1134,6 +1135,10 @@ class MainWindow(QMainWindow):
                 f"{node.path}  [Multi-Log Studio — loading {len(selected)} file(s)…]"
             )
             return
+        if mode == "send_to_peach":
+            self._hash_node_if_integrity(node, vfs)
+            self._send_to_peach(node, vfs)
+            return
         if mode == "protobuf":
             self._hash_node_if_integrity(node, vfs)
             from crush.parsers.protobuf_parser import ProtobufParser
@@ -1423,6 +1428,148 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_logger"):
                 self._logger.error("Open external failed: %s", exc)
             return None
+
+    def _export_vfs_tree(self, node: VFSNode, vfs: VFS, dest: Path) -> None:
+        """Recursively copy a VFS node's tree onto the real filesystem at *dest*."""
+        if node.is_dir:
+            dest.mkdir(parents=True, exist_ok=True)
+            for child in node.children:
+                self._export_vfs_tree(child, vfs, dest / child.name)
+        else:
+            with vfs.open(node) as src, open(dest, "wb") as out:
+                out.write(src.read())
+
+    def _materialize_directory_node_for_external(
+        self, node: VFSNode, vfs: VFS
+    ) -> tuple[Path, Path | None] | None:
+        """Resolve a VFS node (file or directory) to a real filesystem path,
+        extracting it to a temp dir first if needed.
+
+        Sibling to _materialize_node_for_external, not a modification of it —
+        that one has its own single-file-specific extraction path and other
+        callers (Open External). This one is generic over files and
+        directories via _export_vfs_tree, needed since AUL sources (a
+        .logarchive bundle, or a diagnostics+uuidtext pair) are always
+        directories, and archive/backup-backed VFSs can't expose those as a
+        real filesystem path directly — and reused as-is for plain log files
+        handed to peach, so callers don't need to branch on node.is_dir.
+
+        Returns (source_path, cleanup_dir). cleanup_dir is None when the node
+        already lives on a real DirectoryVFS (no extraction happened, nothing
+        to clean up); otherwise it's the temp directory the caller should ask
+        the external tool to delete once it's done with source_path.
+        """
+        try:
+            if isinstance(vfs, DirectoryVFS) and Path(node.path).exists():
+                return Path(node.path), None
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="crush-open-"))
+            source_path = tmp_dir / node.name
+            self._export_vfs_tree(node, vfs, source_path)
+            return source_path, tmp_dir
+        except Exception as exc:
+            if hasattr(self, "_logger"):
+                self._logger.error("Materialize directory for external failed: %s", exc)
+            return None
+
+    def _send_to_peach(self, node: VFSNode, vfs: VFS) -> None:
+        """Hand off a log source to peach-forensics via a one-shot CLI spawn.
+
+        Offered for AUL sources (a .logarchive bundle or a raw diagnostics
+        folder) and, more broadly, any plain file — mirrors "Open in
+        Multi-Log Studio"'s own long-standing lack of pre-filtering (any
+        file, no extension/content check) rather than trying to guess
+        whether a given file matches one of peach's own TOML text-log
+        configs, which live in peach's per-user data dir and aren't visible
+        to Crush at all. Peach's own manual sourcetype-confirm-before-Load
+        step is the real gate, same as it always is.
+
+        No IPC after launch — peach runs completely independently once
+        started, matching its own design. Directory-backed sources already
+        living on a real filesystem are passed straight through; archive/
+        backup-backed sources are extracted to a temp dir first, with
+        --cleanup-dir telling peach to remove it once peach closes.
+
+        A raw full-FS acquisition's diagnostics/ folder is useless to peach
+        on its own — peach needs uuidtext/ sitting right next to it (its own
+        docs: "Selecting diagnostics alone, with no uuidtext anywhere nearby,
+        fails fast"). uuidtext/ is a *sibling* of diagnostics/ in the VFS
+        tree, not a descendant of the right-clicked node, so the generic
+        single-node materializer below can't see it.
+
+        Deliberately NOT reusing build_logarchive_from_acquisition() here —
+        that flattens diagnostics/'s own children (Persist/Special/...) up a
+        level and keeps uuidtext/ as its own folder alongside them, which is
+        neither of the two layouts peach's docs say it recognizes ("the
+        diagnostics folder itself, with uuidtext next to it as a sibling" or
+        "their common parent folder") — it's built for crush's own bundled
+        unifiedlog_iterator instead, a different consumer with different
+        structural tolerances. Recreate the raw layout peach actually
+        documents instead: diagnostics/ and uuidtext/ untouched, as direct
+        children of one temp parent folder, and hand peach that parent.
+
+        Extracted sources also get --ephemeral-session: a source that
+        needed materializing from an archive/backup wasn't already sitting
+        on disk in the clear, so peach must not leave a durable, unencrypted
+        session copy of it behind once it closes. A source that was already
+        a real filesystem path doesn't need this — it was already at rest,
+        unencrypted, wherever it lives.
+        """
+        from crush.core.peach_launcher import launch_peach
+        from crush.parsers.unified_log_parser import (
+            _find_uuidtext_sibling,
+            is_ios_diagnostics_node,
+        )
+
+        if is_ios_diagnostics_node(node):
+            try:
+                tmp_dir = Path(tempfile.mkdtemp(prefix="crush-open-"))
+                self._export_vfs_tree(node, vfs, tmp_dir / "diagnostics")
+                uuidtext_node = _find_uuidtext_sibling(node, vfs)
+                if uuidtext_node is not None:
+                    self._export_vfs_tree(uuidtext_node, vfs, tmp_dir / "uuidtext")
+                elif hasattr(self, "_logger"):
+                    self._logger.warning(
+                        "Send to Peach: no uuidtext sibling found for %s — "
+                        "message strings will not resolve", node.path
+                    )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Send to Peach", f"Unable to materialize source for Peach: {exc}"
+                )
+                return
+            source_path, cleanup_dir = tmp_dir, tmp_dir
+        else:
+            resolved = self._materialize_directory_node_for_external(node, vfs)
+            if resolved is None:
+                QMessageBox.warning(self, "Send to Peach", "Unable to materialize source for Peach.")
+                return
+            source_path, cleanup_dir = resolved
+
+        override = self._settings.value("peach_binary_path", "", type=str)
+        try:
+            launch_peach(
+                [source_path],
+                cleanup_dirs=[cleanup_dir] if cleanup_dir else [],
+                override_path=override,
+                ephemeral_session=cleanup_dir is not None,
+            )
+            self._status.showMessage(f"Sent to Peach: {node.path}")
+        except (FileNotFoundError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Send to Peach", str(exc))
+
+    def _set_peach_binary_path(self) -> None:
+        current = self._settings.value("peach_binary_path", "", type=str)
+        text, ok = QInputDialog.getText(
+            self,
+            "Peach Binary Path",
+            "Path to a peach-forensics executable to use instead of the "
+            "version bundled with Crush (leave blank to use the bundled one):",
+            QLineEdit.EchoMode.Normal,
+            current,
+        )
+        if ok:
+            self._settings.setValue("peach_binary_path", text.strip())
 
     def _open_local_file(self, path: str | Path) -> None:
         from crush.ui import open_url

@@ -125,7 +125,7 @@ Each opened file gets its own tab. Tabs can be:
 
 ### SQLite / Database Viewer
 
-The table dropdown at the top switches between database tables, views, and four generated analysis pages. All generated entries are labelled `(generated)` to make clear they are computed by Crush rather than read directly from the database.
+The table dropdown at the top switches between database tables, views, and seven generated analysis pages. All generated entries are labelled `(generated)` to make clear they are computed by Crush rather than read directly from the database.
 
 #### Generated views
 
@@ -140,7 +140,7 @@ The table dropdown at the top switches between database tables, views, and four 
 | Index | `ON table (column, …)` — shows which table and columns are indexed |
 | Trigger | First line of `CREATE TRIGGER …` |
 
-**DB Info (generated)** — shows 28 PRAGMA settings in a three-column layout (Setting / Value / Description), styled after the *Edit Pragma* view of DB Browser for SQLite. Enum values are decoded to their named constant (e.g. `2 — FULL` for `auto_vacuum`), booleans show as `1 — ON` / `0 — OFF`. When a WAL companion is present, six WAL forensic metrics appear at the top of this view before the PRAGMA list (see *WAL forensic analysis* below).
+**DB Info (generated)** — shows 9 PRAGMA settings in a three-column layout (Setting / Value / Description), styled after the *Edit Pragma* view of DB Browser for SQLite. Only PRAGMAs actually persisted in the SQLite file header are shown (`application_id`, `user_version`, `schema_version`, `encoding`, `page_size`, `page_count`, `freelist_count`, `journal_mode`, `auto_vacuum`) — most other PRAGMAs are per-connection settings that reset to the linked SQLite library's own default on every new connection, so displaying them would show Crush's own runtime environment rather than anything about the examined file's history. Enum values are decoded to their named constant (e.g. `2 — FULL` for `auto_vacuum`), booleans show as `1 — ON` / `0 — OFF`. When a WAL companion is present, six WAL forensic metrics appear at the top of this view before the PRAGMA list (see *WAL forensic analysis* below).
 
 **WAL Frames (generated)** — appears when a `-wal` companion file is present. Shows a full frame inventory (Frame / Page / Transaction / Status / Table / Offset) with every frame classified by forensic status:
 
@@ -168,6 +168,20 @@ When a `-wal` companion is present, Crush automatically reads and classifies eve
 This lets you answer questions such as: *what rows existed in this table before the last UPDATE or DELETE?* — without any specialist carving tool.
 
 > **Tip:** An empty WAL history for a table does not mean the data was never modified — it only means there are no current non-Active frames for that table's pages. For a complete picture, also check the Superseded and Uncommitted counts in DB Info.
+
+#### Freelist Recovery
+
+Appears when `PRAGMA freelist_count` is greater than zero. SQLite doesn't zero a page's content when it's freed by `DELETE`/`DROP` — only when a later allocation actually reuses it — so a freed page can still hold its original table-leaf cells intact. This tab walks the freelist trunk chain and carves any leftover rows it finds.
+
+Recovered rows show generic column headers (`col0`, `col1`, …) rather than the original column names — a freed page is no longer referenced by any table's B-tree, so the source table can't be determined with certainty. A **Candidate Tables** column lists every table whose column count matches, as a heuristic hint, not a definitive attribution. Values whose payload spilled onto overflow pages are reconstructed by following the overflow chain, but only through pages still confirmed unmodified on the freelist — a chain that steps onto a reused or trunk page (trunk pages are overwritten with the freelist's own bookkeeping the moment they become a trunk) is left as `<OVERFLOW>` rather than risk splicing in unrelated data. Double-click a row to open its raw page in the Hex Viewer.
+
+#### Freeblocks
+
+Always shown. Catches the far more common case Freelist Recovery can't: an ordinary single-row `DELETE` that never frees a whole page. SQLite splices the deleted cell into the page's own in-page freeblock list instead of zeroing it. Since the page is still part of a live table's B-tree, the **Table** column here is a definite match, not a heuristic guess. Cell content is shown raw rather than decoded into columns, since the freeblock's own 4-byte header overwrites the start of the original cell.
+
+#### Unallocated Space
+
+Always shown. Displays the raw bytes sitting in the gap between a page's cell-pointer array and its cell-content area, for manual review. Unlike Freeblocks, SQLite makes no guarantee anything meaningful survives here — it's often all-zero, or stale 2-byte pointer values left over from a shrunk pointer array, rather than recoverable row text. All-zero gaps aren't shown at all; only non-empty ones are, so you can judge each entry yourself.
 
 #### SQL bar
 
@@ -600,10 +614,11 @@ A high-performance log viewer for large files and multi-source correlation. Open
 
 **Apple Unified Log specifics** — `.tracev3` and `.logarchive` files are parsed via the bundled `unifiedlog_iterator` binary. Columns **Subsystem** and **Category** are populated directly. The detail panel also shows `event_type` (e.g. `logEvent`, `activityCreateEvent`, `lossEvent`), `euid`, `thread_id`, and `activity_id`. `lossEvent` entries — indicating missing log entries due to buffer overflow — are shown at WARN level with a descriptive message. `message_entries` of type Private or Sensitive are annotated `[private]` / `[sensitive]`; these may contain data that is redacted in live system logs but preserved in an offline acquisition.
 
-**iOS full-filesystem acquisition** — right-clicking a `diagnostics/` directory (i.e. a node that contains `Persist/`, `timesync/`, `Special/`, or `Signpost/` as direct children) offers two additional actions:
+**iOS full-filesystem acquisition** — right-clicking a `diagnostics/` directory (i.e. a node that contains `Persist/`, `timesync/`, `Special/`, or `Signpost/` as direct children) offers three additional actions:
 
 - **Open in Multi-Log Studio** — Crush assembles a temporary logarchive from the diagnostics subtree and the sibling `uuidtext/` directory (needed for full message-string resolution), then converts all tracev3 files using parallel `unifiedlog_iterator` processes. Timestamps are correctly resolved as long as the acquisition includes `timesync/` files; if `timesync/` is absent or empty the Timestamp column will show "—".
 - **Export as .logarchive…** — saves the assembled logarchive to a user-chosen folder so it can be examined in other tools (e.g. `log` on macOS).
+- **Send to Peach** — see below.
 
 **Parallel conversion** — when loading a `.logarchive` or iOS diagnostics directory, Crush splits the `Persist/*.tracev3` files across multiple `unifiedlog_iterator` processes (one per physical CPU core by default). Results appear in the viewer as each chunk finishes. The benchmark script `scripts/benchmark_unified_log.py` can be used to measure throughput and tune the worker count with `--workers N`.
 
@@ -628,6 +643,16 @@ For log files not auto-detected, click **Format…** to open the format dialog:
 6. Click **Save Profile** to persist the profile for future use, then **Apply** to re-parse the selected source with this format.
 
 Saved profiles are stored in `~/.config/crush/log_profiles/` and are available in the **Saved profiles** dropdown on the next start.
+
+**Send to Peach**
+
+Right-click a `.logarchive` bundle, an iOS full-FS acquisition's `diagnostics/` folder, or **any other file** → **Send to Peach** hands the source off to [peach-forensics](https://github.com/kalink0/peach-forensics), a sibling forensic log viewer with tagging and Splunk-style search. This is a one-shot handoff, not an embedded view — peach launches as its own window and keeps running fully independently afterward, even after Crush itself is closed; there's no connection back to Crush once it's started.
+
+- Offered on any file, not just recognized AUL sources — the same "offer it, let the tool itself be the real test" approach **Open in Multi-Log Studio** already uses, since peach's own TOML text-log configs live in its per-user data directory and Crush has no way to check a file against them. Peach never auto-loads a source anyway — you always confirm the sourcetype and click **Load** yourself, so an unrelated file just gets dismissed there rather than silently misinterpreted.
+- The peach binary ships bundled with Crush (same mechanism as `unifiedlog_iterator`) — nothing to install separately in a portable build. Running from source needs `python scripts/download_peach_binaries.py` once.
+- **Tools → Peach Binary Path…** points at a different peach executable instead of the bundled one — useful if Crush hasn't been updated in a while but a newer peach build is available. Leave blank to use the bundled version.
+- A `.logarchive` bundle is handed to peach as-is. An iOS diagnostics folder is recreated as a temporary `diagnostics/` + `uuidtext/` sibling pair (peach's own raw-acquisition layout) rather than the flattened bundle format `unifiedlog_iterator` needs — the two tools expect different input shapes. Any other file is passed through unchanged (or extracted from an archive/backup first, if needed).
+- Sources materialized from an archive/backup (rather than already sitting on a real filesystem) are passed with `--ephemeral-session`, so peach doesn't leave a durable, unencrypted session copy of temp-extracted or decrypted evidence behind once it closes.
 
 ---
 

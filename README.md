@@ -23,6 +23,8 @@ Open and navigate ZIP, TAR, 7z, Android `adb backup` (`.ab`), and iTunes/Finder 
 
 **Integrity mode** — optional hashing for auditability: file/ZIP/TAR sources are hashed on open and exports generate a hash manifest (`crush-export-hashes.txt`). Toggle via the bottom-right status badge.
 
+**Send to Peach** — hand a log source (Apple Unified Log, or any other file — same "no pre-filtering, confirm in the tool itself" approach as Multi-Log Studio) off to the bundled sibling log viewer [peach-forensics](https://github.com/kalink0/peach-forensics) for tagging and Splunk-style search, via right-click.
+
 Supported viewers (more planned):
 
 - SQLite / Database Viewer
@@ -102,7 +104,12 @@ python -m pip install -e .
 python scripts/download_unifiedlog_binaries.py
 ```
 
-4. Run Crush
+4. Download the peach-forensics binaries (required for the "Send to Peach" log-viewer handoff)
+```bash
+python scripts/download_peach_binaries.py
+```
+
+5. Run Crush
 ```bash
 crush
 ```
@@ -166,6 +173,8 @@ This project builds on the great work of the DFIR community. The following third
 - [ccl_leveldb](https://github.com/cclgroupltd/ccl-leveldb) — LevelDB / Chrome LevelDB module (MIT)
 
 Apple Unified Log (`.tracev3` / `.logarchive`) parsing uses the [macos-UnifiedLogs](https://github.com/mandiant/macos-UnifiedLogs) `unifiedlog_iterator` binary by [Mandiant](https://github.com/mandiant) (Apache License 2.0). The binary is bundled automatically in portable builds. When running from source, run `scripts/download_unifiedlog_binaries.py` to download the platform binaries into `crush/bin/unifiedlog_iterator/` (they are git-ignored and never committed).
+
+**Send to Peach** hands log sources off to [peach-forensics](https://github.com/kalink0/peach-forensics), a sibling forensic log viewer (Apache License 2.0) — tagging, Splunk-style search, no IPC after launch. Sessions aren't persisted for sources Crush had to extract or decrypt first (`--ephemeral-session`), so a handoff never leaves a durable, unencrypted copy of evidence behind. The binary is bundled the same way as `unifiedlog_iterator`; run `scripts/download_peach_binaries.py` when running from source to populate `crush/bin/peach/`.
 
 Special thanks to [@dugeonlady](https://github.com/dugeonlady) for suggesting the Rainbow theme — because digital forensics tools don't have to be grey. Or dark. Someone has to bring colour to the hex dump. Evidence: *View → Theme → Rainbow*. She was right.
 
