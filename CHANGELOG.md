@@ -11,6 +11,12 @@ All notable changes to Crush will be documented in this file.
 - Added to SQLite Table viewer -> Support for unallocated intra-page space ("Unallocated Space" tab): shows raw leftover bytes for manual review.
 - Added to SQLite Table viewer -> Support for overflow-page reconstruction in Freelist Recovery: values spilling onto overflow pages are recovered when those pages are still intact.
 - Added "Send to Peach" (right-click an AUL source, or any log file): hands the source off to the bundled peach-forensics log viewer.
+- Added Tools -> Peach -> Open Peach: launches peach standalone, no source pre-filled.
+- Added multi-file and recursive-folder handoff to Peach (multi-select in the tree, or right-click a folder) — sends multiple sources to one peach session at once.
+
+### Bug Fixes
+
+- Fixed "Send to Peach" not finding the bundled peach binary on Windows: it's now copied to a persistent cache directory on first launch instead of run from the temporary extraction directory, which is deleted as soon as Crush exits.
 
 ### Removed
 

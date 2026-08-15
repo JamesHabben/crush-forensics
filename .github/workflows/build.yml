@@ -346,7 +346,7 @@ jobs:
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\\crush.exe -DestinationPath crush-windows-${{ github.ref_name }}.zip
+        run: Compress-Archive -Path dist\crush.exe -DestinationPath crush-windows-${{ github.ref_name }}.zip
 
       - name: Upload release asset (Linux)
         if: runner.os == 'Linux'

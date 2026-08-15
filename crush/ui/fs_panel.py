@@ -92,6 +92,7 @@ class FilesystemPanel(QWidget):
     format_info_requested = Signal(object, object)  # (VFSNode, VFS)
     close_source_requested = Signal(object)  # (VFS)
     open_in_new_window_requested = Signal(object, object)  # (VFSNode, VFS)
+    send_to_peach_batch_requested = Signal(object)  # list[(VFSNode, VFS)]
     load_finished = Signal()
     background_status = Signal(str)
     _search_results_ready = Signal(object)  # internal: list of result dicts
@@ -160,6 +161,7 @@ class FilesystemPanel(QWidget):
         # Page 0: normal tree view
         self._tree = QTreeView()
         self._tree.setModel(self._proxy)
+        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setAnimated(True)
         self._tree.setUniformRowHeights(True)
         self._tree.setAlternatingRowColors(True)
@@ -356,6 +358,23 @@ class FilesystemPanel(QWidget):
         if node and vfs:
             self._ensure_children_loaded(item, node, vfs)
 
+    def _collect_tree_selected_entries(self) -> list[tuple[VFSNode, VFS]]:
+        """Return (node, vfs) for each selected file row in the main tree (skips dirs)."""
+        entries: list[tuple[VFSNode, VFS]] = []
+        for index in self._tree.selectionModel().selectedIndexes():
+            if index.column() != 0:
+                continue
+            source_index = self._proxy.mapToSource(index)
+            item = self._model.itemFromIndex(source_index)
+            if item is None:
+                continue
+            node: VFSNode | None = item.data(_ROLE_NODE)
+            vfs: VFS | None = item.data(_ROLE_VFS)
+            if not node or not vfs or node.is_dir:
+                continue
+            entries.append((node, vfs))
+        return entries
+
     def _on_context_menu(self, pos: object) -> None:
         index = self._tree.indexAt(pos)
         if not index.isValid():
@@ -369,7 +388,20 @@ class FilesystemPanel(QWidget):
         vfs: VFS | None = item.data(_ROLE_VFS)
         if not node or not vfs:
             return
-        self._show_context_menu(node, vfs, self._tree.viewport().mapToGlobal(pos))
+
+        global_pos = self._tree.viewport().mapToGlobal(pos)
+        selected_entries = self._collect_tree_selected_entries()
+        if len(selected_entries) > 1 and self._tree.selectionModel().isSelected(proxy_index):
+            # Right-clicked inside an active multi-selection of 2+ files —
+            # a minimal batch menu instead of the full single-node one,
+            # same pattern as the search view's multi-select export menu.
+            menu = QMenu(self)
+            send_action = menu.addAction(f"Send {len(selected_entries)} files to Peach")
+            if menu.exec(global_pos) == send_action:
+                self.send_to_peach_batch_requested.emit(selected_entries)
+            return
+
+        self._show_context_menu(node, vfs, global_pos)
 
     def _collect_result_entries(self, rows: object) -> list[tuple[VFSNode, VFS, str]]:
         """Return (node, vfs, virtual_path) for each file row in rows (skips dirs)."""
@@ -457,6 +489,7 @@ class FilesystemPanel(QWidget):
             from crush.parsers.unified_log_parser import is_ios_diagnostics_node
             _is_ios_diag = is_ios_diagnostics_node(node)
         send_to_peach_action = None
+        send_to_peach_folder_action = None
         if _is_ios_diag:
             open_ios_diag_action = menu.addAction("Open as Unified Log Archive")
             add_ios_diag_action  = menu.addAction("Add to Multi-Log Studio as Unified Log Archive")
@@ -464,6 +497,7 @@ class FilesystemPanel(QWidget):
             export_logarchive_action = menu.addAction("Export as .logarchive…")
         elif node.is_dir and not _is_logarchive:
             open_logs_folder_action = menu.addAction("Open Logs in Multi-Log Studio")
+            send_to_peach_folder_action = menu.addAction("Send Logs to Peach…")
         else:
             open_multi_log_action = menu.addAction("Open in Multi-Log Studio")
             add_multi_log_action  = menu.addAction("Add to Multi-Log Studio")
@@ -504,6 +538,8 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "text")
         elif action == open_logs_folder_action:
             self.open_requested.emit(node, vfs, "multi_log_folder")
+        elif action == send_to_peach_folder_action:
+            self.open_requested.emit(node, vfs, "send_to_peach_folder")
         elif action == open_ios_diag_action:
             self.open_requested.emit(node, vfs, "multi_log")
         elif action == add_ios_diag_action:

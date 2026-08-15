@@ -506,6 +506,7 @@ class MainWindow(QMainWindow):
         self._fs_panel.background_status.connect(self._on_background_status)
         self._fs_panel.format_info_requested.connect(self._show_format_info)
         self._fs_panel.open_in_new_window_requested.connect(self._open_in_new_window)
+        self._fs_panel.send_to_peach_batch_requested.connect(self._send_to_peach_batch)
         self._fs_dock = QDockWidget("Filesystem", self)
         self._fs_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self._fs_dock.setFeatures(
@@ -671,7 +672,9 @@ class MainWindow(QMainWindow):
         self._integrity_mode_action.toggled.connect(self._set_integrity_mode)
         tools_menu.addAction(self._integrity_mode_action)
         tools_menu.addAction("Indexing Threads…", self._set_prescan_workers)
-        tools_menu.addAction("Peach Binary Path…", self._set_peach_binary_path)
+        peach_menu = tools_menu.addMenu("Peach")
+        peach_menu.addAction("Open Peach", self._open_peach_standalone)
+        peach_menu.addAction("Binary Path…", self._set_peach_binary_path)
 
         help_menu = menu.addMenu("Help")
         help_menu.addAction("Format Reference…", self._show_format_reference)
@@ -1135,6 +1138,25 @@ class MainWindow(QMainWindow):
                 f"{node.path}  [Multi-Log Studio — loading {len(selected)} file(s)…]"
             )
             return
+        if mode == "send_to_peach_folder":
+            from crush.viewers.multi_log_viewer import (
+                _discover_log_nodes,
+                FolderDiscoveryDialog,
+            )
+            found = _discover_log_nodes(node, vfs)
+            if not found:
+                QMessageBox.information(
+                    self, "Send to Peach", f"No log files found in '{node.name}'."
+                )
+                return
+            dlg = FolderDiscoveryDialog(node.name, found, self, title="Send Logs to Peach")
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected = dlg.selected_nodes()
+            if not selected:
+                return
+            self._send_to_peach_batch([(n, vfs) for n in selected])
+            return
         if mode == "send_to_peach":
             self._hash_node_if_integrity(node, vfs)
             self._send_to_peach(node, vfs)
@@ -1472,30 +1494,20 @@ class MainWindow(QMainWindow):
                 self._logger.error("Materialize directory for external failed: %s", exc)
             return None
 
-    def _send_to_peach(self, node: VFSNode, vfs: VFS) -> None:
-        """Hand off a log source to peach-forensics via a one-shot CLI spawn.
-
-        Offered for AUL sources (a .logarchive bundle or a raw diagnostics
-        folder) and, more broadly, any plain file — mirrors "Open in
-        Multi-Log Studio"'s own long-standing lack of pre-filtering (any
-        file, no extension/content check) rather than trying to guess
-        whether a given file matches one of peach's own TOML text-log
-        configs, which live in peach's per-user data dir and aren't visible
-        to Crush at all. Peach's own manual sourcetype-confirm-before-Load
-        step is the real gate, same as it always is.
-
-        No IPC after launch — peach runs completely independently once
-        started, matching its own design. Directory-backed sources already
-        living on a real filesystem are passed straight through; archive/
-        backup-backed sources are extracted to a temp dir first, with
-        --cleanup-dir telling peach to remove it once peach closes.
+    def _resolve_peach_source(
+        self, node: VFSNode, vfs: VFS
+    ) -> tuple[Path, Path | None] | None:
+        """Resolve a single VFS node to a real filesystem path for peach,
+        plus an optional temp dir to ask peach to clean up. None on failure
+        — callers decide how to surface that (single vs. batch report it
+        differently).
 
         A raw full-FS acquisition's diagnostics/ folder is useless to peach
         on its own — peach needs uuidtext/ sitting right next to it (its own
         docs: "Selecting diagnostics alone, with no uuidtext anywhere nearby,
         fails fast"). uuidtext/ is a *sibling* of diagnostics/ in the VFS
         tree, not a descendant of the right-clicked node, so the generic
-        single-node materializer below can't see it.
+        materializer below can't see it on its own.
 
         Deliberately NOT reusing build_logarchive_from_acquisition() here —
         that flattens diagnostics/'s own children (Persist/Special/...) up a
@@ -1507,15 +1519,7 @@ class MainWindow(QMainWindow):
         structural tolerances. Recreate the raw layout peach actually
         documents instead: diagnostics/ and uuidtext/ untouched, as direct
         children of one temp parent folder, and hand peach that parent.
-
-        Extracted sources also get --ephemeral-session: a source that
-        needed materializing from an archive/backup wasn't already sitting
-        on disk in the clear, so peach must not leave a durable, unencrypted
-        session copy of it behind once it closes. A source that was already
-        a real filesystem path doesn't need this — it was already at rest,
-        unencrypted, wherever it lives.
         """
-        from crush.core.peach_launcher import launch_peach
         from crush.parsers.unified_log_parser import (
             _find_uuidtext_sibling,
             is_ios_diagnostics_node,
@@ -1533,18 +1537,48 @@ class MainWindow(QMainWindow):
                         "Send to Peach: no uuidtext sibling found for %s — "
                         "message strings will not resolve", node.path
                     )
+                return tmp_dir, tmp_dir
             except Exception as exc:
-                QMessageBox.warning(
-                    self, "Send to Peach", f"Unable to materialize source for Peach: {exc}"
-                )
-                return
-            source_path, cleanup_dir = tmp_dir, tmp_dir
-        else:
-            resolved = self._materialize_directory_node_for_external(node, vfs)
-            if resolved is None:
-                QMessageBox.warning(self, "Send to Peach", "Unable to materialize source for Peach.")
-                return
-            source_path, cleanup_dir = resolved
+                if hasattr(self, "_logger"):
+                    self._logger.error(
+                        "Send to Peach: materialize failed for %s: %s", node.path, exc
+                    )
+                return None
+
+        return self._materialize_directory_node_for_external(node, vfs)
+
+    def _send_to_peach(self, node: VFSNode, vfs: VFS) -> None:
+        """Hand off a single log source to peach-forensics via a one-shot CLI spawn.
+
+        Offered for AUL sources (a .logarchive bundle or a raw diagnostics
+        folder) and, more broadly, any plain file — mirrors "Open in
+        Multi-Log Studio"'s own long-standing lack of pre-filtering (any
+        file, no extension/content check) rather than trying to guess
+        whether a given file matches one of peach's own TOML text-log
+        configs, which live in peach's per-user data dir and aren't visible
+        to Crush at all. Peach's own manual sourcetype-confirm-before-Load
+        step is the real gate, same as it always is.
+
+        No IPC after launch — peach runs completely independently once
+        started, matching its own design. Directory-backed sources already
+        living on a real filesystem are passed straight through; archive/
+        backup-backed sources are extracted to a temp dir first, with
+        --cleanup-dir telling peach to remove it once peach closes.
+
+        Extracted sources also get --ephemeral-session: a source that
+        needed materializing from an archive/backup wasn't already sitting
+        on disk in the clear, so peach must not leave a durable, unencrypted
+        session copy of it behind once it closes. A source that was already
+        a real filesystem path doesn't need this — it was already at rest,
+        unencrypted, wherever it lives.
+        """
+        resolved = self._resolve_peach_source(node, vfs)
+        if resolved is None:
+            QMessageBox.warning(self, "Send to Peach", "Unable to materialize source for Peach.")
+            return
+        source_path, cleanup_dir = resolved
+
+        from crush.core.peach_launcher import launch_peach
 
         override = self._settings.value("peach_binary_path", "", type=str)
         try:
@@ -1555,6 +1589,60 @@ class MainWindow(QMainWindow):
                 ephemeral_session=cleanup_dir is not None,
             )
             self._status.showMessage(f"Sent to Peach: {node.path}")
+        except (FileNotFoundError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Send to Peach", str(exc))
+
+    def _send_to_peach_batch(self, items: list[tuple[VFSNode, VFS]]) -> None:
+        """Hand off multiple log sources to peach in a single spawn (multiple
+        --add-source flags), so they land in the same session for
+        correlation — used for both a multi-selection in the tree and the
+        recursive-folder discovery flow.
+
+        Failures on individual items are collected and reported together at
+        the end rather than one dialog per failure; sources that resolved
+        fine are still sent even if others in the batch failed.
+        """
+        from crush.core.peach_launcher import launch_peach
+
+        sources: list[Path] = []
+        cleanup_dirs: list[Path] = []
+        failed: list[str] = []
+
+        for node, vfs in items:
+            resolved = self._resolve_peach_source(node, vfs)
+            if resolved is None:
+                failed.append(node.path)
+                continue
+            source_path, cleanup_dir = resolved
+            sources.append(source_path)
+            if cleanup_dir is not None:
+                cleanup_dirs.append(cleanup_dir)
+
+        if not sources:
+            QMessageBox.warning(
+                self, "Send to Peach",
+                "Unable to materialize any of the selected sources for Peach.",
+            )
+            return
+
+        override = self._settings.value("peach_binary_path", "", type=str)
+        try:
+            launch_peach(
+                sources,
+                cleanup_dirs=cleanup_dirs,
+                override_path=override,
+                ephemeral_session=bool(cleanup_dirs),
+            )
+            msg = f"Sent {len(sources)} source(s) to Peach"
+            if failed:
+                msg += f"  ({len(failed)} skipped)"
+            self._status.showMessage(msg)
+            if failed:
+                QMessageBox.warning(
+                    self, "Send to Peach",
+                    "Some sources could not be materialized and were skipped:\n"
+                    + "\n".join(failed),
+                )
         except (FileNotFoundError, RuntimeError) as exc:
             QMessageBox.warning(self, "Send to Peach", str(exc))
 
@@ -1570,6 +1658,18 @@ class MainWindow(QMainWindow):
         )
         if ok:
             self._settings.setValue("peach_binary_path", text.strip())
+
+    def _open_peach_standalone(self) -> None:
+        """Launch peach with no source pre-filled — same binary/override
+        resolution as Send to Peach, just without a file to hand off."""
+        from crush.core.peach_launcher import launch_peach
+
+        override = self._settings.value("peach_binary_path", "", type=str)
+        try:
+            launch_peach([], override_path=override)
+            self._status.showMessage("Opened Peach")
+        except (FileNotFoundError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Open Peach", str(exc))
 
     def _open_local_file(self, path: str | Path) -> None:
         from crush.ui import open_url

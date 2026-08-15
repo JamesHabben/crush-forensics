@@ -1989,9 +1989,10 @@ class FolderDiscoveryDialog(QDialog):
         folder_name: str,
         nodes: list[VFSNode],
         parent: QWidget | None = None,
+        title: str = "Open Logs in Multi-Log Studio",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Open Logs in Multi-Log Studio")
+        self.setWindowTitle(title)
         self.setMinimumSize(540, 420)
         self._nodes = nodes
         self._build_ui(folder_name)

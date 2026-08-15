@@ -650,9 +650,19 @@ Right-click a `.logarchive` bundle, an iOS full-FS acquisition's `diagnostics/` 
 
 - Offered on any file, not just recognized AUL sources — the same "offer it, let the tool itself be the real test" approach **Open in Multi-Log Studio** already uses, since peach's own TOML text-log configs live in its per-user data directory and Crush has no way to check a file against them. Peach never auto-loads a source anyway — you always confirm the sourcetype and click **Load** yourself, so an unrelated file just gets dismissed there rather than silently misinterpreted.
 - The peach binary ships bundled with Crush (same mechanism as `unifiedlog_iterator`) — nothing to install separately in a portable build. Running from source needs `python scripts/download_peach_binaries.py` once.
-- **Tools → Peach Binary Path…** points at a different peach executable instead of the bundled one — useful if Crush hasn't been updated in a while but a newer peach build is available. Leave blank to use the bundled version.
+- **Tools → Peach → Binary Path…** points at a different peach executable instead of the bundled one — useful if Crush hasn't been updated in a while but a newer peach build is available. Leave blank to use the bundled version.
+- **Tools → Peach → Open Peach** launches a plain, empty peach instance with no source pre-filled — for when you just want to work in peach directly (e.g. loading further sources from its own file picker) without sending anything from Crush first.
 - A `.logarchive` bundle is handed to peach as-is. An iOS diagnostics folder is recreated as a temporary `diagnostics/` + `uuidtext/` sibling pair (peach's own raw-acquisition layout) rather than the flattened bundle format `unifiedlog_iterator` needs — the two tools expect different input shapes. Any other file is passed through unchanged (or extracted from an archive/backup first, if needed).
 - Sources materialized from an archive/backup (rather than already sitting on a real filesystem) are passed with `--ephemeral-session`, so peach doesn't leave a durable, unencrypted session copy of temp-extracted or decrypted evidence behind once it closes.
+
+**Sending multiple sources at once**
+
+Every "Send to Peach" click starts a completely new, independent peach process — peach deliberately has no IPC, so a second click never joins an already-open peach window. To correlate several sources in one peach session, send them together in a single click instead:
+
+- **Multi-select** several files in the tree (Ctrl/Shift-click, same as any file manager) and right-click → **Send N files to Peach**. All selected files go to one new peach instance as multiple pre-filled sources.
+- **A plain folder** (not a `.logarchive` or diagnostics folder) → right-click → **Send Logs to Peach…** recursively scans the folder for log-looking files, shows a checklist to confirm which ones (same picker "Open Logs in Multi-Log Studio" uses), and sends the selected ones together.
+
+Once peach is already open, you can also just keep adding sources directly in peach's own UI (its file picker) — that works the same regardless of how the session got started.
 
 ---
 
