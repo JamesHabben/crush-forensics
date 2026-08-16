@@ -10,7 +10,6 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UL_VERSION: "0.5.1"
-  WINGET_PAT: ${{ secrets.WINGET_PAT }}
 
 jobs:
   build:
@@ -365,14 +364,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: crush-windows-${{ github.ref_name }}.zip
-
-      - name: Update winget manifest
-        if: runner.os == 'Windows' && env.WINGET_PAT != ''
-        continue-on-error: true
-        env:
-          WINGET_CREATE_GITHUB_TOKEN: ${{ env.WINGET_PAT }}
-        run: |
-          $ver = "${{ github.ref_name }}".TrimStart('v')
-          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/crush-windows-${{ github.ref_name }}.zip"
-          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-          .\wingetcreate.exe update kalink0.Crush --version $ver --urls $url --submit
