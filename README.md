@@ -85,6 +85,27 @@ Integrity Mode (Linux)
 
 ## Install and Run
 
+### Package managers
+
+**macOS (Homebrew)**
+```bash
+brew tap kalink0/forensics
+brew install --cask crush-forensics
+```
+
+**Windows (winget)**
+```powershell
+winget install kalink0.Crush
+```
+
+**Windows (Scoop)**
+```powershell
+scoop bucket add forensics https://github.com/kalink0/scoop-forensics
+scoop install forensics/crush-forensics
+```
+
+No native package for Linux yet — grab the AppImage from [Releases](https://github.com/kalink0/crush-forensics/releases).
+
 ### From source (recommended for development)
 
 1. Create a virtual environment
