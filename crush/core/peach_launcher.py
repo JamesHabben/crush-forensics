@@ -130,7 +130,15 @@ def launch_peach(
     binary = find_peach_binary(override_path)
 
     if sys.platform != "win32":
-        binary.chmod(binary.stat().st_mode | 0o111)
+        mode = binary.stat().st_mode
+        if not mode & 0o111:
+            try:
+                binary.chmod(mode | 0o111)
+            except OSError:
+                # Read-only mount (e.g. a FUSE-mounted AppImage) -- fine as
+                # long as the bundled binary already has its exec bit set,
+                # which download_peach_binaries.py guarantees at build time.
+                pass
 
     cmd: list[str] = [str(binary)]
     if ephemeral_session:

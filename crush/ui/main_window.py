@@ -1589,7 +1589,7 @@ class MainWindow(QMainWindow):
                 ephemeral_session=cleanup_dir is not None,
             )
             self._status.showMessage(f"Sent to Peach: {node.path}")
-        except (FileNotFoundError, RuntimeError) as exc:
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
             QMessageBox.warning(self, "Send to Peach", str(exc))
 
     def _send_to_peach_batch(self, items: list[tuple[VFSNode, VFS]]) -> None:
@@ -1643,7 +1643,7 @@ class MainWindow(QMainWindow):
                     "Some sources could not be materialized and were skipped:\n"
                     + "\n".join(failed),
                 )
-        except (FileNotFoundError, RuntimeError) as exc:
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
             QMessageBox.warning(self, "Send to Peach", str(exc))
 
     def _set_peach_binary_path(self) -> None:
