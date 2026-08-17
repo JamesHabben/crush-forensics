@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "PySide6>=6.7",
+    "PySide6~=6.10.2",
     "biplist>=1.0.3",
     "lxml>=5.0",
     "construct>=2.10",
