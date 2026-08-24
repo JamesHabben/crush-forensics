@@ -18,10 +18,11 @@ from pathlib import Path
 
 # Maps (sys.platform, platform.machine()) -> binary filename inside _BINARY_DIR.
 # No linux/aarch64 entry -- peach's own release matrix doesn't build one.
+# macOS is a single universal (arm64+x86_64) binary as of peach v0.2.1.
 _PLATFORM_BINARY_MAP: dict[tuple[str, str], str] = {
     ("linux",  "x86_64"): "peach-linux",
-    ("darwin", "x86_64"): "peach-macos-intel",
-    ("darwin", "arm64"):  "peach-macos-arm",
+    ("darwin", "x86_64"): "peach-macos",
+    ("darwin", "arm64"):  "peach-macos",
     ("win32",  "AMD64"):  "peach-windows.exe",
     ("win32",  "x86_64"): "peach-windows.exe",
 }

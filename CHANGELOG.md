@@ -25,7 +25,7 @@ All notable changes to Crush will be documented in this file.
 ### Changed
 
 - Bumped bundled unifiedlog_iterator from v0.5.1 to v0.6.0: fixes an incorrect Signpost name when the shared_cache/has_large_shared_cache flag was set, plus mach kernel error codes and message flags in the output.
-- Bumped bundled peach from v0.1.0 to v0.2.0: adds an interactive text-log format builder, timezone settings, per-field filter chips, a configurable rules directory, and grows the built-in AUL/EVTX/journald rule packs — also fixes a bug where EVTX `event_id`/`provider` rule conditions never actually matched real data. See peach's own [release notes](https://github.com/kalink0/peach-forensics/releases/tag/v0.2.0) for the full list.
+- Bumped bundled peach from v0.1.0 to v0.2.1: adds an interactive text-log format builder, timezone settings, per-field filter chips, a configurable rules directory, and grows the built-in AUL/EVTX/journald rule packs — also fixes a bug where EVTX `event_id`/`provider` rule conditions never actually matched real data, and switches macOS to a single universal (arm64+x86_64) binary. See peach's own [release notes](https://github.com/kalink0/peach-forensics/releases/tag/v0.2.1) for the full list.
 
 ### Removed
 

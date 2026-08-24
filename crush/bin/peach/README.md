@@ -7,7 +7,7 @@ after launch, peach runs completely independently once started.
 
 - **Project:** https://github.com/kalink0/peach-forensics
 - **Licence:** Apache 2.0 (same as Crush)
-- **Version bundled:** v0.1.0 — pinned in `scripts/download_peach_binaries.py`'s
+- **Version bundled:** v0.2.1 — pinned in `scripts/download_peach_binaries.py`'s
   `VERSION` constant, same pattern as `crush/bin/unifiedlog_iterator/`'s
   `UL_VERSION`. Bump that constant when upgrading.
 
@@ -16,9 +16,12 @@ after launch, peach runs completely independently once started.
 | Platform | Filename |
 |---|---|
 | Linux x86\_64 | `peach-linux` |
-| macOS arm64   | `peach-macos-arm` |
-| macOS x86\_64 | `peach-macos-intel` |
+| macOS (universal: arm64+x86\_64) | `peach-macos` |
 | Windows x86\_64 | `peach-windows.exe` |
+
+macOS shipped as two arch-specific binaries (`peach-macos-arm` /
+`peach-macos-intel`) before peach v0.2.1, which switched to a single
+universal (`lipo`-merged) binary.
 
 ## Downloading
 
@@ -28,7 +31,7 @@ Run the helper script from the repository root:
 python scripts/download_peach_binaries.py
 ```
 
-This downloads all four platform binaries from the pinned release version
+This downloads all three platform binaries from the pinned release version
 and places them in this directory with the correct filenames.
 
 ## Why binaries are not committed to git

@@ -80,7 +80,9 @@ jobs:
           python-version: "3.11"
 
       # Version pinned inside scripts/download_peach_binaries.py itself. Downloads
-      # all 4 platforms regardless of runner OS, matching build.yml's approach.
+      # all 3 platforms regardless of runner OS, matching build.yml's approach.
+      # macOS is a single universal binary as of peach v0.2.1, so no
+      # arch-specific variable is needed for it (unlike unifiedlog_iterator).
       - name: Download peach-forensics binaries
         run: python scripts/download_peach_binaries.py
 
@@ -90,11 +92,9 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
             echo "MACOS_UL_BINARY=unifiedlog_iterator-aarch64-apple-darwin" >> $GITHUB_ENV
-            echo "MACOS_PEACH_BINARY=peach-macos-arm" >> $GITHUB_ENV
             echo "MACOS_ARTIFACT_NAME=crush-macos" >> $GITHUB_ENV
           else
             echo "MACOS_UL_BINARY=unifiedlog_iterator-x86_64-apple-darwin" >> $GITHUB_ENV
-            echo "MACOS_PEACH_BINARY=peach-macos-intel" >> $GITHUB_ENV
             echo "MACOS_ARTIFACT_NAME=crush-macos-intel" >> $GITHUB_ENV
           fi
 
@@ -280,7 +280,7 @@ jobs:
             --add-data "crush/resources/icons/crush_icon_128.svg:crush/resources/icons/" \
             --add-data "crush/bin/unifiedlog_iterator/${MACOS_UL_BINARY}:crush/bin/unifiedlog_iterator/" \
             --add-data "crush/bin/unifiedlog_iterator/VERSION.txt:crush/bin/unifiedlog_iterator/" \
-            --add-data "crush/bin/peach/${MACOS_PEACH_BINARY}:crush/bin/peach/" \
+            --add-data "crush/bin/peach/peach-macos:crush/bin/peach/" \
             --add-data "crush/bin/peach/VERSION.txt:crush/bin/peach/" \
             crush/__main__.py
 

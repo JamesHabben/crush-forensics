@@ -25,13 +25,14 @@ from pathlib import Path
 # Configuration — bump VERSION when upgrading
 # ---------------------------------------------------------------------------
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 # (release_asset_name, target_filename_in_bin_dir)
+# macOS is a single universal (arm64+x86_64) binary as of v0.2.1 -- peach used
+# to ship two arch-specific downloads (peach-macos-arm / peach-macos-intel).
 _ASSETS: list[tuple[str, str]] = [
     (f"peach-linux-v{VERSION}.tar.gz", "peach-linux"),
-    (f"peach-macos-arm-v{VERSION}.tar.gz", "peach-macos-arm"),
-    (f"peach-macos-intel-v{VERSION}.tar.gz", "peach-macos-intel"),
+    (f"peach-macos-v{VERSION}.tar.gz", "peach-macos"),
     (f"peach-windows-v{VERSION}.zip", "peach-windows.exe"),
 ]
 
