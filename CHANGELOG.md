@@ -4,6 +4,10 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
+## v0.16.0 - 2026-08-25
+
+**Focus: SQLite deleted-data recovery (Freelist Recovery, Freeblocks, Unallocated Space); Send to Peach handoff; CLI args to open evidence on startup; viewer tab management.**
+
 ### New Features
 
 - Added to SQLite Table viewer -> Support for freelist page recovery ("Freelist Recovery" tab): carves deleted rows out of freed database pages.
@@ -20,7 +24,7 @@ All notable changes to Crush will be documented in this file.
 ### Bug Fixes
 
 - Fixed "Send to Peach" not finding the bundled peach binary on Windows: it's now copied to a persistent cache directory on first launch instead of run from the temporary extraction directory, which is deleted as soon as Crush exits.
-- Fixed viewer tabs with long file paths pushing the close button off-screen: tab text is now capped in width and elided in the middle.
+- Fixed viewer tabs with long file paths pushing the close button off-screen: tab text is now capped in width and elided in the middle. Addresses [#47](https://github.com/kalink0/crush-forensics/issues/47), reported by [@JamesHabben](https://github.com/JamesHabben).
 
 ### Changed
 
