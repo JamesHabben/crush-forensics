@@ -4,7 +4,7 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
-## v0.16.0 - 2026-08-25
+## v0.16.0 - 2026-08-26
 
 **Focus: SQLite deleted-data recovery (Freelist Recovery, Freeblocks, Unallocated Space); Send to Peach handoff; CLI args to open evidence on startup; viewer tab management.**
 
