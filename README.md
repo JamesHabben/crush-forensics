@@ -90,6 +90,7 @@ Integrity Mode (Linux)
 **macOS (Homebrew)**
 ```bash
 brew tap kalink0/forensics
+brew trust kalink0/forensics
 brew install --cask crush-forensics
 ```
 
