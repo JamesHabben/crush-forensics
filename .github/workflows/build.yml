@@ -54,6 +54,10 @@ jobs:
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
+          # Runner image ships a packages.microsoft.com apt source (for azure-cli)
+          # that we never use; drop it so a transient outage there doesn't fail
+          # apt-get update for everyone else.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y \
             libgl1 \
