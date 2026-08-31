@@ -18,6 +18,10 @@ All notable changes to Crush will be documented in this file.
 - Fixed the SQLite Table viewer's Freeblocks/Freelist Recovery/Unallocated Space tabs hanging for tens of seconds on wide or deleted-data-heavy databases — several spots reopened the database file once per page instead of reusing one handle, and switching tabs after loading a large result could take almost a minute just to clear the old table view. Whatever scan time remains now runs in the background with a "please wait" dialog instead of freezing the window.
 - Fixed the Rainbow and 'Merica themes never reaching open file tabs (hex/text/table/... viewers) — only the filesystem tree, properties panel, and docks were updating, so any already-open tab stayed on its previous theme's colors.
 
+### Changed
+
+- Bumped bundled peach from v0.2.1 to v0.4.1: adds Portable Case export/import (`.peachcase`), a Case Summary view, an opt-in "skip bad records instead of failing" load mode, and rule pack updates (File → Rule packs...) so AUL/EVTX/journald tagging rules can be refreshed without a new Peach release. See peach's own [release notes](https://github.com/kalink0/peach-forensics/releases/tag/v0.4.1) for the full list.
+
 ## v0.16.0 - 2026-08-26
 
 **Focus: SQLite deleted-data recovery (Freelist Recovery, Freeblocks, Unallocated Space); Send to Peach handoff; CLI args to open evidence on startup; viewer tab management.**
