@@ -211,6 +211,8 @@ Apple Unified Log (`.tracev3` / `.logarchive`) parsing uses the [macos-UnifiedLo
 
 Special thanks to [@dugeonlady](https://github.com/dugeonlady) for suggesting the Rainbow theme — because digital forensics tools don't have to be grey. Or dark. Someone has to bring colour to the hex dump. Evidence: *View → Theme → Rainbow*. She was right.
 
+![Rainbow theme](crush/docs/pictures/rainbow_theme.gif)
+
 Parts of this software were developed with assistance from [Claude AI / Claude Code](https://claude.ai) by Anthropic.
 
 ## Bugs and feature requests
