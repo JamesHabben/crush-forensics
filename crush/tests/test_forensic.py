@@ -1061,7 +1061,7 @@ def test_blob_b64url_lzfse_pipeline_known_output() -> None:
 )
 def test_blob_decode_functions_are_reproducible() -> None:
     import base64
-    import lzfse
+    import liblzfse
     import zlib
     from crush.viewers.blob_inspector import (
         _decode_base64,
@@ -1076,7 +1076,7 @@ def test_blob_decode_functions_are_reproducible() -> None:
         (_decode_base64url, base64.urlsafe_b64encode(payload)),
         (_decode_hex,       payload.hex().encode()),
         (_decode_zlib,      zlib.compress(payload)),
-        (_decode_lzfse,     lzfse.compress(payload)),
+        (_decode_lzfse,     liblzfse.compress(payload)),
     ]
     for fn, encoded in cases:
         assert fn(encoded) == fn(encoded), f"{fn.__name__} is not reproducible"

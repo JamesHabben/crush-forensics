@@ -4,6 +4,10 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
+## v0.17.0 - 2026-08-31
+
+**Focus: Standalone .gz VFS support; SQLite Freelist Recovery refinements; bundled peach updated to v0.4.1.**
+
 ### New Features
 
 - SQLite Table viewer's Freelist Recovery tab now checks column *types*, not just column count, when matching a carved row to a candidate table, and marks higher-confidence matches (✓, both count and types match) separately from count-only matches. A new "View as" dropdown pivots the tab onto one candidate table, mapping columns to its real names.

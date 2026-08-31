@@ -94,8 +94,8 @@ def _decode_base64url(data: bytes) -> bytes | None:
 
 def _decode_lzfse(data: bytes) -> bytes | None:
     try:
-        import lzfse
-        return lzfse.decompress(data)  # type: ignore[attr-defined]
+        import liblzfse
+        return liblzfse.decompress(data)  # type: ignore[attr-defined]
     except Exception:
         return None
 
