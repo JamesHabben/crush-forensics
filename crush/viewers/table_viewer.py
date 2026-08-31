@@ -719,8 +719,31 @@ class TableViewer(QWidget):
         )
 
     def _load_table(self, table_name: str) -> None:
-        """Populate the model with the selected table's data."""
+        """Populate the model with the selected table's data.
+
+        Disables the proxy model's dynamic sorting for the duration of the
+        population loop below (which does self._reset_source_model() +
+        many appendRow() calls) and re-sorts once at the end, instead of
+        re-sorting incrementally on every single row insertion -- for a
+        table with hundreds/thousands of rows and wide text columns (e.g.
+        the Freeblocks tab's raw carved bytes), incremental re-sort turned
+        an already-fast, cached data fetch into a many-second UI freeze on
+        every tab switch.
+        """
+        # _activate_standard_model() itself turns dynamic sorting back on
+        # (when leaving query-results mode), so it must run *before* it's
+        # switched off here, or that reset would win.
         self._activate_standard_model()
+        self._proxy_model.setDynamicSortFilter(False)
+        try:
+            self._load_table_impl(table_name)
+        finally:
+            self._proxy_model.setDynamicSortFilter(True)
+            self._proxy_model.sort(
+                self._proxy_model.sortColumn(), self._proxy_model.sortOrder()
+            )
+
+    def _load_table_impl(self, table_name: str) -> None:
         if table_name == self._summary_label:
             self._load_summary()
             return
@@ -786,7 +809,7 @@ class TableViewer(QWidget):
         columns: list[str] = table["columns"]
         rows: list[list[Any]] = table["rows"]
 
-        self._source_model.clear()
+        self._reset_source_model()
         show_wal = has_wal and self._wal_toggle.isChecked()
         show_prev_ref = has_prev_ref and self._prev_ref_toggle.isChecked()
         show_source_col = show_wal or show_prev_ref
@@ -1052,7 +1075,7 @@ class TableViewer(QWidget):
             self._sql_status.setText(str(exc))
             return
 
-        self._source_model.clear()
+        self._reset_source_model()
         self._source_model.setHorizontalHeaderLabels(["Name (generated)", "Type", "Rows"])
         self._sql_status.setStyleSheet("")
 
@@ -1106,7 +1129,7 @@ class TableViewer(QWidget):
             self._sql_status.setText(str(exc))
             return
 
-        self._source_model.clear()
+        self._reset_source_model()
         self._source_model.setHorizontalHeaderLabels(["Name (generated)", "Type", "Info"])
         self._sql_status.setStyleSheet("")
 
@@ -1241,7 +1264,7 @@ class TableViewer(QWidget):
     def _load_wal_frames(self) -> None:
         """Show full WAL frame inventory."""
         frames = self._get_wal_frames()
-        self._source_model.clear()
+        self._reset_source_model()
         self._source_model.setHorizontalHeaderLabels(
             ["Frame", "Page", "Transaction", "Status", "Table", "Offset (B)"]
         )
@@ -1360,7 +1383,7 @@ class TableViewer(QWidget):
         "Candidate Tables" is a heuristic match by column count only, and
         all matches are shown rather than guessing a single one.
         """
-        self._source_model.clear()
+        self._reset_source_model()
         conn = self._ensure_db()
         page_size = self._get_page_size()
 
@@ -1472,7 +1495,7 @@ class TableViewer(QWidget):
         of the old cell, so the leftover bytes are shown raw rather than
         decoded into columns.
         """
-        self._source_model.clear()
+        self._reset_source_model()
         conn = self._ensure_db()
         page_size = self._get_page_size()
 
@@ -1553,7 +1576,7 @@ class TableViewer(QWidget):
         unfiltered so the analyst can judge each entry themselves; entries
         that were entirely zero are not shown at all (nothing to judge).
         """
-        self._source_model.clear()
+        self._reset_source_model()
         conn = self._ensure_db()
         page_size = self._get_page_size()
 
@@ -1752,7 +1775,7 @@ class TableViewer(QWidget):
         if conn is None:
             return
         cursor = conn.cursor()
-        self._source_model.clear()
+        self._reset_source_model()
         self._source_model.setHorizontalHeaderLabels(["Setting (generated)", "Value", "Description"])
 
         # WAL summary block (if present)
@@ -2204,6 +2227,25 @@ class TableViewer(QWidget):
                 value = model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole)
                 width = max(width, metrics.horizontalAdvance(str(value or "")) + 20)
             self._table_view.setColumnWidth(col, min(width, _MAX_COL_WIDTH))
+
+    def _reset_source_model(self) -> None:
+        """Replace self._source_model with a fresh, empty QStandardItemModel
+        instead of calling .clear() on the existing one.
+
+        A tab that carved a wide/heavily-populated result (e.g. Freelist
+        Recovery on a table with many columns) can leave _source_model
+        holding hundreds of thousands of QStandardItem cells --
+        QStandardItemModel.clear() on a model that size is drastically
+        slow (tens of seconds), since it has to synchronously tear down
+        every cell before the caller can start repopulating it. Swapping
+        in a fresh model and deferring destruction of the old one via
+        deleteLater() avoids that synchronous cost entirely -- the same
+        pattern _load_table_from_query() already uses for _query_model.
+        """
+        old_model = self._source_model
+        self._source_model = QStandardItemModel(self)
+        self._proxy_model.setSourceModel(self._source_model)
+        old_model.deleteLater()
 
     def _activate_standard_model(self) -> None:
         if not self._query_results_active:

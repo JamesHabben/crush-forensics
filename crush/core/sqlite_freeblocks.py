@@ -22,7 +22,6 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from crush.core.sqlite_freelist import read_raw_page
 from crush.core.sqlite_wal import PAGE_TYPE_TABLE_LEAF
 
 _MIN_FREEBLOCK_SIZE = 4  # next-pointer (2) + size (2)
@@ -80,11 +79,16 @@ def scan_database_freeblocks(db_path: Path, page_size: int) -> list[dict[str, An
         return []
 
     results: list[dict[str, Any]] = []
-    for page_num in range(1, page_count + 1):
-        page = read_raw_page(db_path, page_num, page_size)
-        if page is None:
-            continue
-        for fb in extract_freeblocks(page):
-            results.append({"page": page_num, **fb})
+    try:
+        with open(db_path, "rb") as fh:
+            for page_num in range(1, page_count + 1):
+                fh.seek((page_num - 1) * page_size)
+                page = fh.read(page_size)
+                if len(page) != page_size:
+                    continue
+                for fb in extract_freeblocks(page):
+                    results.append({"page": page_num, **fb})
+    except OSError:
+        return results
 
     return results

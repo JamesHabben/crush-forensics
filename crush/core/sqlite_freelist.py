@@ -44,6 +44,20 @@ def read_raw_page(db_path: Path, page_num: int, page_size: int) -> bytes | None:
     return data if len(data) == page_size else None
 
 
+def _read_page_via_handle(fh: Any, page_num: int, page_size: int) -> bytes | None:
+    """Like read_raw_page(), but reuses an already-open file handle instead
+    of opening the file fresh — avoids one open()/close() per page when
+    walking many pages in a loop."""
+    if page_num < 1 or page_size <= 0:
+        return None
+    try:
+        fh.seek((page_num - 1) * page_size)
+        data = fh.read(page_size)
+    except OSError:
+        return None
+    return data if len(data) == page_size else None
+
+
 def walk_freelist_pages(db_path: Path, page_size: int) -> list[dict[str, Any]]:
     """Walk the freelist trunk chain, returning one entry per freed page.
 
@@ -51,49 +65,57 @@ def walk_freelist_pages(db_path: Path, page_size: int) -> list[dict[str, Any]]:
     bounded by the freelist page count declared in the database header, so a
     corrupt or cyclic chain is stopped defensively rather than looping.
     """
-    header = read_raw_page(db_path, 1, page_size)
-    if header is None or len(header) < _HEADER_FREELIST_COUNT_OFFSET + 4:
+    try:
+        fh = open(db_path, "rb")
+    except OSError:
         return []
 
-    first_trunk = struct.unpack_from(">I", header, _HEADER_FIRST_TRUNK_OFFSET)[0]
-    declared_count = struct.unpack_from(">I", header, _HEADER_FREELIST_COUNT_OFFSET)[0]
-    if first_trunk == 0 or declared_count == 0:
-        return []
+    try:
+        header = _read_page_via_handle(fh, 1, page_size)
+        if header is None or len(header) < _HEADER_FREELIST_COUNT_OFFSET + 4:
+            return []
 
-    entries: list[dict[str, Any]] = []
-    visited: set[int] = set()
-    trunk_num = first_trunk
-    budget = declared_count + 1  # +1: trunk pages aren't counted separately in some builds
+        first_trunk = struct.unpack_from(">I", header, _HEADER_FIRST_TRUNK_OFFSET)[0]
+        declared_count = struct.unpack_from(">I", header, _HEADER_FREELIST_COUNT_OFFSET)[0]
+        if first_trunk == 0 or declared_count == 0:
+            return []
 
-    while trunk_num and trunk_num not in visited and budget > 0:
-        visited.add(trunk_num)
-        budget -= 1
-        trunk = read_raw_page(db_path, trunk_num, page_size)
-        if trunk is None or len(trunk) < 8:
-            break
-        entries.append({"page": trunk_num, "kind": "trunk"})
+        entries: list[dict[str, Any]] = []
+        visited: set[int] = set()
+        trunk_num = first_trunk
+        budget = declared_count + 1  # +1: trunk pages aren't counted separately in some builds
 
-        next_trunk = struct.unpack_from(">I", trunk, 0)[0]
-        leaf_count = struct.unpack_from(">I", trunk, 4)[0]
-        max_leaves = (page_size - 8) // 4
-        leaf_count = min(leaf_count, max_leaves)
-
-        for i in range(leaf_count):
-            if budget <= 0:
-                break
-            leaf_off = 8 + i * 4
-            if leaf_off + 4 > len(trunk):
-                break
-            leaf_num = struct.unpack_from(">I", trunk, leaf_off)[0]
-            if leaf_num == 0 or leaf_num in visited:
-                continue
-            visited.add(leaf_num)
+        while trunk_num and trunk_num not in visited and budget > 0:
+            visited.add(trunk_num)
             budget -= 1
-            entries.append({"page": leaf_num, "kind": "leaf"})
+            trunk = _read_page_via_handle(fh, trunk_num, page_size)
+            if trunk is None or len(trunk) < 8:
+                break
+            entries.append({"page": trunk_num, "kind": "trunk"})
 
-        trunk_num = next_trunk
+            next_trunk = struct.unpack_from(">I", trunk, 0)[0]
+            leaf_count = struct.unpack_from(">I", trunk, 4)[0]
+            max_leaves = (page_size - 8) // 4
+            leaf_count = min(leaf_count, max_leaves)
 
-    return entries
+            for i in range(leaf_count):
+                if budget <= 0:
+                    break
+                leaf_off = 8 + i * 4
+                if leaf_off + 4 > len(trunk):
+                    break
+                leaf_num = struct.unpack_from(">I", trunk, leaf_off)[0]
+                if leaf_num == 0 or leaf_num in visited:
+                    continue
+                visited.add(leaf_num)
+                budget -= 1
+                entries.append({"page": leaf_num, "kind": "leaf"})
+
+            trunk_num = next_trunk
+
+        return entries
+    finally:
+        fh.close()
 
 
 def carve_freelist_rows(
@@ -128,21 +150,29 @@ def carve_freelist_rows(
 
     freelist_page_set = {e["page"] for e in entries if e["kind"] == "leaf"}
 
+    try:
+        fh = open(db_path, "rb")
+    except OSError:
+        return []
+
     def _overflow_reader(page_num: int) -> bytes | None:
         if page_num not in freelist_page_set:
             return None
-        return read_raw_page(db_path, page_num, page_size)
+        return _read_page_via_handle(fh, page_num, page_size)
 
-    carved: list[dict[str, Any]] = []
-    for entry in entries:
-        page = read_raw_page(db_path, entry["page"], page_size)
-        if page is None:
-            continue
-        rows = parse_table_leaf_page(
-            page, page_size=page_size, overflow_reader=_overflow_reader
-        )
-        if not rows:
-            continue
-        carved.append({"page": entry["page"], "kind": entry["kind"], "rows": rows})
+    try:
+        carved: list[dict[str, Any]] = []
+        for entry in entries:
+            page = _read_page_via_handle(fh, entry["page"], page_size)
+            if page is None:
+                continue
+            rows = parse_table_leaf_page(
+                page, page_size=page_size, overflow_reader=_overflow_reader
+            )
+            if not rows:
+                continue
+            carved.append({"page": entry["page"], "kind": entry["kind"], "rows": rows})
 
-    return carved
+        return carved
+    finally:
+        fh.close()

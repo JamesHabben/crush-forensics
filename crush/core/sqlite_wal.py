@@ -318,12 +318,35 @@ def build_page_table_map(
     except Exception:
         return mapping
 
-    # For each root page, BFS-walk interior pages to collect all child pages
-    for name, rootpage in rows:
-        if rootpage is None:
-            continue
-        mapping[rootpage] = name
-        _walk_interior(rootpage, name, mapping, conn, wal_pages, page_size, set())
+    # Resolve the DB file path and page count once up front, and keep a single
+    # file handle open for the whole walk — _read_page used to run a
+    # `SELECT ... FROM dbstat` (a full B-tree scan of the whole database) and
+    # re-open the file, per page visited, which made this walk cost
+    # O(pages x interior_pages) on any real-sized database.
+    db_file: Any = None
+    page_count = 0
+    try:
+        db_path_row = conn.execute("PRAGMA database_list").fetchone()
+        if db_path_row is not None and page_size:
+            db_path = Path(db_path_row[2])
+            if db_path.is_file():
+                page_count = db_path.stat().st_size // page_size
+                db_file = open(db_path, "rb")
+    except Exception:
+        db_file = None
+
+    try:
+        # For each root page, BFS-walk interior pages to collect all child pages
+        for name, rootpage in rows:
+            if rootpage is None:
+                continue
+            mapping[rootpage] = name
+            _walk_interior(
+                rootpage, name, mapping, wal_pages, page_size, set(), db_file, page_count
+            )
+    finally:
+        if db_file is not None:
+            db_file.close()
 
     return mapping
 
@@ -332,17 +355,18 @@ def _walk_interior(
     page_num: int,
     table_name: str,
     mapping: dict[int, str],
-    conn: sqlite3.Connection,
     wal_pages: dict[int, bytes],
     page_size: int,
     visited: set[int],
+    db_file: Any,
+    page_count: int,
 ) -> None:
     """Recursively collect all child pages of *page_num* into *mapping*."""
     if page_num in visited:
         return
     visited.add(page_num)
 
-    page = _read_page(page_num, conn, wal_pages, page_size)
+    page = _read_page(page_num, wal_pages, page_size, db_file, page_count)
     if page is None or len(page) < 1:
         return
     page_type = page[0]
@@ -358,7 +382,9 @@ def _walk_interior(
     cell_count = struct.unpack_from(">H", page, 3)[0]
     rightmost  = struct.unpack_from(">I", page, 8)[0]
     mapping[rightmost] = table_name
-    _walk_interior(rightmost, table_name, mapping, conn, wal_pages, page_size, visited)
+    _walk_interior(
+        rightmost, table_name, mapping, wal_pages, page_size, visited, db_file, page_count
+    )
 
     ptr_area_start = 12
     for i in range(cell_count):
@@ -371,37 +397,26 @@ def _walk_interior(
         child_page = struct.unpack_from(">I", page, cell_offset)[0]
         if child_page and child_page not in mapping:
             mapping[child_page] = table_name
-            _walk_interior(child_page, table_name, mapping, conn, wal_pages, page_size, visited)
+            _walk_interior(
+                child_page, table_name, mapping, wal_pages, page_size, visited, db_file, page_count
+            )
 
 
 def _read_page(
     page_num: int,
-    conn: sqlite3.Connection,
     wal_pages: dict[int, bytes],
     page_size: int,
+    db_file: Any,
+    page_count: int,
 ) -> bytes | None:
     """Return raw page bytes for *page_num*, preferring WAL over DB file."""
     if page_num in wal_pages:
         return wal_pages[page_num]
-    # Read from DB file via the DBSTAT virtual table
+    if db_file is None or page_size == 0 or not (1 <= page_num <= page_count):
+        return None
     try:
-        row = conn.execute(
-            "SELECT pgno FROM dbstat WHERE pgno=? LIMIT 1", (page_num,)
-        ).fetchone()
-        if row is None:
-            return None
-        # Use sqlite3's undocumented raw page read — fall back to zeroed page
-        # The safest cross-platform way: read the DB file directly
-        db_path_row = conn.execute("PRAGMA database_list").fetchone()
-        if db_path_row is None:
-            return None
-        db_path = Path(db_path_row[2])
-        if not db_path.is_file() or page_size == 0:
-            return None
-        file_offset = (page_num - 1) * page_size
-        with open(db_path, "rb") as fh:
-            fh.seek(file_offset)
-            data = fh.read(page_size)
+        db_file.seek((page_num - 1) * page_size)
+        data = db_file.read(page_size)
         return data if len(data) == page_size else None
     except Exception:
         return None

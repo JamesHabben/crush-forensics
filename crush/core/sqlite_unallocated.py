@@ -23,7 +23,6 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from crush.core.sqlite_freelist import read_raw_page
 from crush.core.sqlite_wal import PAGE_TYPE_TABLE_LEAF
 
 
@@ -63,12 +62,17 @@ def scan_database_unallocated(db_path: Path, page_size: int) -> list[dict[str, A
         return []
 
     results: list[dict[str, Any]] = []
-    for page_num in range(1, page_count + 1):
-        page = read_raw_page(db_path, page_num, page_size)
-        if page is None:
-            continue
-        entry = extract_unallocated_space(page)
-        if entry is not None:
-            results.append({"page": page_num, **entry})
+    try:
+        with open(db_path, "rb") as fh:
+            for page_num in range(1, page_count + 1):
+                fh.seek((page_num - 1) * page_size)
+                page = fh.read(page_size)
+                if len(page) != page_size:
+                    continue
+                entry = extract_unallocated_space(page)
+                if entry is not None:
+                    results.append({"page": page_num, **entry})
+    except OSError:
+        return results
 
     return results

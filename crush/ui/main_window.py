@@ -455,6 +455,7 @@ class MainWindow(QMainWindow):
         self._viewer_tabs.setTabsClosable(True)
         self._viewer_tabs.setDocumentMode(True)
         self._viewer_tabs.tabCloseRequested.connect(self._close_tab)
+        self._viewer_tabs.currentChanged.connect(self._on_viewer_tab_changed)
         # Long VFS paths (issue #47) would otherwise grow the tab past the
         # viewport and push the native close button off-screen; cap the
         # width and elide in the middle so the close button always fits.
@@ -2315,6 +2316,57 @@ class MainWindow(QMainWindow):
                 props_panel.setPalette(pal)
                 props_panel.viewport().setPalette(pal)
                 props_panel._container.setPalette(pal)
+            if hasattr(window, "_viewer_tabs"):
+                viewer_tabs = window._viewer_tabs
+                viewer_tabs.setPalette(pal)
+                viewer_tabs.tabBar().setPalette(pal)
+                # Individual viewer widgets (hex/text/table/image/... — see
+                # crush/viewers/) frequently set their own explicit palette
+                # or stylesheet at creation time; once a widget has an
+                # explicit (non-inherited) palette, QWidget.setPalette() on
+                # an ancestor no longer cascades down to it. Only walking
+                # the *currently visible* tab keeps this affordable at
+                # animation frequency (every 50ms) -- other tabs catch up
+                # via _on_viewer_tab_changed() when they're actually shown.
+                current = viewer_tabs.currentWidget()
+                if current is not None:
+                    self._propagate_palette_recursive(current, pal)
+            if hasattr(window, "_empty_view"):
+                window._empty_view.setPalette(pal)
+
+    @staticmethod
+    def _propagate_palette_recursive(widget: QWidget, pal: QPalette) -> None:
+        """Force *pal* onto *widget* and every descendant (plus scroll-area
+        viewports), overriding any explicit palette/stylesheet a viewer set
+        on itself when it was created under a different theme.
+        """
+        widget.setPalette(pal)
+        viewport = getattr(widget, "viewport", None)
+        if callable(viewport):
+            vp = viewport()
+            if vp is not None:
+                vp.setPalette(pal)
+        for child in widget.findChildren(QWidget):
+            child.setPalette(pal)
+            child_viewport = getattr(child, "viewport", None)
+            if callable(child_viewport):
+                vp = child_viewport()
+                if vp is not None:
+                    vp.setPalette(pal)
+
+    def _on_viewer_tab_changed(self, index: int) -> None:
+        """Re-apply the live app palette to a viewer tab when it becomes
+        visible, catching it up if it wasn't the current tab during a
+        Rainbow/'Merica tick (see _set_palette_everywhere)."""
+        if index < 0:
+            return
+        widget = self._viewer_tabs.widget(index)
+        if widget is None:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._propagate_palette_recursive(widget, app.palette())
 
     def _apply_palette(self, pal: QPalette) -> None:
         """Set the application palette and a matching checkbox/radio-button
