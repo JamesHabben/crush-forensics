@@ -2998,7 +2998,7 @@ FORMATS: list[dict[str, Any]] = [
             "OS byte and mtime can reveal the origin platform and source file age."
         ),
         "platforms": ["Android", "Linux", "iOS", "macOS", "Windows"],
-        "parser_class": None,
+        "parser_class": "GzipVFS",
         "magic": [
             {
                 "offset": 0,

@@ -2,6 +2,7 @@
 """Tests for the VFS abstraction layer."""
 from __future__ import annotations
 
+import gzip
 import plistlib
 import zipfile
 from pathlib import Path
@@ -12,13 +13,16 @@ from crush.core.passwords import PasswordRequiredError, WrongPasswordError
 from crush.core.vfs import (
     AndroidBackupVFS,
     DirectoryVFS,
+    GzipVFS,
     ITunesBackupVFS,
     SevenZipVFS,
+    TarVFS,
     ZipVFS,
     detect_itunes_backup_in_zip,
     open_itunes_backup_from_zip,
     open_vfs,
 )
+from crush.tests.conftest import FIXTURES_DIR
 
 
 def test_directory_vfs(tmp_path: Path) -> None:
@@ -77,6 +81,112 @@ def test_open_vfs_zip(tmp_path: Path) -> None:
         zf.writestr("file.txt", b"hello")
     vfs = open_vfs(zip_path)
     assert isinstance(vfs, ZipVFS)
+
+
+def test_gzip_vfs_plain_name_fallback(tmp_path: Path) -> None:
+    # gzip.compress() writes no FNAME header field, so GzipVFS must fall
+    # back to deriving the member name from the archive's own filename.
+    gz_path = tmp_path / "syslog.gz"
+    gz_path.write_bytes(gzip.compress(b"Aug 31 12:00:00 host kernel: hello\n"))
+
+    vfs = GzipVFS(gz_path)
+    root = vfs.root()
+
+    assert root.is_dir
+    assert root.name == "syslog.gz"
+    assert len(root.children) == 1
+    member = root.children[0]
+    assert member.name == "syslog"
+    assert member.size == len(b"Aug 31 12:00:00 host kernel: hello\n")
+    assert vfs.read(member) == b"Aug 31 12:00:00 host kernel: hello\n"
+    assert vfs.file_count(root) == 1
+    assert vfs.total_size(root) == member.size
+
+
+def test_gzip_vfs_uses_original_filename_from_header(tmp_path: Path) -> None:
+    gz_path = tmp_path / "data.gz"
+    with open(gz_path, "wb") as raw:
+        with gzip.GzipFile(
+            filename="original_name.log", mode="wb", fileobj=raw, mtime=1_700_000_000
+        ) as f:
+            f.write(b"content")
+
+    vfs = GzipVFS(gz_path)
+    member = vfs.root().children[0]
+    assert member.name == "original_name.log"
+    assert member.modified == 1_700_000_000.0
+    assert vfs.read(member) == b"content"
+
+
+def test_gzip_vfs_tgz_stem_fallback(tmp_path: Path) -> None:
+    # .tgz normally routes through TarVFS via open_vfs(); constructing
+    # GzipVFS directly still needs a sane fallback name for the member.
+    gz_path = tmp_path / "archive.tgz"
+    gz_path.write_bytes(gzip.compress(b"not actually a tar, just testing the stem fallback"))
+
+    vfs = GzipVFS(gz_path)
+    assert vfs.root().children[0].name == "archive.tar"
+
+
+def test_open_vfs_gzip(tmp_path: Path) -> None:
+    gz_path = tmp_path / "app.log.gz"
+    with gzip.open(gz_path, "wb") as f:
+        f.write(b"log line\n")
+    vfs = open_vfs(gz_path)
+    assert isinstance(vfs, GzipVFS)
+
+
+def test_open_vfs_tar_gz_is_not_gzip_vfs(tmp_path: Path) -> None:
+    vfs = open_vfs(FIXTURES_DIR / "minimal.tar.gz")
+    assert isinstance(vfs, TarVFS)
+    assert not isinstance(vfs, GzipVFS)
+
+
+def test_open_vfs_extensionless_gzip_magic_bytes(tmp_path: Path) -> None:
+    # No .gz extension — must be recognized from the 0x1f 0x8b magic alone,
+    # same as e.g. carved or renamed forensic artifacts.
+    src = tmp_path / "carved_artifact"
+    src.write_bytes(gzip.compress(b"some log content"))
+    vfs = open_vfs(src)
+    assert isinstance(vfs, GzipVFS)
+
+
+def test_open_vfs_extensionless_gzip_wrapped_tar_routes_to_tar_vfs(tmp_path: Path) -> None:
+    import shutil
+    import tarfile
+
+    tar_path = tmp_path / "inner.tar"
+    member_path = tmp_path / "file.txt"
+    member_path.write_bytes(b"hello")
+    with tarfile.open(tar_path, "w") as tf:
+        tf.add(member_path, arcname="file.txt")
+
+    src = tmp_path / "carved_artifact"
+    with open(tar_path, "rb") as raw, gzip.open(src, "wb") as gz:
+        shutil.copyfileobj(raw, gz)
+
+    vfs = open_vfs(src)
+    assert isinstance(vfs, TarVFS)
+
+
+def test_open_vfs_renamed_gz_that_is_actually_a_tar_gz(tmp_path: Path) -> None:
+    # A .tar.gz saved with just a ".gz" extension should still be browsed
+    # as a TAR, not as a single opaque blob.
+    import shutil
+    import tarfile
+
+    tar_path = tmp_path / "inner.tar"
+    member_path = tmp_path / "file.txt"
+    member_path.write_bytes(b"hello")
+    with tarfile.open(tar_path, "w") as tf:
+        tf.add(member_path, arcname="file.txt")
+
+    src = tmp_path / "backup.gz"
+    with open(tar_path, "rb") as raw, gzip.open(src, "wb") as gz:
+        shutil.copyfileobj(raw, gz)
+
+    vfs = open_vfs(src)
+    assert isinstance(vfs, TarVFS)
 
 
 def test_android_backup_vfs(android_backup_fixture: Path) -> None:

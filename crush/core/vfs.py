@@ -5,6 +5,7 @@ through a single interface so viewers never need to know the origin.
 """
 from __future__ import annotations
 
+import gzip
 import os
 import plistlib
 import re
@@ -558,6 +559,91 @@ class TarVFS(VFS):
         return total
 
 
+class GzipVFS(VFS):
+    """VFS backed by a standalone gzip-compressed file (not a .tar.gz — a
+    single compressed file, e.g. a rotated log like syslog.gz).
+
+    Presents as a directory containing the one decompressed member. The
+    member's name comes from the gzip header's stored original filename
+    (FNAME flag, RFC 1952) when present, otherwise falls back to the
+    archive's own name with .gz/.tgz stripped. Concatenated gzip members
+    (RFC 1952 permits multiple streams back to back in one file) are
+    decompressed in full, matching what the gzip module and `gzip -d` do —
+    the size is computed from the actual decompressed bytes rather than the
+    trailer's ISIZE field, which only covers the last member and wraps at
+    4 GiB.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._gz_path = Path(path)
+        member_name, mtime = self._read_header_metadata()
+        with gzip.open(self._gz_path, "rb") as f:
+            self._data = f.read()
+        self._member_path = f"/{member_name}"
+        self._root = VFSNode(name=self._gz_path.name, path="/", is_dir=True)
+        self._root.children.append(
+            VFSNode(
+                name=member_name,
+                path=self._member_path,
+                is_dir=False,
+                size=len(self._data),
+                modified=mtime,
+            )
+        )
+
+    def _read_header_metadata(self) -> tuple[str, float]:
+        """Parse the gzip header (RFC 1952) for the original filename and
+        mtime, without decompressing."""
+        name = None
+        mtime = 0.0
+        with open(self._gz_path, "rb") as f:
+            head = f.read(4096)
+        if len(head) >= 10 and head[0:2] == b"\x1f\x8b":
+            flg = head[3]
+            mtime_val = int.from_bytes(head[4:8], "little")
+            if mtime_val:
+                mtime = float(mtime_val)
+            pos = 10
+            if flg & 0x04 and len(head) >= pos + 2:  # FEXTRA
+                xlen = int.from_bytes(head[pos:pos + 2], "little")
+                pos += 2 + xlen
+            if flg & 0x08 and 0 <= pos < len(head):  # FNAME
+                end = head.find(b"\x00", pos)
+                if end != -1:
+                    try:
+                        name = head[pos:end].decode("latin-1") or None
+                    except Exception:
+                        name = None
+        if not name:
+            stem = self._gz_path.name
+            if stem.lower().endswith(".tgz"):
+                name = stem[:-4] + ".tar"
+            elif stem.lower().endswith(".gz"):
+                name = stem[:-3]
+            else:
+                name = stem + ".out"
+            if not name:
+                name = "data"
+        return name, mtime
+
+    def root(self) -> VFSNode:
+        return self._root
+
+    def read(self, node: VFSNode) -> bytes:
+        if node.path != self._member_path:
+            raise FileNotFoundError(f"Not in gzip: {node.path}")
+        return self._data
+
+    def open(self, node: VFSNode) -> IO[bytes]:
+        return BytesIO(self.read(node))
+
+    def file_count(self, node: VFSNode) -> int:
+        return 1
+
+    def total_size(self, node: VFSNode) -> int:
+        return len(self._data)
+
+
 class AndroidBackupVFS(TarVFS):
     """VFS backed by an `adb backup` container (.ab), encrypted or not.
 
@@ -1097,6 +1183,8 @@ def open_vfs(path: str | Path, *, password: str = "") -> VFS:
         or name_lower.endswith(".tar.xz")
     ):
         return TarVFS(p)
+    if p.suffix.lower() == ".gz" or _is_gzip(p):
+        return TarVFS(p) if _is_gzip_wrapped_tar(p) else GzipVFS(p)
     if p.suffix.lower() == ".ab" or _is_android_backup(p):
         return AndroidBackupVFS(p, password=password)
     if p.is_file():
@@ -1110,6 +1198,28 @@ def _is_android_backup(path: Path) -> bool:
         return False
     with open(path, "rb") as f:
         return f.readline().strip() == b"ANDROID BACKUP"
+
+
+def _is_gzip(path: Path) -> bool:
+    """Magic-byte sniff for extensionless gzip-compressed files."""
+    if not path.is_file():
+        return False
+    with open(path, "rb") as f:
+        return f.read(2) == b"\x1f\x8b"
+
+
+def _is_gzip_wrapped_tar(path: Path) -> bool:
+    """True if a gzip-magic file decompresses to a TAR (ustar magic at
+    offset 257) rather than an arbitrary single file — used to route a
+    renamed or extensionless .tar.gz correctly, since a gzip-wrapped tar is
+    indistinguishable from plain gzip by its outer magic bytes alone. A
+    named .tar.gz/.tgz skips this (already routed to TarVFS by extension)."""
+    try:
+        with gzip.open(path, "rb") as f:
+            head = f.read(265)
+    except OSError:
+        return False
+    return head[257:262] == b"ustar"
 
 
 def _is_itunes_backup_dir(path: Path) -> bool:

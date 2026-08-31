@@ -7,6 +7,7 @@ All notable changes to Crush will be documented in this file.
 ### New Features
 
 - SQLite Table viewer's Freelist Recovery tab now checks column *types*, not just column count, when matching a carved row to a candidate table, and marks higher-confidence matches (✓, both count and types match) separately from count-only matches. A new "View as" dropdown pivots the tab onto one candidate table, mapping columns to its real names.
+- Standalone `.gz` files (e.g. rotated logs like `syslog.gz`) are now browsable as a VFS, showing the decompressed member under its original filename from the gzip header when present. Extensionless or renamed gzip files are also recognized from their magic bytes, and a gzip-wrapped TAR mistakenly saved with a plain `.gz` extension is still browsed as a TAR rather than one opaque blob.
 
 ### Bug Fixes
 
