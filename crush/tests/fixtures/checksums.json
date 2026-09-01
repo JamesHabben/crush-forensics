@@ -1,6 +1,8 @@
 {
   "blob_samples.db": "f962a738488d9f31935cdda3fbeca1e49d1f62701c9ee7731cccc7b746307c64",
   "minimal.realm": "61d325e16c2ffe469533be5c1e634208ba733f32a4c8e20a17bf71a53981f876",
+  "ifttt_v9_data.realm": "d05ce65537278269b0a8a3edf876740a4cf037288e7d3dbd792b05ce0efcdb97",
+  "mcdonalds_v9_data.realm": "7a5ea87631c625958c0535baf8339dc06d77ac169a850a5cab45ecd35f106d96",
   "minimal_format9.realm": "f164aa56aa88c768e1a2136326133e56659637053a108be8846a6c86a83ad294",
   "minimal.segb2": "f6d41943bd40829a488d3a1268654e200bf82543579a65d6a04c8a9007a5851d",
   "minimal.sqlite": "d08c9ffb45e236178f9ab1ef788dba656f1dbcb17a08dc1bc9f2ed93c67c147e",

@@ -743,7 +743,7 @@ def test_realm_fixture_known_output(realm_fixture: Path) -> None:
 @pytest.mark.forensic(
     category="Known-output Verification",
     desc="minimal_format9.realm (file format 9) must parse to exactly: "
-    "schema ['metadata', 'class_LegacyRecord'], Row data explicitly marked unsupported",
+    "schema ['metadata', 'class_LegacyRecord'], missing table structure explicitly flagged",
 )
 def test_realm_format9_fixture_known_output(realm_format9_fixture: Path) -> None:
     vfs = DirectoryVFS(realm_format9_fixture.parent)
@@ -755,7 +755,92 @@ def test_realm_format9_fixture_known_output(realm_format9_fixture: Path) -> None
     assert result.viewer_type == "realm"
     assert result.data["schema"] == ["metadata", "class_LegacyRecord"]
     assert result.data["tables"] == []
-    assert "Not supported" in result.metadata.get("Row data", "")
+    assert "could not be decoded" in result.metadata.get("Row data", "")
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="ifttt_v9_data.realm (real file format 9 sample, DFRWS/Magnet CTF dataset) "
+    "must fully decode: 21 classes, no unsupported columns, correct row values",
+)
+def test_realm_ifttt_v9_fixture_known_output(realm_ifttt_v9_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_ifttt_v9_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_ifttt_v9_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert len(result.data["schema"]) == 21
+    assert "class_UserRecord" in result.data["schema"]
+
+    # Every column in every table decodes -- no unimplemented old column
+    # type left in this real sample (Mixed/StringEnum don't occur in it).
+    assert result.metadata["Row data"] == "Decoded via legacy pre-Cluster layout (format 9)"
+    for t in result.data["tables"]:
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    tables_by_name = {t["name"]: t for t in result.data["tables"]}
+
+    # String (medium/ArrayStringLong form -- issue #55 fix target) and
+    # Timestamp, on a real user record.
+    user = tables_by_name["class_UserRecord"]
+    login_ix = user["column_names"].index("login")
+    email_ix = user["column_names"].index("email")
+    assert user["columns"][login_ix] == ["abrunswick8675309"]
+    assert user["columns"][email_ix] == ["abrunswick8675309@gmail.com"]
+
+    # Link (0=null/N=row-1 encoding) and LinkList (plain row-index list),
+    # plus Link target-table resolution via the m_subspecs tagged index.
+    conn = tables_by_name["class_LiveConnectionRecord"]
+    assert conn["row_count"] == 2
+    primary_ix = conn["column_names"].index("primaryService")
+    works_ix = conn["column_names"].index("worksWithServices")
+    assert conn["columns"][primary_ix] == [0, 2]
+    assert conn["columns"][works_ix] == [[1], [1]]
+    assert conn["column_target_tables"][primary_ix] == "class_LiveServiceRecord"
+    assert conn["column_target_tables"][works_ix] == "class_LiveServiceRecord"
+
+    # Table (subtable) column present and decodes to a (degenerate, in this
+    # file) list-of-rows per row rather than being flagged unsupported.
+    live_service = tables_by_name["class_LiveServiceRecord"]
+    embedded_ix = live_service["column_names"].index("embeddedRedirectURLs")
+    assert live_service["columns"][embedded_ix] == [[], [], []]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="mcdonalds_v9_data.realm (real file format 9 sample, DFRWS 2021 Challenge "
+    "dataset) must fully decode: 5 classes, no unsupported columns, correct row values",
+)
+def test_realm_mcdonalds_v9_fixture_known_output(realm_mcdonalds_v9_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_mcdonalds_v9_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_mcdonalds_v9_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert len(result.data["schema"]) == 5
+    assert "class_RealmRestaurant" in result.data["schema"]
+
+    # Every column decodes -- Float and Double both real-validated here
+    # (neither appeared with non-trivial values in the IFTTT sample).
+    assert result.metadata["Row data"] == "Decoded via legacy pre-Cluster layout (format 9)"
+    for t in result.data["tables"]:
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    tables_by_name = {t["name"]: t for t in result.data["tables"]}
+    restaurant = tables_by_name["class_RealmRestaurant"]
+    assert restaurant["row_count"] == 169
+    assert set(restaurant["column_types"]) == {"bool", "double", "float", "int", "linklist", "string"}
+
+    categories = tables_by_name["class_RealmRestaurantOpenHourCategory"]
+    assert categories["row_count"] == 299
+    name_ix = categories["column_names"].index("categoryName")
+    hours_ix = categories["column_names"].index("openingHours")
+    assert categories["columns"][name_ix][0] == "Heute"
+    assert categories["columns"][hours_ix][0] == [0, 1, 2, 3, 4, 5, 6]
 
 
 @pytest.mark.forensic(

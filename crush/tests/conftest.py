@@ -138,6 +138,29 @@ def realm_format9_fixture(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def realm_ifttt_v9_fixture(tmp_path: Path) -> Path:
+    """Writable copy of ifttt_v9_data.realm placed in tmp_path -- a real
+    file format 9 Realm database (IFTTT iOS app, Magnet Virtual Summit CTF
+    2020), donated by the issue #55 reporter for pre-Cluster row-level
+    extraction testing against genuine data, not just synthetic fixtures."""
+    src = FIXTURES_DIR / "ifttt_v9_data.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
+def realm_mcdonalds_v9_fixture(tmp_path: Path) -> Path:
+    """Writable copy of mcdonalds_v9_data.realm placed in tmp_path -- a
+    real file format 9 Realm database (McDonald's Android app, DFRWS 2021
+    Challenge, Samsung Galaxy S10), donated by the issue #55 reporter."""
+    src = FIXTURES_DIR / "mcdonalds_v9_data.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def sqlite_fixture(tmp_path: Path) -> Path:
     """Writable copy of minimal.sqlite placed in tmp_path."""
     src = FIXTURES_DIR / "minimal.sqlite"

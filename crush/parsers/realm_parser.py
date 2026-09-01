@@ -1953,6 +1953,670 @@ def _extract_table_data(
 
 
 # ---------------------------------------------------------------------------
+# Pre-Cluster (file format < 10) row/table data — old Table/Spec layout
+# ---------------------------------------------------------------------------
+#
+# Everything above this point in the file (Cluster/ClusterTree, ColKey/Spec)
+# is written against the storage layout introduced at file format 10
+# (realm-core v6.0.0, ~2019). Files at format 9 and earlier (last written by
+# realm-core <= v5.23.9 / realm-java 5.6.0-6.1.0) used a structurally
+# different, older layout: each Table has its own Spec (types/names/attrs
+# arrays, table.hpp slot 0/1 = spec ref/columns ref) and each column is an
+# independent top-level B+-tree, rather than rows being grouped into
+# Clusters. Confirmed against the real v5.23.9 source (table.hpp, spec.hpp,
+# column_type.hpp, bptree.hpp, column_timestamp.hpp, column_mixed.hpp,
+# column_string_enum.hpp, column_linkbase.hpp, column_linklist.hpp) — see
+# issue #55. The low-level Array primitives (leaf formats for
+# String/Binary/Bool/Float/Double/Int) are unchanged across both eras and
+# reused as-is; only the row/column aggregation structure is new here.
+
+# Old ColumnType (column_type.hpp @ v5.23.9) -- NOT the same numeric meanings
+# as the modern _REALM_COL_TYPES above for several values (3/5/7/11 differ:
+# e.g. 11 is Reserved4/unused here vs. decimal128 in the modern enum).
+_PRE_CLUSTER_COL_TYPES: dict[int, str] = {
+    0: "int",
+    1: "bool",
+    2: "string",
+    3: "string_enum",
+    4: "data",
+    5: "table",   # subtable
+    6: "mixed",
+    7: "date",    # OldDateTime
+    8: "date",    # Timestamp
+    9: "float",
+    10: "double",
+    12: "link",
+    13: "linklist",
+    14: "backlink",
+}
+
+# Old ColumnAttr (column_type.hpp @ v5.23.9): a plain bitmask read directly
+# from Spec's m_attr array -- unlike modern ColKey, it is not bit-packed
+# into a key.
+_PRE_CLUSTER_COL_ATTR_INDEXED = 0x01
+_PRE_CLUSTER_COL_ATTR_NULLABLE = 0x10
+
+
+def _extract_pre_cluster_spec(
+    data: bytes, spec_ref: int, file_size: int,
+) -> list[dict[str, Any]] | None:
+    """Decode a pre-Cluster Spec array (spec.hpp @ v5.23.9): m_top slots
+    0=m_types (ArrayInteger, one old ColumnType per column), 1=m_names
+    (ArrayString), 2=m_attr (ArrayInteger, one ColumnAttr bitmask per
+    column), 3=m_subspecs (optional). m_subspecs is resolved here too
+    (spec.cpp get_subspec_ndx_after/get_subspec_entries_for_col_type,
+    confirmed against real source, not guessed): a sparse array with 1
+    entry for each Table/Link/LinkList column and 2 for each BackLink
+    column (origin table + origin column index), indexed by a running
+    count over prior columns of those types. For Link/LinkList, the entry
+    is a tagged integer (`value >> 1`) giving the target table's index in
+    the Group's tables array; for Table (subtable), it's a direct ref to
+    the shared nested Spec every row's subtable uses.
+
+    Returns one dict per column: {col_index, name, type_code, nullable,
+    indexed, target_table_index, subtable_spec_ref}, or None on failure.
+    """
+    spec_hdr = _parse_array_header(data, spec_ref)
+    if spec_hdr is None or not spec_hdr["has_refs"] or spec_hdr["Element count (size)"] < 3:
+        return None
+    spec_eb = _elem_bytes(spec_hdr)
+    if spec_eb < 1:
+        return None
+
+    types_ref = _read_ref(data, spec_ref + 8, 0, spec_eb)
+    names_ref = _read_ref(data, spec_ref + 8, 1, spec_eb)
+    attr_ref = _read_ref(data, spec_ref + 8, 2, spec_eb)
+    if types_ref <= 0 or types_ref >= file_size:
+        return None
+
+    types = _read_scalar_leaf(data, types_ref, file_size)
+    if not types:
+        return None
+    names = (
+        _read_pre_cluster_string_or_binary(data, names_ref, file_size, is_string=True, nullable=False)
+        if 0 < names_ref < file_size else None
+    )
+    attrs = (
+        _read_scalar_leaf(data, attr_ref, file_size)
+        if 0 < attr_ref < file_size else None
+    )
+
+    # m_subspecs (slot 3, spec.cpp @ v5.23.9): one entry per Table/Link/
+    # LinkList column (get_subspec_entries_for_col_type: 1 each), two per
+    # BackLink (origin table index + origin column index), zero for
+    # everything else -- "sparse", indexed by a running count over prior
+    # columns, not by plain column index (Spec::get_subspec_ndx_after).
+    subspecs_ref = (
+        _read_ref(data, spec_ref + 8, 3, spec_eb) if spec_hdr["Element count (size)"] > 3 else 0
+    )
+    subspecs = (
+        _read_scalar_leaf(data, subspecs_ref, file_size)
+        if 0 < subspecs_ref < file_size else None
+    )
+
+    # m_enumkeys (slot 4): one ref per StringEnum column, indexed by a
+    # running count over *only* prior StringEnum columns (spec.cpp
+    # Spec::get_enumkeys_ndx) -- a separate counter from m_subspecs above.
+    enumkeys_ref = (
+        _read_ref(data, spec_ref + 8, 4, spec_eb) if spec_hdr["Element count (size)"] > 4 else 0
+    )
+    enumkeys_hdr = _parse_array_header(data, enumkeys_ref) if enumkeys_ref > 0 else None
+    enumkeys_eb = _elem_bytes(enumkeys_hdr) if enumkeys_hdr else 0
+
+    columns: list[dict[str, Any]] = []
+    subspec_ndx = 0
+    enumkeys_ndx = 0
+    for i, type_val in enumerate(types):
+        if type_val is None:
+            continue
+        type_code = int(type_val)
+        attr_val = int(attrs[i]) if attrs and i < len(attrs) and attrs[i] is not None else 0
+        col: dict[str, Any] = {
+            "col_index": i,
+            "name": names[i] if names and i < len(names) else f"column[{i}]",
+            "type_code": type_code,
+            "nullable": bool(attr_val & _PRE_CLUSTER_COL_ATTR_NULLABLE),
+            "indexed": bool(attr_val & _PRE_CLUSTER_COL_ATTR_INDEXED),
+            "target_table_index": None,
+            "subtable_spec_ref": None,
+            "enum_keys_ref": None,
+        }
+        if type_code in (5, 12, 13) and subspecs is not None and subspec_ndx < len(subspecs):
+            raw = subspecs[subspec_ndx]
+            if raw is not None:
+                raw = int(raw)
+                if type_code == 5:  # Table (subtable): direct ref to a nested Spec
+                    col["subtable_spec_ref"] = raw
+                elif raw & 1:  # Link/LinkList: tagged target-table index (>>1)
+                    col["target_table_index"] = raw >> 1
+        if type_code == 3 and enumkeys_hdr is not None and enumkeys_eb >= 1:
+            col["enum_keys_ref"] = _read_ref(data, enumkeys_ref + 8, enumkeys_ndx, enumkeys_eb)
+        if type_code == 5:
+            subspec_ndx += 1
+        elif type_code in (12, 13):
+            subspec_ndx += 1
+        elif type_code == 14:
+            subspec_ndx += 2
+        if type_code == 3:
+            enumkeys_ndx += 1
+        columns.append(col)
+    return columns if columns else None
+
+
+def _resolve_pre_cluster_column_refs(
+    data: bytes, columns_ref: int, spec_columns: list[dict[str, Any]], file_size: int,
+) -> dict[int, int]:
+    """Map each column's spec index to its ref in the Table's m_columns
+    array. m_columns holds one ref per column *plus* a search-index ref
+    immediately after any indexed column's own ref (table.hpp: "A search
+    index ref always occurs immediately after the ref of the column to
+    which the search index belongs") -- so the mapping is not a plain
+    1:1 index and has to walk Spec's `indexed` flags in step with it.
+    """
+    hdr = _parse_array_header(data, columns_ref)
+    if hdr is None or not hdr["has_refs"]:
+        return {}
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return {}
+
+    refs: dict[int, int] = {}
+    slot = 0
+    for col in spec_columns:
+        refs[col["col_index"]] = _read_ref(data, columns_ref + 8, slot, eb)
+        slot += 1
+        if col["indexed"]:
+            slot += 1  # skip this column's search-index ref
+    return refs
+
+
+def _decode_pre_cluster_timestamp_column(
+    data: bytes, col_ref: int, file_size: int,
+) -> list[str | None] | None:
+    """Decode an old-format Timestamp column. Unlike the modern
+    ArrayTimestamp cell (a small 2-slot [secs_ref, nanos_ref] array bounded
+    by one Cluster leaf's row count), a pre-Cluster TimestampColumn is a
+    *table-wide* column: its own top-level ref is still a 2-slot
+    [m_seconds root, m_nanoseconds root] array (column_timestamp.hpp), but
+    each of those two roots is independently a full B+-tree that can span
+    many leaves for a large table -- so each side must be leaf-walked on
+    its own rather than assumed to fit in a single leaf.
+    """
+    hdr = _parse_array_header(data, col_ref)
+    if hdr is None or not hdr["has_refs"] or hdr["Element count (size)"] != 2:
+        return None
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+    secs_root = _read_ref(data, col_ref + 8, 0, eb)
+    nanos_root = _read_ref(data, col_ref + 8, 1, eb)
+
+    secs: list[int | None] = []
+    if secs_root > 0:
+        for leaf_ref, _offset in (_walk_bplustree_leaves(data, secs_root, file_size) or [(secs_root, 0)]):
+            leaf_vals = _read_array_int_null(data, leaf_ref, file_size)
+            if leaf_vals is None:
+                return None
+            secs.extend(leaf_vals)
+
+    nanos: list[int] = []
+    if nanos_root > 0:
+        for leaf_ref, _offset in (_walk_bplustree_leaves(data, nanos_root, file_size) or [(nanos_root, 0)]):
+            leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+            if leaf_vals is None:
+                return None
+            nanos.extend(v if v is not None else 0 for v in leaf_vals)
+
+    result: list[str | None] = []
+    for i, s in enumerate(secs):
+        if s is None:
+            result.append(None)
+            continue
+        ns = nanos[i] if i < len(nanos) else 0
+        result.append(_decode_timestamp(int(s + (ns / 1_000_000_000 if ns else 0))))
+    return result
+
+
+def _read_pre_cluster_medium_string_or_binary(
+    data: bytes, ref: int, file_size: int, *, is_string: bool,
+) -> list[Any] | None:
+    """Decode the pre-Cluster "medium" String/Binary leaf form -- named
+    ArrayStringLong for strings, ArrayBinary for binary (array_string_long.hpp
+    / array_binary.hpp @ v5.23.9) -- confirmed via source to be genuinely
+    different from the modern ArraySmallBlobs this parser's regular
+    _read_array_string_or_binary otherwise dispatches to: 2 slots
+    [offsets, blob] when the column is non-nullable, 3 slots [offsets, blob,
+    nulls] when nullable (nullability is inferred from the array's own slot
+    count -- array_string_long.hpp: `m_nullable = (Array::size() == 3)`),
+    rather than modern's fixed 3-slot layout regardless of nullability.
+
+    String vs Binary differ in two ways confirmed against source: strings
+    store an implicit trailing NUL in the blob (subtracted from the decoded
+    length: array_string_long.hpp get()'s `--end`), binary does not
+    (array_binary.hpp get(): no such subtraction); and the null-flag sense
+    is inverted between the two (`m_nulls.get(ndx) == 0` means NULL for
+    strings, but `m_nulls.get(ndx) != 0` means NULL for binary) -- easy to
+    get backwards, so kept as two explicit branches rather than one shared
+    boolean flip.
+    """
+    hdr = _parse_array_header(data, ref)
+    if hdr is None or not hdr["has_refs"] or hdr["context_flag"]:
+        return None
+    count = hdr["Element count (size)"]
+    if count not in (2, 3):
+        return None
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+
+    offsets_ref = _read_ref(data, ref + 8, 0, eb)
+    blob_ref = _read_ref(data, ref + 8, 1, eb)
+    nulls_ref = _read_ref(data, ref + 8, 2, eb) if count == 3 else 0
+
+    offsets = _read_uint_array(data, offsets_ref)
+    nulls = _read_uint_array(data, nulls_ref) if nulls_ref > 0 else None
+
+    blob_hdr = _parse_array_header(data, blob_ref)
+    blob = b""
+    if blob_hdr is not None:
+        blob_size = blob_hdr["Element count (size)"]
+        blob = data[blob_ref + 8 : blob_ref + 8 + blob_size]
+
+    results: list[Any] = []
+    prev = 0
+    for i, end in enumerate(offsets):
+        if nulls is not None and i < len(nulls):
+            is_null = (nulls[i] == 0) if is_string else (nulls[i] != 0)
+        else:
+            is_null = False
+        if is_null:
+            results.append(None)
+            prev = end
+            continue
+        chunk_end = end - 1 if is_string else end  # strings: discount trailing NUL
+        chunk = blob[prev:chunk_end]
+        results.append(chunk.decode("utf-8", errors="replace") if is_string else bytes(chunk))
+        prev = end
+    return results
+
+
+def _read_pre_cluster_string_or_binary(
+    data: bytes, ref: int, file_size: int, *, is_string: bool, nullable: bool,
+) -> list[Any] | None:
+    """Dispatch a pre-Cluster String/Binary column leaf to the right
+    on-disk sub-form. has_refs=False is the inline Short form, confirmed
+    identical to the modern one (already reused via _read_array_string_short
+    for the issue #55 schema-name fix); has_refs=True + context_flag=True is
+    ArrayBigBlobs, whose file (array_blobs_big.hpp) already exists unchanged
+    in the v5.23.9 source tree -- reused as-is, though this specific
+    boundary condition (context_flag distinguishing BigBlobs from the medium
+    form in the *old* era) has not been directly confirmed against a real
+    BigBlobs-form old column, unlike the medium form below which was
+    verified against real data (issue #55, IFTTT sample). has_refs=True +
+    context_flag=False is the medium form (_read_pre_cluster_medium_string_or_binary).
+    """
+    hdr = _parse_array_header(data, ref)
+    if hdr is None:
+        return None
+    if not hdr["has_refs"]:
+        return _read_array_string_short(data, ref, hdr, is_string=is_string, nullable=nullable)
+    if hdr["context_flag"]:
+        return _read_array_big_blobs(data, ref, hdr, file_size, is_string=is_string)
+    return _read_pre_cluster_medium_string_or_binary(data, ref, file_size, is_string=is_string)
+
+
+def _decode_pre_cluster_string_enum_column(
+    data: bytes, col_ref: int, enum_keys_ref: int | None, file_size: int,
+) -> list[str | None] | None:
+    """Decode a pre-Cluster StringEnum column (column_string_enum.hpp @
+    v5.23.9): a shared keys StringColumn (referenced from Spec's
+    m_enumkeys, resolved by the caller) holding each unique string once,
+    plus a per-row plain integer index into that keys array -- decoded
+    the same way as a regular Int column since the index storage itself
+    is an ordinary IntegerColumn, not a special leaf format.
+    """
+    if not enum_keys_ref:
+        return None
+    keys = _read_pre_cluster_string_or_binary(
+        data, enum_keys_ref, file_size, is_string=True, nullable=False
+    )
+    if keys is None:
+        return None
+
+    leaves = _walk_bplustree_leaves(data, col_ref, file_size)
+    if not leaves:
+        leaves = [(col_ref, 0)]
+
+    indices: list[int | None] = []
+    for leaf_ref, _offset in leaves:
+        leaf_hdr = _parse_array_header(data, leaf_ref)
+        if leaf_hdr is not None and leaf_hdr["width"] == 0:
+            indices.extend([0] * leaf_hdr["Element count (size)"])
+            continue
+        leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+        if leaf_vals is None:
+            return None
+        indices.extend(leaf_vals)
+
+    return [
+        (keys[int(ix)] if ix is not None and 0 <= int(ix) < len(keys) else None)
+        for ix in indices
+    ]
+
+
+def _decode_pre_cluster_table_column(
+    data: bytes, col_ref: int, file_size: int, subtable_spec_ref: int | None,
+) -> list[list[dict[str, Any]]] | None:
+    """Decode a pre-Cluster Table-typed (subtable) column. Each row's own
+    value in the column's top-level B+-tree is a plain ref: 0 = a
+    degenerate/not-yet-materialized empty subtable (table.hpp: "a subtable
+    ... always starts out in a degenerate form ... a null 'ref' is
+    stored"), otherwise a ref to that row's own m_columns array -- subtable
+    rows share one Spec (spec_ref resolved by the caller via
+    _extract_pre_cluster_spec's subtable_spec_ref, spec.cpp
+    Spec::get_subspec_by_ndx) rather than each row's subtable carrying its
+    own independent spec.
+
+    Each row's decoded value is a list of sub-row dicts ({column_name:
+    value}), recursively expanded rather than shown as a placeholder --
+    same "expand, don't stub out" precedent as _read_array_mixed's nested
+    List/Set/Dictionary handling.
+    """
+    if not subtable_spec_ref:
+        return None
+    subtable_spec = _extract_pre_cluster_spec(data, subtable_spec_ref, file_size)
+    if not subtable_spec:
+        return None
+    visible = [c for c in subtable_spec if c["type_code"] != 14]
+
+    leaves = _walk_bplustree_leaves(data, col_ref, file_size)
+    if not leaves:
+        leaves = [(col_ref, 0)]
+
+    refs: list[int] = []
+    for leaf_ref, _offset in leaves:
+        leaf_hdr = _parse_array_header(data, leaf_ref)
+        if leaf_hdr is None or not leaf_hdr["has_refs"]:
+            return None
+        count = leaf_hdr["Element count (size)"]
+        if leaf_hdr["width"] == 0:
+            refs.extend([0] * count)
+            continue
+        eb = _elem_bytes(leaf_hdr)
+        if eb < 1:
+            return None
+        for i in range(count):
+            refs.append(_read_ref(data, leaf_ref + 8, i, eb))
+
+    values: list[list[dict[str, Any]]] = []
+    for row_ref in refs:
+        if row_ref <= 0 or row_ref >= file_size:
+            values.append([])
+            continue
+        sub_col_refs = _resolve_pre_cluster_column_refs(data, row_ref, subtable_spec, file_size)
+        sub_columns: dict[int, list[Any]] = {}
+        sub_row_count: int | None = None
+        for idx, col in enumerate(visible):
+            cref = sub_col_refs.get(col["col_index"], 0)
+            vals = _decode_pre_cluster_column_values(data, cref, file_size, col)
+            sub_columns[idx] = vals if vals is not None else []
+            if vals is not None and sub_row_count is None:
+                sub_row_count = len(vals)
+        n = sub_row_count or 0
+        values.append([
+            {
+                col["name"]: (sub_columns[idx][r] if r < len(sub_columns[idx]) else None)
+                for idx, col in enumerate(visible)
+            }
+            for r in range(n)
+        ])
+    return values
+
+
+def _decode_pre_cluster_linklist_column(
+    data: bytes, col_ref: int, file_size: int,
+) -> list[list[int]] | None:
+    """Decode an old-format LinkList column. Confirmed against source
+    (column_linklist.hpp/link_view.hpp @ v5.23.9): the column's own
+    top-level B+-tree holds one *ref* per row (0 = empty list, matching the
+    modern LinkList shape), each pointing to that row's own flat Array of
+    plain 0-based target row indices (LinkView::get() -- no null/+1 encoding
+    at this level, unlike single Link columns, since a list element can't
+    itself be null).
+    """
+    leaves = _walk_bplustree_leaves(data, col_ref, file_size)
+    if not leaves:
+        leaves = [(col_ref, 0)]
+
+    values: list[list[int]] = []
+    for leaf_ref, _offset in leaves:
+        leaf_hdr = _parse_array_header(data, leaf_ref)
+        if leaf_hdr is None or not leaf_hdr["has_refs"]:
+            return None
+        count = leaf_hdr["Element count (size)"]
+        if leaf_hdr["width"] == 0:
+            # Realm's all-zero compact encoding: every ref in this leaf is
+            # implicitly 0 (empty list), no payload bytes are stored at all.
+            values.extend([] for _ in range(count))
+            continue
+        eb = _elem_bytes(leaf_hdr)
+        if eb < 1:
+            return None
+        for i in range(count):
+            row_ref = _read_ref(data, leaf_ref + 8, i, eb)
+            if row_ref <= 0 or row_ref >= file_size:
+                values.append([])
+                continue
+            targets = _read_scalar_leaf(data, row_ref, file_size)
+            values.append([int(t) for t in targets if t is not None] if targets else [])
+    return values
+
+
+def _decode_pre_cluster_column_values(
+    data: bytes,
+    col_ref: int,
+    file_size: int,
+    col_info: dict[str, Any],
+) -> list[Any] | None:
+    """Decode one old-format column's full value list, dispatched purely
+    from its Spec-declared old ColumnType (never guessed from shape). The
+    per-type leaf primitives are the same ones already used for modern
+    columns -- only the top-level walk (_walk_bplustree_leaves, confirmed
+    against bptree.hpp @ v5.23.9 to share the modern BPlusTree<T>'s
+    inner-node layout) and the dispatch table are new for this era.
+
+    Types not yet implemented here (mixed) return None so callers surface
+    them as an explicit gap rather than silently wrong data -- tracked as
+    follow-up work on the same branch, not a permanent limitation.
+    BackLink columns are hidden entirely by the caller
+    (_extract_pre_cluster_table_data), not dispatched here.
+    """
+    if col_ref <= 0 or col_ref >= file_size:
+        return None
+    type_code = col_info["type_code"]
+    nullable = col_info["nullable"]
+
+    if type_code == 8:  # Timestamp
+        return _decode_pre_cluster_timestamp_column(data, col_ref, file_size)
+    if type_code == 13:  # LinkList
+        return _decode_pre_cluster_linklist_column(data, col_ref, file_size)
+    if type_code == 5:  # Table (subtable)
+        return _decode_pre_cluster_table_column(
+            data, col_ref, file_size, col_info.get("subtable_spec_ref")
+        )
+    if type_code == 3:  # StringEnum
+        return _decode_pre_cluster_string_enum_column(
+            data, col_ref, col_info.get("enum_keys_ref"), file_size
+        )
+
+    leaves = _walk_bplustree_leaves(data, col_ref, file_size)
+    if not leaves:
+        leaves = [(col_ref, 0)]
+
+    values: list[Any] = []
+    for leaf_ref, _offset in leaves:
+        if type_code == 0:  # int
+            leaf_vals = (
+                _read_array_int_null(data, leaf_ref, file_size) if nullable
+                else _read_scalar_leaf(data, leaf_ref, file_size)
+            )
+        elif type_code == 1:  # bool
+            leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+            if leaf_vals is not None:
+                leaf_vals = [None if v is None else bool(v) for v in leaf_vals]
+        elif type_code in (2, 4):  # string, binary
+            leaf_vals = _read_pre_cluster_string_or_binary(
+                data, leaf_ref, file_size, is_string=(type_code == 2), nullable=nullable,
+            )
+        elif type_code in (9, 10):  # float, double
+            leaf_vals = _read_array_float(data, leaf_ref, file_size)
+        elif type_code == 7:  # OldDateTime -- plain epoch-seconds int leaf
+            leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+            if leaf_vals is not None:
+                leaf_vals = [
+                    None if v is None else _decode_timestamp(int(v)) for v in leaf_vals
+                ]
+        elif type_code == 12:  # Link -- LinkColumn::get_link (column_link.hpp):
+            # raw 0 = null, raw N (N>0) = target row index N-1.
+            leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+            if leaf_vals is not None:
+                leaf_vals = [
+                    None if v is None or v == 0 else int(v) - 1 for v in leaf_vals
+                ]
+        else:
+            return None  # not yet implemented -- see docstring
+        if leaf_vals is None:
+            return None
+        values.extend(leaf_vals)
+    return values
+
+
+def _extract_pre_cluster_table_data(
+    data: bytes, table_ref: int, table_name: str, file_size: int, schema: list[str],
+) -> dict[str, Any] | None:
+    """Decode one pre-Cluster Table (table.hpp @ v5.23.9: m_top slot 0 =
+    spec ref, slot 1 = columns ref). Row count is taken from the first
+    successfully-decoded column's value count (every column in a
+    well-formed old Table has exactly one entry per row); a table with no
+    decodable columns returns a 0-row result rather than None, so it is
+    still listed rather than silently dropped.
+    """
+    t_hdr = _parse_array_header(data, table_ref)
+    if t_hdr is None or not t_hdr["has_refs"] or t_hdr["Element count (size)"] < 2:
+        return None
+    t_eb = _elem_bytes(t_hdr)
+    if t_eb < 1:
+        return None
+
+    spec_ref = _read_ref(data, table_ref + 8, 0, t_eb)
+    columns_ref = _read_ref(data, table_ref + 8, 1, t_eb)
+    if spec_ref <= 0 or spec_ref >= file_size:
+        return None
+
+    spec_columns = _extract_pre_cluster_spec(data, spec_ref, file_size)
+    if not spec_columns:
+        return None
+    col_refs = (
+        _resolve_pre_cluster_column_refs(data, columns_ref, spec_columns, file_size)
+        if 0 < columns_ref < file_size else {}
+    )
+
+    columns: dict[int, list[Any]] = {}
+    column_names: list[str] = []
+    column_types: list[str] = []
+    unsupported_columns: list[str] = []
+    row_count = 0
+    row_count_known = False
+
+    # BackLink columns are auto-generated reverse-link bookkeeping, not user
+    # data -- hidden from the visible column list here too (matching the
+    # modern path's _HIDDEN_COL_TYPES), but still kept in spec_columns above
+    # for _resolve_pre_cluster_column_refs's slot-position math, which needs
+    # every Spec entry in order to stay aligned with the real m_columns array.
+    visible_cols = [col for col in spec_columns if col["type_code"] != 14]
+
+    for user_idx, col in enumerate(visible_cols):
+        column_names.append(col["name"])
+        column_types.append(_PRE_CLUSTER_COL_TYPES.get(col["type_code"], f"type_{col['type_code']}"))
+        col_ref = col_refs.get(col["col_index"], 0)
+        values = _decode_pre_cluster_column_values(data, col_ref, file_size, col)
+        if values is None:
+            # Type not yet implemented, or genuinely undecodable -- flagged
+            # explicitly below rather than shown as a silent empty column.
+            unsupported_columns.append(col["name"])
+        columns[user_idx] = values if values is not None else []
+        if values is not None and not row_count_known:
+            row_count = len(values)
+            row_count_known = True
+
+    # Undecoded columns still get one marker per row once the row count is
+    # known from a sibling column -- a visible "<unsupported...>" placeholder
+    # (same pattern as _read_array_mixed's own marker for a data_type it
+    # doesn't recognise), not None, so it can't be mistaken for real NULL data.
+    if row_count_known:
+        for user_idx, col in enumerate(visible_cols):
+            if col["name"] in unsupported_columns:
+                type_name = _PRE_CLUSTER_COL_TYPES.get(col["type_code"], f"type_{col['type_code']}")
+                columns[user_idx] = [f"<unsupported: {type_name}>"] * row_count
+
+    column_target_tables: list[str | None] = []
+    for col in visible_cols:
+        tt_idx = col.get("target_table_index")
+        column_target_tables.append(
+            schema[tt_idx] if tt_idx is not None and 0 <= tt_idx < len(schema) else None
+        )
+
+    return {
+        "name": table_name,
+        "row_count": row_count,
+        "row_count_estimated": not row_count_known,
+        "columns": columns,
+        "column_names": column_names,
+        "column_types": column_types,
+        "column_target_tables": column_target_tables,
+        "unsupported_columns": unsupported_columns,
+        "obj_keys": list(range(row_count)),
+    }
+
+
+def _extract_pre_cluster_tables_data(
+    data: bytes, root_offset: int, schema: list[str], file_size: int,
+) -> list[dict[str, Any]]:
+    """Pre-Cluster equivalent of _extract_table_data: same Group -> tables
+    array walk (root_offset -> child[1], stable across all file-format
+    versions -- group.hpp s_table_refs_ndx=1 predates even the earliest
+    documented format changes), but dispatches each table through
+    _extract_pre_cluster_table_data instead of the Cluster-based path.
+    """
+    root_hdr = _parse_array_header(data, root_offset)
+    if root_hdr is None or not root_hdr["has_refs"]:
+        return []
+    root_eb = _elem_bytes(root_hdr)
+    if root_eb < 1 or root_hdr["Element count (size)"] < 2:
+        return []
+
+    table_refs_off = _read_ref(data, root_offset + 8, 1, root_eb)
+    if table_refs_off <= 0 or table_refs_off >= file_size:
+        return []
+    tr_hdr = _parse_array_header(data, table_refs_off)
+    if tr_hdr is None or not tr_hdr["has_refs"]:
+        return []
+    tr_eb = _elem_bytes(tr_hdr)
+    num_tables = tr_hdr["Element count (size)"]
+
+    tables: list[dict[str, Any]] = []
+    for t_idx in range(num_tables):
+        table_ref = _read_ref(data, table_refs_off + 8, t_idx, tr_eb)
+        if table_ref <= 0 or table_ref >= file_size:
+            continue
+        table_name = schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]"
+        table = _extract_pre_cluster_table_data(data, table_ref, table_name, file_size, schema)
+        if table is not None:
+            tables.append(table)
+    return tables
+
+
+# ---------------------------------------------------------------------------
 # String scanner
 # ---------------------------------------------------------------------------
 
@@ -2081,15 +2745,20 @@ class RealmParser(AbstractParser):
 
         strings = _scan_strings(full_data)
 
-        # Row/table data needs the Cluster-based layout (see
-        # _MIN_CLUSTER_FORMAT_VERSION); older formats get an explicit
-        # "not supported" status instead of a silent empty table list.
+        # Row/table data below _MIN_CLUSTER_FORMAT_VERSION uses the
+        # pre-Cluster Table/Spec layout (_extract_pre_cluster_tables_data)
+        # instead of the Cluster-based path. unsupported_row_format now
+        # only means "this file format predates format 10 and used the old
+        # layout" (informational, not a decode failure) -- a handful of old
+        # column types still can't be decoded per-column; those are flagged
+        # per-table via each table's "unsupported_columns" instead.
         unsupported_row_format: int | None = None
 
         tables: list[dict[str, Any]] = []
         if header_info and schema:
             if active_format < _MIN_CLUSTER_FORMAT_VERSION:
                 unsupported_row_format = active_format
+                tables = _extract_pre_cluster_tables_data(full_data, active_offset, schema, file_size)
             else:
                 table_key_map = _build_table_key_map(full_data, active_offset, schema, file_size)
                 tables = _extract_table_data(
@@ -2101,6 +2770,9 @@ class RealmParser(AbstractParser):
             if inactive_format < _MIN_CLUSTER_FORMAT_VERSION:
                 if unsupported_row_format is None:
                     unsupported_row_format = inactive_format
+                inactive_tables = _extract_pre_cluster_tables_data(
+                    full_data, inactive_offset, inactive_schema, file_size
+                )
             else:
                 inactive_table_key_map = _build_table_key_map(
                     full_data, inactive_offset, inactive_schema, file_size
@@ -2180,10 +2852,31 @@ class RealmParser(AbstractParser):
             if schema:
                 meta["Tables found"] = str(len(schema))
             if unsupported_row_format is not None:
-                meta["Row data"] = (
-                    f"Not supported (format {unsupported_row_format} "
-                    f"< {_MIN_CLUSTER_FORMAT_VERSION}, pre-Cluster)"
-                )
+                pc_tables = tables + inactive_tables
+                gaps = {
+                    t["name"]: t["unsupported_columns"]
+                    for t in pc_tables
+                    if t.get("unsupported_columns")
+                }
+                if not pc_tables and schema:
+                    # Schema/class names resolved, but the pre-Cluster
+                    # Table/Spec structure itself didn't -- explicit, not
+                    # silently treated as "decoded with zero tables".
+                    meta["Row data"] = (
+                        f"Pre-Cluster format ({unsupported_row_format} < "
+                        f"{_MIN_CLUSTER_FORMAT_VERSION}) — table structure could not be decoded"
+                    )
+                elif gaps:
+                    n_cols = sum(len(v) for v in gaps.values())
+                    meta["Row data"] = (
+                        f"Pre-Cluster format ({unsupported_row_format} < "
+                        f"{_MIN_CLUSTER_FORMAT_VERSION}) — {n_cols} column(s) across "
+                        f"{len(gaps)} table(s) not yet decoded (unimplemented old column type)"
+                    )
+                else:
+                    meta["Row data"] = (
+                        f"Decoded via legacy pre-Cluster layout (format {unsupported_row_format})"
+                    )
         else:
             meta["Header"] = "Not detected (corrupt or non-standard)"
             meta["Possibly Encrypted"] = "Try Open as → Realm DB (Encrypted)…"

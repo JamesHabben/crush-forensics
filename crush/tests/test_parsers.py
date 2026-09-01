@@ -437,10 +437,11 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     lets them always use the inline form). Before the issue #55 fix,
     _extract_schema only decoded the inline form and silently returned zero
     classes for a BigBlobs-form file -- indistinguishable from a genuinely
-    empty schema. This also verifies row/table data is explicitly flagged
-    unsupported for file format < 10 rather than left silently empty,
-    since this parser's Cluster-walking code cannot read the pre-Cluster
-    row layout such a file would actually have.
+    empty schema. This fixture only builds the Group-level table_names
+    array (no actual Table/Spec structures), so it also verifies that when
+    schema names resolve but the pre-Cluster table structure itself does
+    not, that gap is explicitly flagged rather than silently shown as
+    zero decoded tables.
     """
     ROOT_OFFSET = 24
     TABLE_NAMES_OFFSET = 40
@@ -487,10 +488,10 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     assert result.viewer_type == "realm"
     assert result.data["schema"] == ["metadata", "class_LegacyRecord"]
 
-    # Row/table data needs the Cluster layout (format 10+) this file doesn't
-    # have -- must be explicitly flagged, never silently left at zero rows.
+    # This fixture has no real Table/Spec structure to decode -- the gap
+    # must be explicitly flagged, never silently left at zero rows.
     assert result.data["tables"] == []
-    assert "Not supported" in result.metadata.get("Row data", "")
+    assert "could not be decoded" in result.metadata.get("Row data", "")
     assert "9" in result.metadata["Row data"]
 
 
