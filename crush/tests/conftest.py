@@ -161,6 +161,21 @@ def realm_mcdonalds_v9_fixture(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def realm_all_types_v24_fixture(tmp_path: Path) -> Path:
+    """Writable copy of all_types_v24.realm placed in tmp_path -- a real
+    file format 24 Realm database produced by the actual realm-js SDK
+    (not hand-built bytes), covering every modern column type including
+    Decimal128, UUID, ObjectId, Link, LinkList, Mixed (incl. nested
+    List/Dictionary), and Dictionary. Generated for issue #55 follow-up
+    testing since no real format >=10 sample with this coverage was
+    available; regenerate via crush/tests/fixtures/generate_all_types_v24.js."""
+    src = FIXTURES_DIR / "all_types_v24.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def sqlite_fixture(tmp_path: Path) -> Path:
     """Writable copy of minimal.sqlite placed in tmp_path."""
     src = FIXTURES_DIR / "minimal.sqlite"

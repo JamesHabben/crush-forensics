@@ -668,6 +668,19 @@ def _read_collection_column(
         "is_set": False,
     }
 
+    # A LinkList/Set<Link>'s elements are NOT the same on-disk shape as a
+    # top-level Link column's own cluster-slot value: the +1/0=null "adj"
+    # trick (array_key.hpp, ArrayKeyBase<1>) exists specifically to let a
+    # ref-shaped cluster slot distinguish "empty" from "target ObjKey 0" --
+    # inside a LinkList's own dedicated BPlusTree<ObjKey> there is no such
+    # ambiguity, so elements are plain 0-based ObjKeys with no adjustment
+    # (mirrors the pre-Cluster LinkList finding: link_view.hpp's per-element
+    # storage is unadjusted even though LinkColumnBase's own is). Routing
+    # element_type==12 through _decode_column_values would wrongly apply
+    # the single-Link decoder's -1/null-at-0 logic here -- confirmed wrong
+    # against a real realm-js-produced file (issue #55 follow-up testing).
+    is_link_element = element_type == 12
+
     results: list[list[Any]] = []
     for i in range(count):
         row_ref = _read_ref(data, col_ref + 8, i, eb)
@@ -676,7 +689,20 @@ def _read_collection_column(
             continue
         values: list[Any] = []
         for leaf_ref, _off in _walk_bplustree_leaves(data, row_ref, file_size):
-            leaf_vals = _decode_column_values(data, leaf_ref, file_size, element_info)
+            if is_link_element:
+                # _read_scalar_leaf returns Python bool for width=1 leaves
+                # (it doubles as the generic bit-packed reader, including
+                # for genuine Bool columns) -- a small ObjKey range (0/1)
+                # can legitimately be stored at that width, so cast back to
+                # a plain int here rather than let a row index display as
+                # True/False.
+                raw_leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+                leaf_vals = (
+                    [None if v is None else int(v) for v in raw_leaf_vals]
+                    if raw_leaf_vals is not None else None
+                )
+            else:
+                leaf_vals = _decode_column_values(data, leaf_ref, file_size, element_info)
             if leaf_vals:
                 values.extend(leaf_vals)
         results.append(values)
@@ -1245,13 +1271,17 @@ def _read_array_timestamp(data: bytes, ref: int, file_size: int) -> list[str | N
 
 def _read_array_fixed_bytes(
     data: bytes, ref: int, file_size: int, elem_size: int,
-) -> list[bytes | None] | None:
+) -> list[bytes | str | None] | None:
     """Decode a Realm ArrayFixedBytes[Null] leaf: elements are packed in
     blocks of 8, with 1 extra null-bitvector byte prefixing each block
     (array_fixed_bytes.hpp: Pos::get_pos/is_null, s_block_size). Used for
     ObjectId (elem_size=12) and UUID (elem_size=16); nullability is encoded
     the same way regardless of whether the column itself is nullable.
-    Returns raw per-element bytes (or None); callers format them.
+    Returns raw per-element bytes, `None` for a genuine null (the
+    null-bitvector bit set), or a "<...>" marker string when the payload
+    is simply too short to hold this element (truncated/corrupt data) --
+    that case must not look like a real null, so callers must not blindly
+    treat every non-bytes entry as one; they pass the marker through as-is.
     """
     hdr = _parse_array_header(data, ref)
     if hdr is None or hdr["has_refs"]:
@@ -1263,12 +1293,13 @@ def _read_array_fixed_bytes(
     data_bytes = total_bytes - -(-total_bytes // block_size)  # total - ceil(total/block_size)
     n = max(data_bytes // elem_size, 0)
     payload = data[ref + 8 : ref + 8 + total_bytes]
-    results: list[bytes | None] = []
+    results: list[bytes | str | None] = []
+    truncated = "<fixed_bytes: truncated>"
     for i in range(n):
         block_idx, offset = divmod(i, 8)
         base = block_idx * block_size
         if base >= len(payload):
-            results.append(None)
+            results.append(truncated)
             continue
         bitvec = payload[base]
         if bitvec & (1 << offset):
@@ -1276,7 +1307,7 @@ def _read_array_fixed_bytes(
             continue
         start = base + 1 + offset * elem_size
         val = payload[start : start + elem_size]
-        results.append(val if len(val) == elem_size else None)
+        results.append(val if len(val) == elem_size else truncated)
     return results
 
 
@@ -1291,18 +1322,32 @@ def _decode_bid(raw_int: int, total_bits: int) -> str:
     """Decode an IEEE 754-2008 BID (binary integer decimal) value — the
     encoding Realm's Decimal128 uses (array_decimal128.hpp: Bid64/Bid128).
 
-    Combination-field decode per IEEE 754-2008 §3.5.2: the coefficient's
-    leading decimal digit (0-9) is folded into the 5 most-significant bits
-    of the combination field alongside 2 exponent bits, so the full
-    coefficient reconstructs as msd * 2**t_width + trailing_significand.
+    Per IEEE 754-2008 §3.5.2, the g_width bits after the sign are NOT laid
+    out as "5-bit combination field, then exponent-continuation field"
+    contiguously -- two earlier versions of this function assumed that and
+    were both wrong. The real layout (confirmed 2026-09-01 by brute-force
+    solving against two real realm-js-produced Bid64 values after neither
+    prior version reproduced them): combination-field bits G0 and G1 sit at
+    the very top (right after sign), then the exponent-continuation field,
+    then combination-field bits G2/G3/G4 sit at the *bottom*, immediately
+    adjacent to the trailing significand T -- i.e. G0G1 and G2G3G4 are not
+    contiguous with each other. So in the common case (G0G1 != 11):
+    `biased_exponent = g >> 3` (the top g_width-3 bits, i.e. G0G1 directly
+    followed by the continuation field) and the coefficient's top 3 bits
+    are simply `g & 0b111` (G2G3G4, concatenated with T) -- no separate
+    "MSD lookup" needed. When G0G1 == 11 (not the inf/nan case), the
+    exponent is `(g >> 1) & 0x3FF` and the coefficient's top nibble is the
+    fixed prefix "100" + G4 (giving MSD 8 or 9).
 
-    NOTE: this is a hand-implementation of the public IEEE 754-2008 BID
-    arithmetic itself (combination-field/exponent/coefficient decode), not
-    something Realm's own source needs to define -- the *storage* format
-    (word order, low/high placement) is confirmed from Realm Core source
-    (see _read_array_mixed), but this function's own arithmetic has not
-    been run against known IEEE 754-2008 BID test vectors. Treat output
-    with appropriate care until that verification happens.
+    Verified: decoded two real Bid64 values from a realm-js-produced file
+    ("12345.6789" and "-99.99", format 24) byte-for-byte against the SDK's
+    own Decimal128.toString() -- both earlier versions produced garbage
+    (e.g. "3.377699843984661E-303" for the first), this version reproduces
+    both exactly. Also verified against an MSD-8/9 value
+    ("89999999999999.5") and a 34-significant-digit value forcing the full
+    Bid128 (16-byte) form. The *storage* format (word order, low/high
+    word placement for Bid128) is confirmed from Realm Core source
+    separately (see _read_array_mixed).
     """
     if total_bits == 64:
         g_width, t_width, bias = 13, 50, 398
@@ -1315,29 +1360,34 @@ def _decode_bid(raw_int: int, total_bits: int) -> str:
     g = (raw_int >> t_width) & ((1 << g_width) - 1)
     t = raw_int & ((1 << t_width) - 1)
 
-    g_top5 = g >> (g_width - 5)
-    exp_low_bits = g & ((1 << (g_width - 5)) - 1)
+    top4 = (g >> (g_width - 4)) & 0b1111  # G0 G1 G2 G3
+    if top4 == 0b1111:
+        g4 = (g >> (g_width - 5)) & 1
+        if g4:
+            return "NaN"
+        return "-Infinity" if sign else "Infinity"
 
-    if (g_top5 >> 3) != 0b11:
-        msd = (g_top5 >> 2) & 0b111
-        exp_high2 = g_top5 & 0b11
+    top2 = g >> (g_width - 2)  # G0 G1
+    if top2 != 0b11:
+        biased_exponent = g >> 3
+        msd = g & 0b111
     else:
-        g2g3 = (g_top5 >> 1) & 0b11
-        if g2g3 == 0b11:
-            g4 = g_top5 & 1
-            if g4:
-                return "NaN"
-            return "-Infinity" if sign else "Infinity"
-        msd = 8 | (g_top5 & 1)
-        exp_high2 = g2g3
+        biased_exponent = (g >> 1) & ((1 << (g_width - 3)) - 1)
+        g4 = g & 1
+        msd = 8 | g4
 
-    biased_exponent = (exp_high2 << (g_width - 5)) | exp_low_bits
     coefficient = msd * (1 << t_width) + t
     exponent = biased_exponent - bias
 
-    value = decimal.Decimal(coefficient).scaleb(exponent)
-    if sign:
-        value = -value
+    # decimal128's coefficient needs up to 34 significant digits -- Python's
+    # ambient decimal context defaults to 28 and .scaleb() is a
+    # context-rounded operation, which silently truncated Bid128 values
+    # past 28 digits until this was caught against a real 34-digit
+    # realm-js-produced value. Build the Decimal directly from its
+    # (sign, digits, exponent) tuple instead, which is exact and ignores
+    # context precision entirely.
+    digits = tuple(int(d) for d in str(coefficient)) if coefficient else (0,)
+    value = decimal.Decimal((sign, digits, exponent))
     return str(value)
 
 
@@ -1556,56 +1606,72 @@ def _read_array_mixed(
         payload_idx_flag = (val & _MIXED_PAYLOAD_IDX_MASK) >> 5
         payload_val = val >> _MIXED_DATA_SHIFT
 
+        # By this point `val` is non-zero (the genuine-null case was already
+        # handled by `if not val` above), so a payload helper returning None
+        # from here on can only mean its index couldn't be resolved (a
+        # corrupt/out-of-range payload_idx) -- never a legitimate null. Each
+        # branch below must say so explicitly rather than silently emitting
+        # None, which would be indistinguishable from a real null value.
+        missing = f"<mixed: unresolved payload index for type_{data_type}>"
+
         if data_type == 0:  # Int
             if payload_idx_flag == 0:
                 results.append(payload_val)
             else:
-                results.append(int_payload(payload_val))
+                iv = int_payload(payload_val)
+                results.append(iv if iv is not None else missing)
         elif data_type == 1:  # Bool
             results.append(payload_val != 0)
         elif data_type == 9:  # Float
             iv = int_payload(payload_val)
-            results.append(struct.unpack("<f", (iv & 0xFFFFFFFF).to_bytes(4, "little"))[0] if iv is not None else None)
+            results.append(
+                struct.unpack("<f", (iv & 0xFFFFFFFF).to_bytes(4, "little"))[0]
+                if iv is not None else missing
+            )
         elif data_type == 10:  # Double
             iv = int_payload(payload_val)
-            results.append(struct.unpack("<d", (iv & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little"))[0] if iv is not None else None)
+            results.append(
+                struct.unpack("<d", (iv & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little"))[0]
+                if iv is not None else missing
+            )
         elif data_type == 2:  # String
             raw = string_payload(payload_val)
-            results.append(raw.decode("utf-8", errors="replace") if raw is not None else None)
+            results.append(raw.decode("utf-8", errors="replace") if raw is not None else missing)
         elif data_type == 4:  # Binary
             raw = string_payload(payload_val)
-            results.append(raw if raw is not None else None)
+            results.append(raw if raw is not None else missing)
         elif data_type == 8:  # Timestamp
             pair = pair_payload(payload_val)
             results.append(
                 _decode_timestamp(int(pair[0] + (pair[1] / 1_000_000_000 if pair[1] else 0)))
-                if pair else None
+                if pair else missing
             )
         elif data_type == 15:  # ObjectId
             raw = string_payload(payload_val)
-            results.append(raw.hex() if raw is not None else None)
+            results.append(raw.hex() if raw is not None else missing)
         elif data_type == 11:  # Decimal128
             pair = pair_payload(payload_val)
             if pair:
                 low, high = pair[0] & 0xFFFFFFFFFFFFFFFF, pair[1] & 0xFFFFFFFFFFFFFFFF
                 results.append(_decode_bid(low | (high << 64), 128))
             else:
-                results.append(None)
+                results.append(missing)
         elif data_type == 12:  # Link
-            results.append(int_payload(payload_val))
+            iv = int_payload(payload_val)
+            results.append(iv if iv is not None else missing)
         elif data_type == 16:  # TypedLink
             pair = pair_payload(payload_val)
             if pair:
                 results.append(f"Obj(table_key={pair[0]}, key={pair[1]})")
             else:
-                results.append(None)
+                results.append(missing)
         elif data_type == 17:  # UUID
             raw = string_payload(payload_val)
-            results.append(_format_uuid(raw) if raw is not None else None)
+            results.append(_format_uuid(raw) if raw is not None else missing)
         elif data_type in (19, 20):  # List, Set (elements are always Mixed once nested)
             r = ref_payload(payload_val)
             if r is None:
-                results.append(None)
+                results.append(missing)
             elif _nest_depth >= _MIXED_MAX_NEST_DEPTH:
                 results.append(f"<mixed: nesting depth limit ({_MIXED_MAX_NEST_DEPTH}) reached>")
             else:
@@ -1613,7 +1679,7 @@ def _read_array_mixed(
         elif data_type == 21:  # Dictionary (always String-keyed -- see docstring)
             r = ref_payload(payload_val)
             if r is None:
-                results.append(None)
+                results.append(missing)
             elif _nest_depth >= _MIXED_MAX_NEST_DEPTH:
                 results.append(f"<mixed: nesting depth limit ({_MIXED_MAX_NEST_DEPTH}) reached>")
             else:
@@ -1690,8 +1756,15 @@ def _read_dictionary_at_ref(
             if leaf_vals:
                 values.extend(leaf_vals)
 
+    # keys/values are two independently-walked BPlusTrees paired by index
+    # position (see docstring above) -- if they come out mismatched in
+    # length (corruption, a partially-failed leaf decode), that's a real
+    # structural problem and must not look like this key's value simply
+    # decoded to a legitimate null.
     return {
-        (key if key is not None else f"<null key {j}>"): (values[j] if j < len(values) else None)
+        (key if key is not None else f"<null key {j}>"): (
+            values[j] if j < len(values) else "<dictionary: value tree shorter than keys tree>"
+        )
         for j, key in enumerate(keys)
     }
 
@@ -1774,10 +1847,10 @@ def _decode_column_values(
         return _read_array_link(data, col_ref, file_size)
     if type_code == 15:  # ObjectId
         raw = _read_array_fixed_bytes(data, col_ref, file_size, 12)
-        return None if raw is None else [None if v is None else v.hex() for v in raw]
+        return None if raw is None else [v.hex() if isinstance(v, bytes) else v for v in raw]
     if type_code == 17:  # UUID
         raw = _read_array_fixed_bytes(data, col_ref, file_size, 16)
-        return None if raw is None else [None if v is None else _format_uuid(v) for v in raw]
+        return None if raw is None else [_format_uuid(v) if isinstance(v, bytes) else v for v in raw]
     if type_code == 6:  # Mixed
         return _read_array_mixed(data, col_ref, file_size, _nest_depth)
     if type_code == 16:  # TypedLink
@@ -2265,6 +2338,135 @@ def _read_pre_cluster_string_or_binary(
     return _read_pre_cluster_medium_string_or_binary(data, ref, file_size, is_string=is_string)
 
 
+def _walk_pre_cluster_int_column(
+    data: bytes, col_ref: int, file_size: int,
+) -> list[int | None] | None:
+    """Walk a plain old-format IntegerColumn's own top-level B+-tree and
+    concatenate its leaves (no nullable-sentinel handling -- used for
+    Mixed's m_types/m_data sub-columns, which are never themselves null)."""
+    if col_ref <= 0 or col_ref >= file_size:
+        return None
+    leaves = _walk_bplustree_leaves(data, col_ref, file_size)
+    if not leaves:
+        leaves = [(col_ref, 0)]
+    values: list[int | None] = []
+    for leaf_ref, _offset in leaves:
+        leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
+        if leaf_vals is None:
+            return None
+        values.extend(leaf_vals)
+    return values
+
+
+_U64_MASK = (1 << 64) - 1
+_BIT63 = 1 << 63
+
+
+def _decode_pre_cluster_mixed_column(
+    data: bytes, col_ref: int, file_size: int,
+) -> list[Any] | None:
+    """Decode an old-format Mixed column. Top-array slot assignment
+    confirmed against MixedColumn::create() (column_mixed.cpp @ v5.23.8 --
+    the exact realm-core version realm-java 6.1.0, the last release the
+    issue #55 reporter says wrote format 9, bundled): 0=m_types
+    (IntegerColumn of MixedColType), 1=m_data (RefsColumn, tagged --
+    get_value() = raw_uint64 >> 1), 2=m_binary_data (one shared
+    BinaryColumn holding every row's String/Binary payload, addressed by
+    row index), 3=m_timestamp_data (one shared TimestampColumn, same
+    addressing).
+
+    Per-type decode of get_value() (column_mixed_tpl.hpp @ v5.23.8):
+    Int/IntNeg store the 63-bit magnitude with the sign bit stripped (freed
+    up for the tag bit) and OR'd back in for the Neg variant; Double/
+    DoubleNeg the same trick then type-punned; Float type-punned from the
+    low 32 bits directly (no Neg variant needed -- a 32-bit float's own
+    sign bit at bit31 never collides with the tag scheme); String/Binary/
+    Timestamp store a row index into the shared sub-column rather than an
+    in-place value.
+
+    Table-typed Mixed cells (a subtable value nested inside a Mixed) and
+    the reserved/unused mixcol_Mixed(6) tag are not handled -- get_value()
+    for those does not use the same tag-shift scheme as everything else
+    verified above, and this hasn't been independently confirmed, so they
+    surface as a visible "<mixed: unsupported type_N>" marker per cell
+    (same precedent as the modern _read_array_mixed's own marker for a
+    data_type it doesn't recognise) rather than a guess.
+    """
+    hdr = _parse_array_header(data, col_ref)
+    if hdr is None or not hdr["has_refs"] or hdr["Element count (size)"] < 3:
+        return None
+    eb = _elem_bytes(hdr)
+    if eb < 1:
+        return None
+
+    types_ref = _read_ref(data, col_ref + 8, 0, eb)
+    data_ref = _read_ref(data, col_ref + 8, 1, eb)
+    binary_ref = _read_ref(data, col_ref + 8, 2, eb)
+    timestamp_ref = _read_ref(data, col_ref + 8, 3, eb) if hdr["Element count (size)"] > 3 else 0
+
+    types = _walk_pre_cluster_int_column(data, types_ref, file_size)
+    raw_data = _walk_pre_cluster_int_column(data, data_ref, file_size)
+    if types is None or raw_data is None:
+        return None
+
+    binary_rows = (
+        _read_pre_cluster_string_or_binary(data, binary_ref, file_size, is_string=False, nullable=False)
+        if binary_ref > 0 else None
+    )
+    timestamp_rows = (
+        _decode_pre_cluster_timestamp_column(data, timestamp_ref, file_size)
+        if timestamp_ref > 0 else None
+    )
+
+    results: list[Any] = []
+    for i, t in enumerate(types):
+        if t is None or i >= len(raw_data) or raw_data[i] is None:
+            results.append(None)
+            continue
+        mixtype = int(t)
+        raw_u64 = int(raw_data[i]) & _U64_MASK
+        value = raw_u64 >> 1
+
+        if mixtype == 0:  # Int
+            results.append(value)
+        elif mixtype == 12:  # IntNeg
+            signed_u64 = (value | _BIT63) & _U64_MASK
+            results.append(signed_u64 - (1 << 64))
+        elif mixtype == 1:  # Bool
+            results.append(value != 0)
+        elif mixtype == 9:  # Float
+            results.append(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
+        elif mixtype == 10:  # Double (positive)
+            results.append(struct.unpack("<d", struct.pack("<Q", value))[0])
+        elif mixtype == 11:  # DoubleNeg
+            results.append(struct.unpack("<d", struct.pack("<Q", (value | _BIT63) & _U64_MASK))[0])
+        elif mixtype == 7:  # OldDateTime
+            results.append(_decode_timestamp(value))
+        elif mixtype == 8:  # Timestamp -- value is a row index into m_timestamp_data
+            if timestamp_rows is not None and value < len(timestamp_rows):
+                results.append(timestamp_rows[value])
+            else:
+                # Distinct from a genuine null entry (which the reader itself
+                # would report) -- this is the index resolution failing.
+                results.append(f"<mixed: timestamp index {value} out of range>")
+        elif mixtype in (2, 4):  # String/Binary -- value is a row index into m_binary_data
+            if binary_rows is None or value >= len(binary_rows):
+                results.append(f"<mixed: binary index {value} out of range>")
+                continue
+            chunk = binary_rows[value]
+            if chunk is None:
+                results.append(None)
+            elif mixtype == 2:
+                if chunk.endswith(b"\x00"):
+                    chunk = chunk[:-1]
+                results.append(chunk.decode("utf-8", errors="replace"))
+            else:
+                results.append(bytes(chunk))
+        else:
+            results.append(f"<mixed: unsupported type_{mixtype}>")
+    return results
+
+
 def _decode_pre_cluster_string_enum_column(
     data: bytes, col_ref: int, enum_keys_ref: int | None, file_size: int,
 ) -> list[str | None] | None:
@@ -2298,10 +2500,17 @@ def _decode_pre_cluster_string_enum_column(
             return None
         indices.extend(leaf_vals)
 
-    return [
-        (keys[int(ix)] if ix is not None and 0 <= int(ix) < len(keys) else None)
-        for ix in indices
-    ]
+    results: list[str | None] = []
+    for ix in indices:
+        if ix is None:
+            results.append(None)
+        elif 0 <= int(ix) < len(keys):
+            results.append(keys[int(ix)])
+        else:
+            # Distinct from a genuine null row (ix is None, handled above) --
+            # this is the index resolution itself failing.
+            results.append(f"<string_enum: index {int(ix)} out of range>")
+    return results
 
 
 def _decode_pre_cluster_table_column(
@@ -2355,14 +2564,25 @@ def _decode_pre_cluster_table_column(
             continue
         sub_col_refs = _resolve_pre_cluster_column_refs(data, row_ref, subtable_spec, file_size)
         sub_columns: dict[int, list[Any]] = {}
+        sub_unsupported: list[int] = []
         sub_row_count: int | None = None
         for idx, col in enumerate(visible):
             cref = sub_col_refs.get(col["col_index"], 0)
             vals = _decode_pre_cluster_column_values(data, cref, file_size, col)
+            if vals is None:
+                sub_unsupported.append(idx)
             sub_columns[idx] = vals if vals is not None else []
             if vals is not None and sub_row_count is None:
                 sub_row_count = len(vals)
         n = sub_row_count or 0
+        # Same explicit marker as the top-level table decode -- a column
+        # this dispatch can't handle yet must not look like an empty/null
+        # value once nested inside a nested subtable's rows.
+        for idx in sub_unsupported:
+            type_name = _PRE_CLUSTER_COL_TYPES.get(
+                visible[idx]["type_code"], f"type_{visible[idx]['type_code']}"
+            )
+            sub_columns[idx] = [f"<unsupported: {type_name}>"] * n
         values.append([
             {
                 col["name"]: (sub_columns[idx][r] if r < len(sub_columns[idx]) else None)
@@ -2425,11 +2645,11 @@ def _decode_pre_cluster_column_values(
     against bptree.hpp @ v5.23.9 to share the modern BPlusTree<T>'s
     inner-node layout) and the dispatch table are new for this era.
 
-    Types not yet implemented here (mixed) return None so callers surface
-    them as an explicit gap rather than silently wrong data -- tracked as
-    follow-up work on the same branch, not a permanent limitation.
-    BackLink columns are hidden entirely by the caller
-    (_extract_pre_cluster_table_data), not dispatched here.
+    Every old ColumnType is dispatched here now; a genuinely undecodable
+    per-cell value (e.g. a Mixed cell holding a nested subtable) still
+    returns an explicit marker rather than silently wrong data -- see
+    _decode_pre_cluster_mixed_column. BackLink columns are hidden entirely
+    by the caller (_extract_pre_cluster_table_data), not dispatched here.
     """
     if col_ref <= 0 or col_ref >= file_size:
         return None
@@ -2448,6 +2668,8 @@ def _decode_pre_cluster_column_values(
         return _decode_pre_cluster_string_enum_column(
             data, col_ref, col_info.get("enum_keys_ref"), file_size
         )
+    if type_code == 6:  # Mixed
+        return _decode_pre_cluster_mixed_column(data, col_ref, file_size)
 
     leaves = _walk_bplustree_leaves(data, col_ref, file_size)
     if not leaves:

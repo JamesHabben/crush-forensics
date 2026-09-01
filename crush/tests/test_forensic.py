@@ -844,6 +844,61 @@ def test_realm_mcdonalds_v9_fixture_known_output(realm_mcdonalds_v9_fixture: Pat
 
 
 @pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="all_types_v24.realm (real file format 24, actual realm-js SDK output) "
+    "must decode every modern column type correctly, including Decimal128, Link, "
+    "LinkList, and nested Mixed collections",
+)
+def test_realm_all_types_v24_fixture_known_output(realm_all_types_v24_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_all_types_v24_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_all_types_v24_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    t = next(t for t in result.data["tables"] if t["name"] == "class_AllTypesRecord")
+    cols = {name: t["columns"][i] for i, name in enumerate(t["column_names"])}
+
+    assert cols["intCol"] == [42, -42, 0, 0]
+    assert cols["boolCol"] == [True, False, True, True]
+    assert cols["stringCol"][0] == "hello world"
+    assert cols["dataCol"][0] == b"\x01\x02\x03\x04\x05"
+    assert cols["floatCol"][0] == 3.140000104904175
+    assert cols["doubleCol"][0] == 2.718281828
+
+    # Decimal128: found and fixed two real bugs against this exact data --
+    # the combination-field bit layout was wrong entirely (not just the
+    # earlier "swapped fields" guess), and Python's ambient decimal context
+    # silently rounded 34-digit Bid128 coefficients to 28 digits.
+    assert cols["decimalCol"] == [
+        "12345.6789",
+        "-99.99",
+        "89999999999999.5",  # MSD 8/9, still compact Bid64
+        "1.234567890123456789012345678901234",  # 34 digits, forces full Bid128
+    ]
+
+    assert cols["dateCol"][0] == "2024-01-15 10:30:00 UTC"
+    assert cols["uuidCol"][0] == "550e8400-e29b-41d4-a716-446655440000"
+    assert cols["objectIdCol"][0] == "507f1f77bcf86cd799439011"
+
+    # LinkList: found and fixed a real bug against this exact data -- list
+    # elements were wrongly run through the single-Link "+1/0=null"
+    # decoder (they're plain 0-based indices with no such adjustment).
+    assert cols["linkCol"][0] == 0
+    assert cols["linkCol"][1] is None
+    assert cols["linkList"][0] == [0, 1]
+    assert cols["linkList"][1] == []
+
+    assert cols["mixedCol"][0] == "a plain mixed string"
+    assert cols["mixedWithNestedList"][0] == [1.0, "two", 3.0, True]
+    assert cols["mixedWithNestedDict"][0] == {"a": 1.0, "b": "two", "c": [1.0, 2.0, 3.0]}
+    assert cols["dictCol"][0] == {"keyOne": "val1", "keyTwo": 2.0, "keyThree": True}
+    assert cols["setCol"][0] == [10, 20, 30]
+    assert cols["listOfInt"][0] == [100, 200, 300]
+
+
+@pytest.mark.forensic(
     category="Reproducibility",
     desc="Parsing the same Realm file twice must produce structurally identical results",
 )

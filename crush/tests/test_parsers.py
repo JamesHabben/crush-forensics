@@ -495,6 +495,269 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     assert "9" in result.metadata["Row data"]
 
 
+def test_realm_pre_cluster_mixed_column(tmp_path: Path) -> None:
+    """Pre-Cluster (file format < 10) Mixed column decode -- the one old
+    ColumnType with zero real-file coverage (neither of the two real format
+    9 samples used for this branch's other tests contains a Mixed column),
+    so this is the only verification for it.
+
+    Slot layout (MixedColumn::create(), column_mixed.cpp @ v5.23.8 -- the
+    exact realm-core version realm-java 6.1.0, the last release to write
+    format 9, bundled): 0=m_types, 1=m_data, 2=m_binary_data,
+    3=m_timestamp_data (unused here, m_timestamp_data ref left 0).
+
+    Exercises the trickiest verified-from-source detail: get_value()
+    (column_mixed_tpl.hpp) is `uint64_t(m_data.get(ndx)) >> 1` -- plain
+    64-bit modular arithmetic, no separate sign-magnitude split despite
+    first appearances -- so the IntNeg/DoubleNeg rows below are encoded
+    exactly as MixedColumn::set_int64 would (`(value << 1) + 1`, wrapped
+    to 64 bits), not as "shifted absolute value", to prove the decode
+    side's inverse operation is exactly right rather than only
+    self-consistent with a wrong encoding.
+    """
+    U64 = (1 << 64) - 1
+
+    def tag(v: int) -> int:
+        """Mirrors MixedColumn::set_int64/set_value: (value << 1) + 1, wrapped to int64."""
+        return ((v << 1) + 1) & U64
+
+    def string_short_entry(content: bytes, width: int) -> bytes:
+        pad = (width - 1) - len(content)
+        return content + b"\x00" * pad + bytes([pad])
+
+    def string_short_array(strings: list[str], width: int = 32) -> bytes:
+        hdr = b"\x41\x41\x41\x41\x06" + len(strings).to_bytes(3, "big")  # has_refs=0, width_ndx=6 -> 32
+        return hdr + b"".join(string_short_entry(s.encode(), width) for s in strings)
+
+    def refs_array(refs: list[int], width_ndx: int = 6) -> bytes:
+        width = [0, 1, 2, 4, 8, 16, 32, 64][width_ndx]
+        flags = 0b01000000 | width_ndx  # has_refs=1
+        eb = width // 8
+        payload = b"".join((r & U64).to_bytes(eb, "little") for r in refs)
+        payload += b"\x00" * ((-len(payload)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([flags]) + len(refs).to_bytes(3, "big") + payload
+
+    def int_leaf(values: list[int], width: int = 64) -> bytes:
+        width_ndx = [0, 1, 2, 4, 8, 16, 32, 64].index(width)
+        n = len(values)
+        buf = bytearray((width * n + 7) // 8)
+        for i, v in enumerate(values):
+            bitpos = i * width
+            bytepos, bitoff = divmod(bitpos, 8)
+            raw = v & (U64 if width == 64 else ((1 << width) - 1))
+            for b in range((width + 7) // 8):
+                if bytepos + b < len(buf):
+                    buf[bytepos + b] |= (raw >> (b * 8)) & 0xFF
+        buf += b"\x00" * ((-len(buf)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([width_ndx]) + n.to_bytes(3, "big") + bytes(buf)
+
+    # 7 rows, one of each numeric/string variant that exercises a distinct
+    # get_value() code path: Int, IntNeg, Bool, Float, Double, DoubleNeg, String.
+    mixtypes = [0, 12, 1, 9, 10, 11, 2]
+    float_bits = struct.unpack("<I", struct.pack("<f", 2.5))[0]
+    double_pos_bits = struct.unpack("<Q", struct.pack("<d", 1.25))[0]
+    double_neg_bits = struct.unpack("<Q", struct.pack("<d", -1.25))[0] & ((1 << 63) - 1)
+    data_values = [tag(100), tag(-100), tag(1), tag(float_bits), tag(double_pos_bits), tag(double_neg_bits), tag(0)]
+
+    types_bytes = int_leaf(mixtypes, width=8)
+    data_bytes = int_leaf(data_values, width=64)
+
+    blob_str = b"hi\x00"  # trailing NUL per array_string_long.hpp
+
+    ROOT_OFFSET = 24
+    TABLE_NAMES_OFFSET = ROOT_OFFSET + 16
+    table_names_bytes = string_short_array(["TestTable"])
+    TABLES_OFFSET = TABLE_NAMES_OFFSET + len(table_names_bytes)
+    TABLE_OFFSET = TABLES_OFFSET + 16
+    SPEC_OFFSET = TABLE_OFFSET + 16
+    TYPES_OFFSET = SPEC_OFFSET + 24
+    spec_types_bytes = int_leaf([6], width=8)  # 1 column, type_code=6 (Mixed)
+    NAMES_OFFSET = TYPES_OFFSET + len(spec_types_bytes)
+    names_bytes = string_short_array(["mixedCol"])
+    ATTR_OFFSET = NAMES_OFFSET + len(names_bytes)
+    attr_bytes = int_leaf([0], width=8)
+    COLUMNS_OFFSET = ATTR_OFFSET + len(attr_bytes)
+
+    MIXED_COL_OFFSET = COLUMNS_OFFSET + 16
+    MIXED_TYPES_OFFSET = MIXED_COL_OFFSET + 24
+    MIXED_DATA_OFFSET = MIXED_TYPES_OFFSET + len(types_bytes)
+    MIXED_BINARY_OFFSET = MIXED_DATA_OFFSET + len(data_bytes)
+    BLOB_ARRAY_OFFSET = MIXED_BINARY_OFFSET + 16
+    offsets_bytes = int_leaf([len(blob_str)], width=64)
+    BLOB_DATA_OFFSET = BLOB_ARRAY_OFFSET + len(offsets_bytes)
+    blob_data_bytes = b"\x41\x41\x41\x41\x01" + len(blob_str).to_bytes(3, "big") + blob_str
+    blob_data_bytes += b"\x00" * ((-len(blob_data_bytes)) % 8)
+
+    root_array = refs_array([TABLE_NAMES_OFFSET, TABLES_OFFSET])
+    tables_array = refs_array([TABLE_OFFSET])
+    table_array = refs_array([SPEC_OFFSET, COLUMNS_OFFSET])
+    spec_array = refs_array([TYPES_OFFSET, NAMES_OFFSET, ATTR_OFFSET])
+    columns_array = refs_array([MIXED_COL_OFFSET])
+    mixed_top_array = refs_array([MIXED_TYPES_OFFSET, MIXED_DATA_OFFSET, MIXED_BINARY_OFFSET, 0])
+    binary_top_bytes = refs_array([BLOB_ARRAY_OFFSET, BLOB_DATA_OFFSET])
+
+    file_hdr = (
+        (0).to_bytes(8, "little")
+        + ROOT_OFFSET.to_bytes(8, "little")
+        + b"T-DB"
+        + bytes([9, 9, 0, 0x01])
+    )
+
+    total = BLOB_DATA_OFFSET + len(blob_data_bytes)
+    buf = bytearray(total)
+
+    def place(offset: int, data: bytes) -> None:
+        buf[offset : offset + len(data)] = data
+
+    place(0, file_hdr)
+    place(ROOT_OFFSET, root_array)
+    place(TABLE_NAMES_OFFSET, table_names_bytes)
+    place(TABLES_OFFSET, tables_array)
+    place(TABLE_OFFSET, table_array)
+    place(SPEC_OFFSET, spec_array)
+    place(TYPES_OFFSET, spec_types_bytes)
+    place(NAMES_OFFSET, names_bytes)
+    place(ATTR_OFFSET, attr_bytes)
+    place(COLUMNS_OFFSET, columns_array)
+    place(MIXED_COL_OFFSET, mixed_top_array)
+    place(MIXED_TYPES_OFFSET, types_bytes)
+    place(MIXED_DATA_OFFSET, data_bytes)
+    place(MIXED_BINARY_OFFSET, binary_top_bytes)
+    place(BLOB_ARRAY_OFFSET, offsets_bytes)
+    place(BLOB_DATA_OFFSET, blob_data_bytes)
+
+    realm_path = tmp_path / "mixed.realm"
+    realm_path.write_bytes(bytes(buf))
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "mixed.realm")
+    result = RealmParser().parse(node, vfs)
+
+    table = result.data["tables"][0]
+    assert table["columns"][0] == [100, -100, True, 2.5, 1.25, -1.25, "hi"]
+
+
+def test_realm_pre_cluster_string_enum_column(tmp_path: Path) -> None:
+    """Pre-Cluster (file format < 10) StringEnum column decode -- the other
+    old ColumnType with zero real-file coverage (neither IFTTT nor
+    McDonald's uses it).
+
+    m_enumkeys (Spec slot 4, spec.cpp Spec::get_enumkeys_ndx) is itself an
+    array of refs -- one per StringEnum column, indexed by a running count
+    over prior StringEnum columns only -- each pointing to that column's
+    own shared keys StringColumn. A first attempt at this fixture treated
+    Spec slot 4 as pointing *directly* at the keys column, skipping that
+    wrapper array, and silently read the wrong bytes (a corrupted-looking
+    huge ref) instead of failing loudly -- worth remembering when building
+    similar fixtures: the indirection level matters even when "just a
+    ref" looks obviously right.
+
+    3 unique keys, 5 rows with repeated indices, so the dedup itself
+    (not just a 1:1 index) is actually exercised.
+    """
+    U64 = (1 << 64) - 1
+
+    def string_short_entry(content: bytes, width: int) -> bytes:
+        pad = (width - 1) - len(content)
+        return content + b"\x00" * pad + bytes([pad])
+
+    def string_short_array(strings: list[str], width: int = 32) -> bytes:
+        hdr = b"\x41\x41\x41\x41\x06" + len(strings).to_bytes(3, "big")  # has_refs=0
+        return hdr + b"".join(string_short_entry(s.encode(), width) for s in strings)
+
+    def refs_array(refs: list[int], width_ndx: int = 6) -> bytes:
+        width = [0, 1, 2, 4, 8, 16, 32, 64][width_ndx]
+        flags = 0b01000000 | width_ndx  # has_refs=1
+        eb = width // 8
+        payload = b"".join((r & U64).to_bytes(eb, "little") for r in refs)
+        payload += b"\x00" * ((-len(payload)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([flags]) + len(refs).to_bytes(3, "big") + payload
+
+    def int_leaf(values: list[int], width: int = 64) -> bytes:
+        width_ndx = [0, 1, 2, 4, 8, 16, 32, 64].index(width)
+        n = len(values)
+        buf = bytearray((width * n + 7) // 8)
+        for i, v in enumerate(values):
+            bytepos = (i * width) // 8
+            raw = v & (U64 if width == 64 else ((1 << width) - 1))
+            for b in range((width + 7) // 8):
+                if bytepos + b < len(buf):
+                    buf[bytepos + b] |= (raw >> (b * 8)) & 0xFF
+        buf += b"\x00" * ((-len(buf)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([width_ndx]) + n.to_bytes(3, "big") + bytes(buf)
+
+    keys = ["active", "inactive", "pending"]
+    indices = [0, 1, 0, 2, 1]
+    keys_bytes = string_short_array(keys)
+    indices_bytes = int_leaf(indices, width=8)
+
+    ROOT_OFFSET = 24
+    TABLE_NAMES_OFFSET = ROOT_OFFSET + 16
+    table_names_bytes = string_short_array(["TestTable"])
+    TABLES_OFFSET = TABLE_NAMES_OFFSET + len(table_names_bytes)
+    TABLE_OFFSET = TABLES_OFFSET + 16
+    SPEC_OFFSET = TABLE_OFFSET + 16
+    # Spec array: 5 slots (types, names, attr, subspecs[unused=0], enumkeys)
+    # -> payload 5*4=20 bytes, aligned 24 -> header(8)+24=32
+    TYPES_OFFSET = SPEC_OFFSET + 32
+    spec_types_bytes = int_leaf([3], width=8)  # 1 column, type_code=3 (StringEnum)
+    NAMES_OFFSET = TYPES_OFFSET + len(spec_types_bytes)
+    names_bytes = string_short_array(["statusCol"])
+    ATTR_OFFSET = NAMES_OFFSET + len(names_bytes)
+    attr_bytes = int_leaf([0], width=8)
+    COLUMNS_OFFSET = ATTR_OFFSET + len(attr_bytes)
+
+    ENUM_COL_OFFSET = COLUMNS_OFFSET + 16  # columns array: 1 ref
+    ENUMKEYS_ARRAY_OFFSET = ENUM_COL_OFFSET + len(indices_bytes)  # m_enumkeys wrapper: 1 ref
+    KEYS_OFFSET = ENUMKEYS_ARRAY_OFFSET + 16
+
+    root_array = refs_array([TABLE_NAMES_OFFSET, TABLES_OFFSET])
+    tables_array = refs_array([TABLE_OFFSET])
+    table_array = refs_array([SPEC_OFFSET, COLUMNS_OFFSET])
+    spec_array = refs_array([TYPES_OFFSET, NAMES_OFFSET, ATTR_OFFSET, 0, ENUMKEYS_ARRAY_OFFSET])
+    columns_array = refs_array([ENUM_COL_OFFSET])
+    enumkeys_array = refs_array([KEYS_OFFSET])
+
+    file_hdr = (
+        (0).to_bytes(8, "little")
+        + ROOT_OFFSET.to_bytes(8, "little")
+        + b"T-DB"
+        + bytes([9, 9, 0, 0x01])
+    )
+
+    total = KEYS_OFFSET + len(keys_bytes)
+    buf = bytearray(total)
+
+    def place(offset: int, data: bytes) -> None:
+        buf[offset : offset + len(data)] = data
+
+    place(0, file_hdr)
+    place(ROOT_OFFSET, root_array)
+    place(TABLE_NAMES_OFFSET, table_names_bytes)
+    place(TABLES_OFFSET, tables_array)
+    place(TABLE_OFFSET, table_array)
+    place(SPEC_OFFSET, spec_array)
+    place(TYPES_OFFSET, spec_types_bytes)
+    place(NAMES_OFFSET, names_bytes)
+    place(ATTR_OFFSET, attr_bytes)
+    place(COLUMNS_OFFSET, columns_array)
+    place(ENUM_COL_OFFSET, indices_bytes)
+    place(ENUMKEYS_ARRAY_OFFSET, enumkeys_array)
+    place(KEYS_OFFSET, keys_bytes)
+
+    realm_path = tmp_path / "stringenum.realm"
+    realm_path.write_bytes(bytes(buf))
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "stringenum.realm")
+    result = RealmParser().parse(node, vfs)
+
+    table = result.data["tables"][0]
+    assert table["column_types"] == ["string_enum"]
+    assert table["columns"][0] == ["active", "inactive", "active", "pending", "inactive"]
+    assert table["unsupported_columns"] == []
+
+
 def test_realm_parser_decrypts_with_correct_key(tmp_path: Path) -> None:
     """RealmParser.parse(..., password=hex_key) decrypts an encrypted file
     and parses it exactly like the equivalent plaintext file -- end-to-end
