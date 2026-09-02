@@ -2211,7 +2211,8 @@ def _extract_pre_cluster_spec(
         if type_val is None:
             continue
         type_code = int(type_val)
-        attr_val = int(attrs[i]) if attrs and i < len(attrs) and attrs[i] is not None else 0
+        attr_raw = attrs[i] if attrs and i < len(attrs) else None
+        attr_val = int(attr_raw) if attr_raw is not None else 0
         col: dict[str, Any] = {
             "col_index": i,
             "name": names[i] if names and i < len(names) else f"column[{i}]",
@@ -2488,11 +2489,12 @@ def _decode_pre_cluster_mixed_column(
 
     results: list[Any] = []
     for i, t in enumerate(types):
-        if t is None or i >= len(raw_data) or raw_data[i] is None:
+        raw_val = raw_data[i] if i < len(raw_data) else None
+        if t is None or raw_val is None:
             results.append(None)
             continue
         mixtype = int(t)
-        raw_u64 = int(raw_data[i]) & _U64_MASK
+        raw_u64 = int(raw_val) & _U64_MASK
         value = raw_u64 >> 1
 
         if mixtype == 0:  # Int
@@ -2745,6 +2747,7 @@ def _decode_pre_cluster_column_values(
 
     values: list[Any] = []
     for leaf_ref, _offset in leaves:
+        leaf_vals: list[Any] | None
         if type_code == 0:  # int
             leaf_vals = (
                 _read_array_int_null(data, leaf_ref, file_size) if nullable
