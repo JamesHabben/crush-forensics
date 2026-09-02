@@ -762,6 +762,30 @@ def test_realm_format9_fixture_known_output(realm_format9_fixture: Path) -> None
 
 @pytest.mark.forensic(
     category="Known-output Verification",
+    desc="streaming_form.realm (genuine realm-js writeCopyTo() output, real "
+    "streaming-form file, not a hand-rebuilt header) must resolve the real "
+    "top ref from the footer and decode its one user table correctly",
+)
+def test_realm_streaming_form_fixture_known_output(realm_streaming_form_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_streaming_form_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_streaming_form_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert result.data["streaming_form"] == {"top_ref": 600, "footer_valid": True}
+    assert result.data["schema"] == ["metadata", "class_Item"]
+
+    tables = {t["name"]: t for t in result.data["tables"]}
+    item = tables["class_Item"]
+    cols = {name: item["columns"][i] for i, name in enumerate(item["column_names"])}
+    assert cols["_id"] == [1, 2]
+    assert cols["label"] == ["hello", "world"]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
     desc="ifttt_v9_data.realm (real file format 9 sample, DFRWS/Magnet CTF dataset) "
     "must fully decode: 21 classes, no unsupported columns, correct row values",
 )

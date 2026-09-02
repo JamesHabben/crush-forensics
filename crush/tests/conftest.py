@@ -138,6 +138,20 @@ def realm_format9_fixture(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def realm_streaming_form_fixture(tmp_path: Path) -> Path:
+    """Writable copy of streaming_form.realm placed in tmp_path -- a genuine
+    Realm "streaming form" file (top_ref[0] = sentinel, real top ref in an
+    end-of-file footer) produced by realm-js's own Realm.prototype.writeCopyTo(),
+    not a hand-rebuilt header. See generate_streaming_form.js (kept alongside
+    for provenance/reproducibility) for how it was generated: one user table
+    "Item" (_id: int primary key, label: string) with two rows."""
+    src = FIXTURES_DIR / "streaming_form.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def realm_ifttt_v9_fixture(tmp_path: Path) -> Path:
     """Writable copy of ifttt_v9_data.realm placed in tmp_path -- a real
     file format 9 Realm database (IFTTT iOS app, Magnet Virtual Summit CTF
