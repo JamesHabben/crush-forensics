@@ -1,0 +1,9 @@
+# Test fixtures under crush/tests/fixtures/ are checked byte-for-byte against
+# SHA-256 hashes in checksums.json (see crush/tests/conftest.py's
+# pytest_configure fixture-corpus integrity check). Any line-ending
+# conversion (e.g. Windows CI's default core.autocrlf=true rewriting LF to
+# CRLF on checkout) changes those bytes and fails the check for text-typed
+# fixtures (.json/.cpp/.md/.js) even though nothing was actually tampered
+# with -- so every fixture, text or binary, must be left untouched on
+# checkout regardless of platform.
+crush/tests/fixtures/** -text
