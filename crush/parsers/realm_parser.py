@@ -1917,7 +1917,7 @@ def _extract_table_data(
     schema: list[str],
     file_size: int,
     table_key_map: dict[int, str] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """Walk each table's ClusterTree and decode its rows.
 
     Path: root_offset → child[1] (table refs) → table_node → child[2]
@@ -1932,47 +1932,61 @@ def _extract_table_data(
     resolve each Link/LinkList column's target table name via
     _read_opposite_table_keys — exposed per table as "column_target_tables".
 
-    Returns a list of dicts {name, row_count, columns, column_names,
-    column_types, column_target_tables, obj_keys} where columns is
-    {user_col_idx: [values]}.
+    Returns (tables, reason) -- tables is a list of dicts {name, row_count,
+    columns, column_names, column_types, column_target_tables, obj_keys}
+    (columns is {user_col_idx: [values]}); reason is None only when every
+    table in *schema* decoded, otherwise a "class_name: specific cause"
+    string per failed table (semicolon-joined) -- mirrors the pre-Cluster
+    path's own (result, reason) contract (see
+    _extract_pre_cluster_tables_data) so a genuine structural failure here
+    is never left as a silent, unexplained empty table list either
+    (feedback_explicit_unsupported_marking).
     """
     root_hdr = _parse_array_header(data, root_offset)
     if root_hdr is None or not root_hdr["has_refs"]:
-        return []
+        return [], "Group top array is malformed or has no references"
 
     root_eb = _elem_bytes(root_hdr)
     if root_eb < 1 or root_hdr["Element count (size)"] < 2:
-        return []
+        return [], "Group top array has no table-refs slot (fewer than 2 children)"
 
     table_refs_off = _read_ref(data, root_offset + 8, 1, root_eb)
     if table_refs_off <= 0 or table_refs_off >= file_size:
-        return []
+        return [], "Table-refs reference is invalid or points outside the file"
 
     tr_hdr = _parse_array_header(data, table_refs_off)
     if tr_hdr is None or not tr_hdr["has_refs"]:
-        return []
+        return [], "Table-refs array is malformed or has no references"
     tr_eb = _elem_bytes(tr_hdr)
     num_tables = tr_hdr["Element count (size)"]
 
     tables: list[dict[str, Any]] = []
+    failures: list[str] = []
 
     for t_idx in range(num_tables):
+        table_name = schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]"
         table_ref = _read_ref(data, table_refs_off + 8, t_idx, tr_eb)
         if table_ref <= 0 or table_ref >= file_size:
+            failures.append(f"{table_name}: table reference is invalid or points outside the file")
             continue
 
         t_hdr = _parse_array_header(data, table_ref)
         if t_hdr is None or not t_hdr["has_refs"] or t_hdr["Element count (size)"] < 3:
+            failures.append(
+                f"{table_name}: Table top array is malformed or missing its ClusterTree slot"
+            )
             continue
         t_eb = _elem_bytes(t_hdr)
 
         cluster_root_ref = _read_ref(data, table_ref + 8, 2, t_eb)
         if cluster_root_ref <= 0 or cluster_root_ref >= file_size:
+            failures.append(f"{table_name}: ClusterTree reference is invalid or points outside the file")
             continue
 
         col_names = _extract_column_names(data, table_ref, t_eb, file_size)
         col_infos = _extract_column_info(data, table_ref, t_eb, file_size)
         if not col_infos:
+            failures.append(f"{table_name}: Spec/colkeys array has no columns (empty or malformed)")
             continue
         col_infos_by_idx = sorted(col_infos, key=lambda info: info["user_col_idx"])
         col_type_names = []
@@ -2011,6 +2025,7 @@ def _extract_table_data(
 
         leaves = _walk_cluster_leaves(data, cluster_root_ref, file_size)
         if not leaves:
+            failures.append(f"{table_name}: ClusterTree root is malformed or has no leaves")
             continue
 
         columns: dict[int, list[Any]] = {info["user_col_idx"]: [] for info in col_infos}
@@ -2060,7 +2075,7 @@ def _extract_table_data(
 
         tables.append(
             {
-                "name": schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]",
+                "name": table_name,
                 "row_count": row_count_total,
                 "row_count_estimated": row_count_estimated,
                 "columns": columns,
@@ -2071,7 +2086,11 @@ def _extract_table_data(
             }
         )
 
-    return tables
+    if num_tables == 0 and schema:
+        # Class names resolved from Group.m_table_names, but the table-refs
+        # array itself is empty -- a real mismatch, not "nothing to report".
+        return [], f"Table-refs array has 0 entries, but {len(schema)} class name(s) in schema"
+    return tables, ("; ".join(failures) if failures else None)
 
 
 # ---------------------------------------------------------------------------
@@ -2764,29 +2783,35 @@ def _decode_pre_cluster_column_values(
 
 def _extract_pre_cluster_table_data(
     data: bytes, table_ref: int, table_name: str, file_size: int, schema: list[str],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     """Decode one pre-Cluster Table (table.hpp @ v5.23.9: m_top slot 0 =
     spec ref, slot 1 = columns ref). Row count is taken from the first
     successfully-decoded column's value count (every column in a
     well-formed old Table has exactly one entry per row); a table with no
     decodable columns returns a 0-row result rather than None, so it is
     still listed rather than silently dropped.
+
+    Returns (table, reason) -- reason is None on success, otherwise a
+    specific, human-readable description of the exact structural check
+    that failed (never just "could not be decoded"), so the caller can
+    surface *why*, not only *that* this table didn't decode
+    (feedback_explicit_unsupported_marking).
     """
     t_hdr = _parse_array_header(data, table_ref)
     if t_hdr is None or not t_hdr["has_refs"] or t_hdr["Element count (size)"] < 2:
-        return None
+        return None, "Table top array is malformed or missing its spec/columns slots"
     t_eb = _elem_bytes(t_hdr)
     if t_eb < 1:
-        return None
+        return None, "Table top array has a zero element width"
 
     spec_ref = _read_ref(data, table_ref + 8, 0, t_eb)
     columns_ref = _read_ref(data, table_ref + 8, 1, t_eb)
     if spec_ref <= 0 or spec_ref >= file_size:
-        return None
+        return None, "Spec reference is invalid or points outside the file"
 
     spec_columns = _extract_pre_cluster_spec(data, spec_ref, file_size)
     if not spec_columns:
-        return None
+        return None, "Spec array has no columns (empty or malformed)"
     col_refs = (
         _resolve_pre_cluster_column_refs(data, columns_ref, spec_columns, file_size)
         if 0 < columns_ref < file_size else {}
@@ -2847,44 +2872,62 @@ def _extract_pre_cluster_table_data(
         "column_target_tables": column_target_tables,
         "unsupported_columns": unsupported_columns,
         "obj_keys": list(range(row_count)),
-    }
+    }, None
 
 
 def _extract_pre_cluster_tables_data(
     data: bytes, root_offset: int, schema: list[str], file_size: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """Pre-Cluster equivalent of _extract_table_data: same Group -> tables
     array walk (root_offset -> child[1], stable across all file-format
     versions -- group.hpp s_table_refs_ndx=1 predates even the earliest
     documented format changes), but dispatches each table through
     _extract_pre_cluster_table_data instead of the Cluster-based path.
+
+    Returns (tables, reason) -- reason is None only when every table in
+    *schema* decoded; otherwise a "class_name: specific cause" string per
+    failed table (semicolon-joined), so the caller can show the parser's
+    own concrete diagnosis instead of a generic "could not be decoded"
+    (feedback_explicit_unsupported_marking) -- e.g. a Group top array with
+    no table-refs slot at all (root_hdr["Element count (size)"] < 2) is a
+    structurally different, more specific problem than one single table's
+    Spec being unreadable, and both should say so distinctly.
     """
     root_hdr = _parse_array_header(data, root_offset)
     if root_hdr is None or not root_hdr["has_refs"]:
-        return []
+        return [], "Group top array is malformed or has no references"
     root_eb = _elem_bytes(root_hdr)
     if root_eb < 1 or root_hdr["Element count (size)"] < 2:
-        return []
+        return [], "Group top array has no table-refs slot (fewer than 2 children)"
 
     table_refs_off = _read_ref(data, root_offset + 8, 1, root_eb)
     if table_refs_off <= 0 or table_refs_off >= file_size:
-        return []
+        return [], "Table-refs reference is invalid or points outside the file"
     tr_hdr = _parse_array_header(data, table_refs_off)
     if tr_hdr is None or not tr_hdr["has_refs"]:
-        return []
+        return [], "Table-refs array is malformed or has no references"
     tr_eb = _elem_bytes(tr_hdr)
     num_tables = tr_hdr["Element count (size)"]
 
     tables: list[dict[str, Any]] = []
+    failures: list[str] = []
     for t_idx in range(num_tables):
+        table_name = schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]"
         table_ref = _read_ref(data, table_refs_off + 8, t_idx, tr_eb)
         if table_ref <= 0 or table_ref >= file_size:
+            failures.append(f"{table_name}: table reference is invalid or points outside the file")
             continue
-        table_name = schema[t_idx] if t_idx < len(schema) else f"table[{t_idx}]"
-        table = _extract_pre_cluster_table_data(data, table_ref, table_name, file_size, schema)
+        table, reason = _extract_pre_cluster_table_data(data, table_ref, table_name, file_size, schema)
         if table is not None:
             tables.append(table)
-    return tables
+        else:
+            failures.append(f"{table_name}: {reason}")
+
+    if num_tables == 0 and schema:
+        # Class names resolved from Group.m_table_names, but the table-refs
+        # array itself is empty -- a real mismatch, not "nothing to report".
+        return [], f"Table-refs array has 0 entries, but {len(schema)} class name(s) in schema"
+    return tables, ("; ".join(failures) if failures else None)
 
 
 # ---------------------------------------------------------------------------
@@ -3065,15 +3108,19 @@ class RealmParser(AbstractParser):
         # column types still can't be decoded per-column; those are flagged
         # per-table via each table's "unsupported_columns" instead.
         unsupported_row_format: int | None = None
+        pre_cluster_reason: str | None = None
+        cluster_reason: str | None = None
 
         tables: list[dict[str, Any]] = []
         if header_info and schema:
             if active_format < _MIN_CLUSTER_FORMAT_VERSION:
                 unsupported_row_format = active_format
-                tables = _extract_pre_cluster_tables_data(full_data, active_offset, schema, file_size)
+                tables, pre_cluster_reason = _extract_pre_cluster_tables_data(
+                    full_data, active_offset, schema, file_size
+                )
             else:
                 table_key_map = _build_table_key_map(full_data, active_offset, schema, file_size)
-                tables = _extract_table_data(
+                tables, cluster_reason = _extract_table_data(
                     full_data, active_offset, schema, file_size, table_key_map
                 )
 
@@ -3082,16 +3129,20 @@ class RealmParser(AbstractParser):
             if inactive_format < _MIN_CLUSTER_FORMAT_VERSION:
                 if unsupported_row_format is None:
                     unsupported_row_format = inactive_format
-                inactive_tables = _extract_pre_cluster_tables_data(
+                inactive_tables, inactive_pre_cluster_reason = _extract_pre_cluster_tables_data(
                     full_data, inactive_offset, inactive_schema, file_size
                 )
+                if pre_cluster_reason is None:
+                    pre_cluster_reason = inactive_pre_cluster_reason
             else:
                 inactive_table_key_map = _build_table_key_map(
                     full_data, inactive_offset, inactive_schema, file_size
                 )
-                inactive_tables = _extract_table_data(
+                inactive_tables, inactive_cluster_reason = _extract_table_data(
                     full_data, inactive_offset, inactive_schema, file_size, inactive_table_key_map
                 )
+                if cluster_reason is None:
+                    cluster_reason = inactive_cluster_reason
 
         # Inject schema-level diff into top_refs so the viewer can display it.
         if top_refs and (schema or inactive_schema):
@@ -3146,6 +3197,7 @@ class RealmParser(AbstractParser):
             "freed_blocks": freed_blocks,
             "unsupported_row_format": unsupported_row_format,
             "streaming_form": streaming_form,
+            "cluster_reason": cluster_reason,
         }
 
         meta: dict[str, Any] = {
@@ -3184,31 +3236,35 @@ class RealmParser(AbstractParser):
             elif streaming_form is not None and not streaming_form["footer_valid"]:
                 meta["Tables found"] = "Unresolved (see Streaming form)"
             if unsupported_row_format is not None:
+                # File format is already shown above ("File format"); this
+                # message adds the parser's own concrete diagnosis, not a
+                # restated format number (feedback_explicit_unsupported_marking:
+                # say *why*, not just *that* something didn't decode).
                 pc_tables = tables + inactive_tables
                 gaps = {
                     t["name"]: t["unsupported_columns"]
                     for t in pc_tables
                     if t.get("unsupported_columns")
                 }
-                if not pc_tables and schema:
-                    # Schema/class names resolved, but the pre-Cluster
-                    # Table/Spec structure itself didn't -- explicit, not
-                    # silently treated as "decoded with zero tables".
-                    meta["Row data"] = (
-                        f"Pre-Cluster format ({unsupported_row_format} < "
-                        f"{_MIN_CLUSTER_FORMAT_VERSION}) — table structure could not be decoded"
-                    )
-                elif gaps:
+                reasons: list[str] = []
+                if pre_cluster_reason:
+                    reasons.append(pre_cluster_reason)
+                if gaps:
                     n_cols = sum(len(v) for v in gaps.values())
-                    meta["Row data"] = (
-                        f"Pre-Cluster format ({unsupported_row_format} < "
-                        f"{_MIN_CLUSTER_FORMAT_VERSION}) — {n_cols} column(s) across "
-                        f"{len(gaps)} table(s) not yet decoded (unimplemented old column type)"
+                    reasons.append(
+                        f"{n_cols} column(s) across {len(gaps)} table(s) not yet decoded "
+                        "(unimplemented old column type)"
                     )
+                if reasons:
+                    meta["Row data"] = "Pre-Cluster layout — " + "; ".join(reasons)
                 else:
-                    meta["Row data"] = (
-                        f"Decoded via legacy pre-Cluster layout (format {unsupported_row_format})"
-                    )
+                    meta["Row data"] = "Decoded via legacy pre-Cluster layout"
+            elif cluster_reason:
+                # Same principle for format >=10: schema/class names may
+                # have resolved from Group.m_table_names while the
+                # Cluster/ClusterTree structure itself didn't -- say why,
+                # not just leave "tables" silently empty.
+                meta["Row data"] = cluster_reason
         else:
             meta["Header"] = "Not detected (corrupt or non-standard)"
             meta["Possibly Encrypted"] = "Try Open as → Realm DB (Encrypted)…"

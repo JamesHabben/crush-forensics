@@ -489,10 +489,12 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     assert result.data["schema"] == ["metadata", "class_LegacyRecord"]
 
     # This fixture has no real Table/Spec structure to decode -- the gap
-    # must be explicitly flagged, never silently left at zero rows.
+    # must be explicitly flagged with the parser's own concrete reason,
+    # never silently left at zero rows or a generic "could not be decoded".
     assert result.data["tables"] == []
-    assert "could not be decoded" in result.metadata.get("Row data", "")
-    assert "9" in result.metadata["Row data"]
+    assert result.metadata["Row data"] == (
+        "Pre-Cluster layout — Group top array has no table-refs slot (fewer than 2 children)"
+    )
 
 
 def _to_streaming_form(data: bytes, *, corrupt_magic: bool = False) -> bytes:
@@ -901,6 +903,22 @@ def test_realm_parser_decrypts_with_correct_key(tmp_path: Path) -> None:
         parser.parse(node, vfs, password=os.urandom(64).hex())
 
 
+def test_extract_table_data_reports_reason_when_table_refs_missing() -> None:
+    """_extract_table_data (Cluster/format >=10 path) must surface a
+    concrete reason when it comes back with zero tables, not just an
+    unexplained empty list -- mirrors the pre-Cluster path's own
+    (result, reason) contract (_extract_pre_cluster_tables_data). Same
+    underlying gap as the one found on minimal_format9.realm (a Group top
+    array with only 1 child, no table-refs slot at index 1), just for the
+    modern path this time."""
+    from crush.parsers.realm_parser import _extract_table_data
+
+    raw = _array_hdr(0x46, 1) + _pad8((0).to_bytes(4, "little"))
+    tables, reason = _extract_table_data(raw, 0, ["class_Foo"], len(raw))
+    assert tables == []
+    assert reason == "Group top array has no table-refs slot (fewer than 2 children)"
+
+
 def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> None:
     """When a leaf's key slot (child[0]) is unreadable (e.g. corruption),
     row_count falls back to _derive_row_count and the table is flagged
@@ -945,7 +963,7 @@ def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> N
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -1028,7 +1046,7 @@ def test_extract_table_data_decodes_dictionary_column() -> None:
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Dict"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Dict"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -1421,7 +1439,7 @@ def test_extract_table_data_multi_leaf_concatenates_rows() -> None:
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -1617,7 +1635,7 @@ def test_link_column_resolves_target_table_name() -> None:
     table_key_map = _build_table_key_map(data, root_ref, schema, len(data))
     assert table_key_map == {5: "class_A", 9: "class_B"}
 
-    tables = _extract_table_data(data, root_ref, schema, len(data), table_key_map)
+    tables, _ = _extract_table_data(data, root_ref, schema, len(data), table_key_map)
     table_b = next(t for t in tables if t["name"] == "class_B")
     assert table_b["column_names"] == ["link_to_a"]
     assert table_b["column_target_tables"] == ["class_A"]
