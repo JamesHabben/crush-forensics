@@ -1,0 +1,246 @@
+{
+  "file_format": 9,
+  "form": "normal (SharedGroup commit, not Group::write streaming form)",
+  "generator": "realm-core v5.23.9 public API",
+  "class_Target": {
+    "rows": 3,
+    "name": [
+      "TARGET_ZERO",
+      "TARGET_ONE",
+      "TARGET_TWO"
+    ]
+  },
+  "class_AllTypes": {
+    "rows": 9,
+    "col_int": [
+      0,
+      1,
+      -1,
+      42,
+      -42,
+      2147483647,
+      -2147483648,
+      9007199254740993,
+      -9007199254740993
+    ],
+    "col_bool": [
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true
+    ],
+    "col_string_short": [
+      "SHORT_0",
+      "SHORT_1",
+      "SHORT_2",
+      "SHORT_3",
+      "SHORT_4",
+      "SHORT_5",
+      "SHORT_6",
+      "SHORT_7",
+      "SHORT_8"
+    ],
+    "col_string_medium_lengths": [
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48
+    ],
+    "col_string_big_lengths": [
+      70000,
+      70001,
+      70002,
+      70003,
+      70004,
+      70005,
+      70006,
+      70007,
+      70008
+    ],
+    "col_binary": [
+      "BINARY_0",
+      "BINARY_1",
+      "BINARY_2",
+      "BINARY_3",
+      "BINARY_4",
+      "BINARY_5",
+      "BINARY_6",
+      "BINARY_7",
+      "BINARY_8"
+    ],
+    "col_subtable_entry_counts": [
+      0,
+      1,
+      2,
+      0,
+      1,
+      2,
+      0,
+      1,
+      2
+    ],
+    "col_mixed": [
+      "int 0",
+      "int 123456789",
+      "int -987654321",
+      "bool true",
+      "string MIXED_STRING_VALUE",
+      "binary MIXED_BINARY",
+      "float 2.5",
+      "double -4.75",
+      "timestamp 1700000000 sec + 500 ns"
+    ],
+    "col_olddatetime_epoch_seconds": [
+      1000000000,
+      1000086400,
+      1000172800,
+      1000259200,
+      1000345600,
+      1000432000,
+      1000518400,
+      1000604800,
+      1000691200
+    ],
+    "col_timestamp_epoch_seconds": [
+      1600000000,
+      1600003600,
+      1600007200,
+      1600010800,
+      1600014400,
+      1600018000,
+      1600021600,
+      1600025200,
+      1600028800
+    ],
+    "col_timestamp_nanoseconds": [
+      0,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000
+    ],
+    "col_float": [
+      -2.25,
+      -0.75,
+      0.75,
+      2.25,
+      3.75,
+      5.25,
+      6.75,
+      8.25,
+      9.75
+    ],
+    "col_double": [
+      -7.125,
+      -3.875,
+      -0.625,
+      2.625,
+      5.875,
+      9.125,
+      12.375,
+      15.625,
+      18.875
+    ],
+    "col_link_target_row": [
+      0,
+      1,
+      2,
+      0,
+      1,
+      2,
+      0,
+      1,
+      2
+    ],
+    "col_linklist_targets": [
+      [
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        1,
+        2
+      ]
+    ]
+  },
+  "class_EnumStrings": {
+    "rows": 12,
+    "column_type": "col_type_StringEnum (3)",
+    "enum_value": [
+      "ALPHA",
+      "BETA",
+      "GAMMA",
+      "ALPHA",
+      "BETA",
+      "GAMMA",
+      "ALPHA",
+      "BETA",
+      "GAMMA",
+      "ALPHA",
+      "BETA",
+      "GAMMA"
+    ],
+    "row_id": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  "string_leaf_forms": {
+    "thresholds (realm-core column_string.cpp)": "small<=15 ArrayString, medium<=63 ArrayStringLong, big>63 ArrayBigBlobs",
+    "col_string_short": "7 bytes -> Small",
+    "col_string_medium": "40..48 bytes -> Medium",
+    "col_string_big": "70000..70008 bytes -> Big"
+  }
+}

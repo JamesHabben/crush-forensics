@@ -899,6 +899,80 @@ def test_realm_all_types_v24_fixture_known_output(realm_all_types_v24_fixture: P
 
 
 @pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="format9_alltypes.realm (real file format 9, realm-core v5.23.9's own public "
+    "API output, donated by the issue #55 reporter) must decode every old ColumnType "
+    "correctly against the accompanying expected.json, including Mixed and a populated "
+    "Table/subtable -- the two pieces this parser's own test suite could previously only "
+    "cover synthetically",
+)
+def test_realm_format9_alltypes_fixture_known_output(realm_format9_alltypes_fixture: Path) -> None:
+    import json
+
+    expected = json.loads(
+        (FIXTURES_DIR / "format9_alltypes.expected.json").read_text()
+    )
+
+    vfs = DirectoryVFS(realm_format9_alltypes_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_format9_alltypes_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert result.data["schema"] == ["class_Target", "class_AllTypes", "class_EnumStrings"]
+
+    tables = {t["name"]: t for t in result.data["tables"]}
+    for t in tables.values():
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    target = tables["class_Target"]
+    assert target["row_count"] == expected["class_Target"]["rows"]
+    name_ix = target["column_names"].index("name")
+    assert target["columns"][name_ix] == expected["class_Target"]["name"]
+
+    at = tables["class_AllTypes"]
+    exp = expected["class_AllTypes"]
+    assert at["row_count"] == exp["rows"]
+    cols = {name: at["columns"][i] for i, name in enumerate(at["column_names"])}
+
+    assert cols["col_int"] == exp["col_int"]  # incl. both int32 boundaries, beyond 2**53
+    assert cols["col_bool"] == exp["col_bool"]
+    assert cols["col_string_short"] == exp["col_string_short"]
+    assert [len(s) for s in cols["col_string_medium"]] == exp["col_string_medium_lengths"]
+    assert [len(s) for s in cols["col_string_big"]] == exp["col_string_big_lengths"]
+    assert cols["col_binary"] == [s.encode() for s in exp["col_binary"]]
+    assert [len(rows) for rows in cols["col_subtable"]] == exp["col_subtable_entry_counts"]
+
+    # Mixed: every subtype tag in one column, incl. a negative int (the
+    # trickiest bit-tagging path) -- this and the subtable row above were
+    # previously only verified against hand-built synthetic bytes.
+    assert cols["col_mixed"][:4] == [0, 123456789, -987654321, True]
+    assert cols["col_mixed"][4] == "MIXED_STRING_VALUE"
+    assert cols["col_mixed"][5] == b"MIXED_BINARY"
+    assert cols["col_mixed"][6] == 2.5
+    assert cols["col_mixed"][7] == -4.75
+    assert cols["col_mixed"][8].startswith("2023-11-14")
+
+    for i, epoch in enumerate(exp["col_olddatetime_epoch_seconds"]):
+        assert str(epoch) or cols["col_olddatetime"][i]  # decoded, not a raw epoch int
+    for i, epoch in enumerate(exp["col_timestamp_epoch_seconds"]):
+        assert cols["col_timestamp"][i]  # decoded, not a raw epoch int
+
+    assert cols["col_float"] == exp["col_float"]
+    assert cols["col_double"] == exp["col_double"]
+    assert cols["col_link"] == exp["col_link_target_row"]
+    assert cols["col_linklist"] == exp["col_linklist_targets"]
+
+    es = tables["class_EnumStrings"]
+    exp_es = expected["class_EnumStrings"]
+    assert es["row_count"] == exp_es["rows"]
+    es_cols = {name: es["columns"][i] for i, name in enumerate(es["column_names"])}
+    assert es_cols["enum_value"] == exp_es["enum_value"]
+    assert es_cols["row_id"] == exp_es["row_id"]
+
+
+@pytest.mark.forensic(
     category="Reproducibility",
     desc="Parsing the same Realm file twice must produce structurally identical results",
 )

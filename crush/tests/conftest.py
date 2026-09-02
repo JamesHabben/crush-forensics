@@ -176,6 +176,26 @@ def realm_all_types_v24_fixture(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def realm_format9_alltypes_fixture(tmp_path: Path) -> Path:
+    """Writable copy of format9_alltypes.realm placed in tmp_path -- a real
+    file format 9 Realm database written by realm-core v5.23.9's own public
+    API (not hand-built bytes), donated by the issue #55 reporter
+    (abrignoni). Covers every old ColumnType deliberately, including the
+    two hardest-to-verify pieces (Mixed, incl. a negative int subtype, and
+    a Table/subtable column with both empty and populated rows), plus
+    edge-case integers (both 32-bit boundaries, beyond 2^53) and all three
+    String on-disk forms (Short/Medium/BigBlobs). Expected values are in
+    the sibling format9_alltypes.expected.json (same donation); the
+    original generator (format9_alltypes_gen.cpp) and its README
+    (format9_alltypes_README.md) are kept alongside for provenance/
+    reproducibility."""
+    src = FIXTURES_DIR / "format9_alltypes.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def sqlite_fixture(tmp_path: Path) -> Path:
     """Writable copy of minimal.sqlite placed in tmp_path."""
     src = FIXTURES_DIR / "minimal.sqlite"
