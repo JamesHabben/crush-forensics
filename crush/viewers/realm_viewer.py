@@ -534,6 +534,8 @@ class RealmViewer(QWidget):
             tabs.addTab(lbl, "Header")
 
         unsupported_row_format = self._data.get("unsupported_row_format")
+        streaming_form = self._data.get("streaming_form")
+        cluster_reason = self._data.get("cluster_reason")
 
         # --- Schema ---
         schema: list[str] = self._data.get("schema", [])
@@ -562,16 +564,29 @@ class RealmViewer(QWidget):
                             f"{type_str}  →  {target}" if target else type_str
                         )
                     schema_tree[label] = col_entries
-                elif unsupported_row_format is not None:
+                elif unsupported_row_format is not None or cluster_reason:
                     schema_tree[name] = (
-                        f"(row data not extracted — file format {unsupported_row_format} "
-                        "not supported by this parser; see Properties panel for why)"
+                        "(row data not extracted for this class — see Properties "
+                        "panel → Row data for the specific reason)"
                     )
                 else:
                     schema_tree[name] = "(no column data decoded)"
             tabs.addTab(
                 TreeViewer({f"Tables ({len(schema)})": schema_tree}, tabs), "Schema"
             )
+        elif streaming_form is not None and not streaming_form.get("footer_valid"):
+            # Group::write() "streaming form" file whose end-of-file footer
+            # is missing/corrupt, so the real top ref could not be resolved
+            # — an empty schema here means "unresolvable", not "zero tables".
+            lbl = QLabel(
+                "This file is in Realm's streaming form (e.g. a Group::write() "
+                "export), but the end-of-file footer is missing or its magic "
+                "cookie doesn't match, so the real top reference could not be "
+                "resolved and no schema could be decoded. See Properties panel "
+                "→ Streaming form."
+            )
+            lbl.setWordWrap(True)
+            tabs.addTab(lbl, "Schema")
 
         # --- Top Refs ---
         top_refs = self._data.get("top_refs", {})
@@ -584,10 +599,10 @@ class RealmViewer(QWidget):
                 self._build_tables_tab(tables, tabs, inactive_tables, inactive_ref_index),
                 "Tables",
             )
-        elif unsupported_row_format is not None:
+        elif unsupported_row_format is not None or cluster_reason:
             lbl = QLabel(
-                f"Row/table data not extracted — file format {unsupported_row_format} "
-                "is not supported by this parser (see Properties panel for why). "
+                "Row/table data not extracted for this file — see Properties "
+                "panel → Row data for the specific reason. "
                 "Class names in the Schema tab are still accurate."
             )
             lbl.setWordWrap(True)

@@ -4,9 +4,16 @@ All notable changes to Crush will be documented in this file.
 
 ## Unreleased
 
+### New Features
+
+- Realm parser now extracts row/table data for pre-Cluster (file format <10) databases, not just class names — covers every old column type, including Mixed, Subtables, StringEnum, and Link/LinkList, validated against real sample files. Continues [#55](https://github.com/kalink0/crush-forensics/issues/55), reported by [@abrignoni](https://github.com/abrignoni).
+
 ### Bug Fixes
 
-- Fixed the Realm parser silently returning zero classes on file-format-9 (and older) databases, indistinguishable from a genuinely empty file — the class-name array uses a different on-disk form pre-format-10 that the parser didn't decode. Row/table data is still not extracted for these older files, but that's now shown explicitly instead of appearing empty. Addresses [#55](https://github.com/kalink0/crush-forensics/issues/55), reported by [@abrignoni](https://github.com/abrignoni).
+- Fixed the Realm parser silently returning zero classes on file-format-9 (and older) databases, indistinguishable from a genuinely empty file — the class-name array uses a different on-disk form pre-format-10 that the parser didn't decode. Addresses [#55](https://github.com/kalink0/crush-forensics/issues/55), reported by [@abrignoni](https://github.com/abrignoni).
+- Fixed the Realm parser decoding 1-bit-wide Int columns as `True`/`False` instead of their real integer value — array storage width depends on the largest value an array ever held, not the column's declared type. Found by [@abrignoni](https://github.com/abrignoni) on a real-world file.
+- Fixed the Realm parser silently returning an empty schema for files in Realm's "streaming form" (e.g. `Group::write()` output, or a Realm Studio export) instead of resolving the real top reference from the file's end-of-file footer.
+- Fixed the Realm parser leaving row/table decode failures unexplained — the Properties panel's "Row data" field now states the parser's own specific diagnosis instead of a generic or missing message.
 
 ## v0.17.0 - 2026-08-31
 

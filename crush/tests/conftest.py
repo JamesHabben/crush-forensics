@@ -138,6 +138,78 @@ def realm_format9_fixture(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def realm_streaming_form_fixture(tmp_path: Path) -> Path:
+    """Writable copy of streaming_form.realm placed in tmp_path -- a genuine
+    Realm "streaming form" file (top_ref[0] = sentinel, real top ref in an
+    end-of-file footer) produced by realm-js's own Realm.prototype.writeCopyTo(),
+    not a hand-rebuilt header. See generate_streaming_form.js (kept alongside
+    for provenance/reproducibility) for how it was generated: one user table
+    "Item" (_id: int primary key, label: string) with two rows."""
+    src = FIXTURES_DIR / "streaming_form.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
+def realm_ifttt_v9_fixture(tmp_path: Path) -> Path:
+    """Writable copy of ifttt_v9_data.realm placed in tmp_path -- a real
+    file format 9 Realm database (IFTTT iOS app, Magnet Virtual Summit CTF
+    2020), donated by the issue #55 reporter for pre-Cluster row-level
+    extraction testing against genuine data, not just synthetic fixtures."""
+    src = FIXTURES_DIR / "ifttt_v9_data.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
+def realm_mcdonalds_v9_fixture(tmp_path: Path) -> Path:
+    """Writable copy of mcdonalds_v9_data.realm placed in tmp_path -- a
+    real file format 9 Realm database (McDonald's Android app, DFRWS 2021
+    Challenge, Samsung Galaxy S10), donated by the issue #55 reporter."""
+    src = FIXTURES_DIR / "mcdonalds_v9_data.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
+def realm_all_types_v24_fixture(tmp_path: Path) -> Path:
+    """Writable copy of all_types_v24.realm placed in tmp_path -- a real
+    file format 24 Realm database produced by the actual realm-js SDK
+    (not hand-built bytes), covering every modern column type including
+    Decimal128, UUID, ObjectId, Link, LinkList, Mixed (incl. nested
+    List/Dictionary), and Dictionary. Generated for issue #55 follow-up
+    testing since no real format >=10 sample with this coverage was
+    available; regenerate via crush/tests/fixtures/generate_all_types_v24.js."""
+    src = FIXTURES_DIR / "all_types_v24.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
+def realm_format9_alltypes_fixture(tmp_path: Path) -> Path:
+    """Writable copy of format9_alltypes.realm placed in tmp_path -- a real
+    file format 9 Realm database written by realm-core v5.23.9's own public
+    API (not hand-built bytes), donated by the issue #55 reporter
+    (abrignoni). Covers every old ColumnType deliberately, including the
+    two hardest-to-verify pieces (Mixed, incl. a negative int subtype, and
+    a Table/subtable column with both empty and populated rows), plus
+    edge-case integers (both 32-bit boundaries, beyond 2^53) and all three
+    String on-disk forms (Short/Medium/BigBlobs). Expected values are in
+    the sibling format9_alltypes.expected.json (same donation); the
+    original generator (format9_alltypes_gen.cpp) and its README
+    (format9_alltypes_README.md) are kept alongside for provenance/
+    reproducibility."""
+    src = FIXTURES_DIR / "format9_alltypes.realm"
+    dst = tmp_path / src.name
+    dst.write_bytes(src.read_bytes())
+    return dst
+
+
+@pytest.fixture
 def sqlite_fixture(tmp_path: Path) -> Path:
     """Writable copy of minimal.sqlite placed in tmp_path."""
     src = FIXTURES_DIR / "minimal.sqlite"

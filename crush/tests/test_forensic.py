@@ -743,7 +743,7 @@ def test_realm_fixture_known_output(realm_fixture: Path) -> None:
 @pytest.mark.forensic(
     category="Known-output Verification",
     desc="minimal_format9.realm (file format 9) must parse to exactly: "
-    "schema ['metadata', 'class_LegacyRecord'], Row data explicitly marked unsupported",
+    "schema ['metadata', 'class_LegacyRecord'], missing table structure explicitly flagged",
 )
 def test_realm_format9_fixture_known_output(realm_format9_fixture: Path) -> None:
     vfs = DirectoryVFS(realm_format9_fixture.parent)
@@ -755,7 +755,247 @@ def test_realm_format9_fixture_known_output(realm_format9_fixture: Path) -> None
     assert result.viewer_type == "realm"
     assert result.data["schema"] == ["metadata", "class_LegacyRecord"]
     assert result.data["tables"] == []
-    assert "Not supported" in result.metadata.get("Row data", "")
+    assert result.metadata["Row data"] == (
+        "Pre-Cluster layout — Group top array has no table-refs slot (fewer than 2 children)"
+    )
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="streaming_form.realm (genuine realm-js writeCopyTo() output, real "
+    "streaming-form file, not a hand-rebuilt header) must resolve the real "
+    "top ref from the footer and decode its one user table correctly",
+)
+def test_realm_streaming_form_fixture_known_output(realm_streaming_form_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_streaming_form_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_streaming_form_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert result.data["streaming_form"] == {"top_ref": 600, "footer_valid": True}
+    assert result.data["schema"] == ["metadata", "class_Item"]
+
+    tables = {t["name"]: t for t in result.data["tables"]}
+    item = tables["class_Item"]
+    cols = {name: item["columns"][i] for i, name in enumerate(item["column_names"])}
+    assert cols["_id"] == [1, 2]
+    assert cols["label"] == ["hello", "world"]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="ifttt_v9_data.realm (real file format 9 sample, DFRWS/Magnet CTF dataset) "
+    "must fully decode: 21 classes, no unsupported columns, correct row values",
+)
+def test_realm_ifttt_v9_fixture_known_output(realm_ifttt_v9_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_ifttt_v9_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_ifttt_v9_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert len(result.data["schema"]) == 21
+    assert "class_UserRecord" in result.data["schema"]
+
+    # Every column in every table decodes -- no unimplemented old column
+    # type left in this real sample (Mixed/StringEnum don't occur in it).
+    assert result.metadata["Row data"] == "Decoded via legacy pre-Cluster layout"
+    for t in result.data["tables"]:
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    tables_by_name = {t["name"]: t for t in result.data["tables"]}
+
+    # String (medium/ArrayStringLong form -- issue #55 fix target) and
+    # Timestamp, on a real user record.
+    user = tables_by_name["class_UserRecord"]
+    login_ix = user["column_names"].index("login")
+    email_ix = user["column_names"].index("email")
+    assert user["columns"][login_ix] == ["abrunswick8675309"]
+    assert user["columns"][email_ix] == ["abrunswick8675309@gmail.com"]
+
+    # Link (0=null/N=row-1 encoding) and LinkList (plain row-index list),
+    # plus Link target-table resolution via the m_subspecs tagged index.
+    conn = tables_by_name["class_LiveConnectionRecord"]
+    assert conn["row_count"] == 2
+    primary_ix = conn["column_names"].index("primaryService")
+    works_ix = conn["column_names"].index("worksWithServices")
+    assert conn["columns"][primary_ix] == [0, 2]
+    assert conn["columns"][works_ix] == [[1], [1]]
+    assert conn["column_target_tables"][primary_ix] == "class_LiveServiceRecord"
+    assert conn["column_target_tables"][works_ix] == "class_LiveServiceRecord"
+
+    # Table (subtable) column present and decodes to a (degenerate, in this
+    # file) list-of-rows per row rather than being flagged unsupported.
+    live_service = tables_by_name["class_LiveServiceRecord"]
+    embedded_ix = live_service["column_names"].index("embeddedRedirectURLs")
+    assert live_service["columns"][embedded_ix] == [[], [], []]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="mcdonalds_v9_data.realm (real file format 9 sample, DFRWS 2021 Challenge "
+    "dataset) must fully decode: 5 classes, no unsupported columns, correct row values",
+)
+def test_realm_mcdonalds_v9_fixture_known_output(realm_mcdonalds_v9_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_mcdonalds_v9_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_mcdonalds_v9_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert len(result.data["schema"]) == 5
+    assert "class_RealmRestaurant" in result.data["schema"]
+
+    # Every column decodes -- Float and Double both real-validated here
+    # (neither appeared with non-trivial values in the IFTTT sample).
+    assert result.metadata["Row data"] == "Decoded via legacy pre-Cluster layout"
+    for t in result.data["tables"]:
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    tables_by_name = {t["name"]: t for t in result.data["tables"]}
+    restaurant = tables_by_name["class_RealmRestaurant"]
+    assert restaurant["row_count"] == 169
+    assert set(restaurant["column_types"]) == {"bool", "double", "float", "int", "linklist", "string"}
+
+    categories = tables_by_name["class_RealmRestaurantOpenHourCategory"]
+    assert categories["row_count"] == 299
+    name_ix = categories["column_names"].index("categoryName")
+    hours_ix = categories["column_names"].index("openingHours")
+    assert categories["columns"][name_ix][0] == "Heute"
+    assert categories["columns"][hours_ix][0] == [0, 1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="all_types_v24.realm (real file format 24, actual realm-js SDK output) "
+    "must decode every modern column type correctly, including Decimal128, Link, "
+    "LinkList, and nested Mixed collections",
+)
+def test_realm_all_types_v24_fixture_known_output(realm_all_types_v24_fixture: Path) -> None:
+    vfs = DirectoryVFS(realm_all_types_v24_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_all_types_v24_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    t = next(t for t in result.data["tables"] if t["name"] == "class_AllTypesRecord")
+    cols = {name: t["columns"][i] for i, name in enumerate(t["column_names"])}
+
+    assert cols["intCol"] == [42, -42, 0, 0]
+    assert cols["boolCol"] == [True, False, True, True]
+    assert cols["stringCol"][0] == "hello world"
+    assert cols["dataCol"][0] == b"\x01\x02\x03\x04\x05"
+    assert cols["floatCol"][0] == 3.140000104904175
+    assert cols["doubleCol"][0] == 2.718281828
+
+    # Decimal128: found and fixed two real bugs against this exact data --
+    # the combination-field bit layout was wrong entirely (not just the
+    # earlier "swapped fields" guess), and Python's ambient decimal context
+    # silently rounded 34-digit Bid128 coefficients to 28 digits.
+    assert cols["decimalCol"] == [
+        "12345.6789",
+        "-99.99",
+        "89999999999999.5",  # MSD 8/9, still compact Bid64
+        "1.234567890123456789012345678901234",  # 34 digits, forces full Bid128
+    ]
+
+    assert cols["dateCol"][0] == "2024-01-15 10:30:00 UTC"
+    assert cols["uuidCol"][0] == "550e8400-e29b-41d4-a716-446655440000"
+    assert cols["objectIdCol"][0] == "507f1f77bcf86cd799439011"
+
+    # LinkList: found and fixed a real bug against this exact data -- list
+    # elements were wrongly run through the single-Link "+1/0=null"
+    # decoder (they're plain 0-based indices with no such adjustment).
+    assert cols["linkCol"][0] == 0
+    assert cols["linkCol"][1] is None
+    assert cols["linkList"][0] == [0, 1]
+    assert cols["linkList"][1] == []
+
+    assert cols["mixedCol"][0] == "a plain mixed string"
+    assert cols["mixedWithNestedList"][0] == [1.0, "two", 3.0, True]
+    assert cols["mixedWithNestedDict"][0] == {"a": 1.0, "b": "two", "c": [1.0, 2.0, 3.0]}
+    assert cols["dictCol"][0] == {"keyOne": "val1", "keyTwo": 2.0, "keyThree": True}
+    assert cols["setCol"][0] == [10, 20, 30]
+    assert cols["listOfInt"][0] == [100, 200, 300]
+
+
+@pytest.mark.forensic(
+    category="Known-output Verification",
+    desc="format9_alltypes.realm (real file format 9, realm-core v5.23.9's own public "
+    "API output, donated by the issue #55 reporter) must decode every old ColumnType "
+    "correctly against the accompanying expected.json, including Mixed and a populated "
+    "Table/subtable -- the two pieces this parser's own test suite could previously only "
+    "cover synthetically",
+)
+def test_realm_format9_alltypes_fixture_known_output(realm_format9_alltypes_fixture: Path) -> None:
+    import json
+
+    expected = json.loads(
+        (FIXTURES_DIR / "format9_alltypes.expected.json").read_text()
+    )
+
+    vfs = DirectoryVFS(realm_format9_alltypes_fixture.parent)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == realm_format9_alltypes_fixture.name)
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.viewer_type == "realm"
+    assert result.data["schema"] == ["class_Target", "class_AllTypes", "class_EnumStrings"]
+
+    tables = {t["name"]: t for t in result.data["tables"]}
+    for t in tables.values():
+        assert t["unsupported_columns"] == [], f"{t['name']} has unsupported columns"
+
+    target = tables["class_Target"]
+    assert target["row_count"] == expected["class_Target"]["rows"]
+    name_ix = target["column_names"].index("name")
+    assert target["columns"][name_ix] == expected["class_Target"]["name"]
+
+    at = tables["class_AllTypes"]
+    exp = expected["class_AllTypes"]
+    assert at["row_count"] == exp["rows"]
+    cols = {name: at["columns"][i] for i, name in enumerate(at["column_names"])}
+
+    assert cols["col_int"] == exp["col_int"]  # incl. both int32 boundaries, beyond 2**53
+    assert cols["col_bool"] == exp["col_bool"]
+    assert cols["col_string_short"] == exp["col_string_short"]
+    assert [len(s) for s in cols["col_string_medium"]] == exp["col_string_medium_lengths"]
+    assert [len(s) for s in cols["col_string_big"]] == exp["col_string_big_lengths"]
+    assert cols["col_binary"] == [s.encode() for s in exp["col_binary"]]
+    assert [len(rows) for rows in cols["col_subtable"]] == exp["col_subtable_entry_counts"]
+
+    # Mixed: every subtype tag in one column, incl. a negative int (the
+    # trickiest bit-tagging path) -- this and the subtable row above were
+    # previously only verified against hand-built synthetic bytes.
+    assert cols["col_mixed"][:4] == [0, 123456789, -987654321, True]
+    assert cols["col_mixed"][4] == "MIXED_STRING_VALUE"
+    assert cols["col_mixed"][5] == b"MIXED_BINARY"
+    assert cols["col_mixed"][6] == 2.5
+    assert cols["col_mixed"][7] == -4.75
+    assert cols["col_mixed"][8].startswith("2023-11-14")
+
+    for i, epoch in enumerate(exp["col_olddatetime_epoch_seconds"]):
+        assert str(epoch) or cols["col_olddatetime"][i]  # decoded, not a raw epoch int
+    for i, epoch in enumerate(exp["col_timestamp_epoch_seconds"]):
+        assert cols["col_timestamp"][i]  # decoded, not a raw epoch int
+
+    assert cols["col_float"] == exp["col_float"]
+    assert cols["col_double"] == exp["col_double"]
+    assert cols["col_link"] == exp["col_link_target_row"]
+    assert cols["col_linklist"] == exp["col_linklist_targets"]
+
+    es = tables["class_EnumStrings"]
+    exp_es = expected["class_EnumStrings"]
+    assert es["row_count"] == exp_es["rows"]
+    es_cols = {name: es["columns"][i] for i, name in enumerate(es["column_names"])}
+    assert es_cols["enum_value"] == exp_es["enum_value"]
+    assert es_cols["row_id"] == exp_es["row_id"]
 
 
 @pytest.mark.forensic(

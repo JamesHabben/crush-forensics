@@ -437,10 +437,11 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     lets them always use the inline form). Before the issue #55 fix,
     _extract_schema only decoded the inline form and silently returned zero
     classes for a BigBlobs-form file -- indistinguishable from a genuinely
-    empty schema. This also verifies row/table data is explicitly flagged
-    unsupported for file format < 10 rather than left silently empty,
-    since this parser's Cluster-walking code cannot read the pre-Cluster
-    row layout such a file would actually have.
+    empty schema. This fixture only builds the Group-level table_names
+    array (no actual Table/Spec structures), so it also verifies that when
+    schema names resolve but the pre-Cluster table structure itself does
+    not, that gap is explicitly flagged rather than silently shown as
+    zero decoded tables.
     """
     ROOT_OFFSET = 24
     TABLE_NAMES_OFFSET = 40
@@ -487,11 +488,369 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     assert result.viewer_type == "realm"
     assert result.data["schema"] == ["metadata", "class_LegacyRecord"]
 
-    # Row/table data needs the Cluster layout (format 10+) this file doesn't
-    # have -- must be explicitly flagged, never silently left at zero rows.
+    # This fixture has no real Table/Spec structure to decode -- the gap
+    # must be explicitly flagged with the parser's own concrete reason,
+    # never silently left at zero rows or a generic "could not be decoded".
     assert result.data["tables"] == []
-    assert "Not supported" in result.metadata.get("Row data", "")
-    assert "9" in result.metadata["Row data"]
+    assert result.metadata["Row data"] == (
+        "Pre-Cluster layout — Group top array has no table-refs slot (fewer than 2 children)"
+    )
+
+
+def _to_streaming_form(data: bytes, *, corrupt_magic: bool = False) -> bytes:
+    """Rewrite a normal-form Realm file's bytes into Group::write() streaming
+    form (alloc_slab.hpp/.cpp SlabAlloc::is_file_on_streaming_form /
+    StreamingFooter, verified against realm-core v5.23.9 source): top_ref[0]
+    becomes the sentinel 0xFFFFFFFFFFFFFFFF, top_ref[1]/flags/reserved become
+    0, and the real (previously active) top ref moves into a 16-byte footer
+    appended at the end of the file, followed by the magic cookie
+    0x3034125237E526C8. Body bytes are untouched -- every array still lives
+    at its original absolute offset, only the header's own top-ref encoding
+    changes, exactly as a real streaming-form export would.
+    """
+    buf = bytearray(data)
+    top_ref0 = int.from_bytes(buf[0:8], "little")
+    top_ref1 = int.from_bytes(buf[8:16], "little")
+    fmt0, fmt1, flags = buf[20], buf[21], buf[23]
+    active = flags & 1
+    active_ref = top_ref1 if active else top_ref0
+    active_fmt = fmt1 if active else fmt0
+
+    buf[0:8] = (0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
+    buf[8:16] = (0).to_bytes(8, "little")
+    buf[20] = active_fmt
+    buf[21] = 0
+    buf[22] = 0
+    buf[23] = 0  # select bit cleared -> slot_selector 0, matching the sentinel check
+
+    magic = 0x3034125237E526C8
+    if corrupt_magic:
+        magic ^= 0xFF
+    buf += active_ref.to_bytes(8, "little") + magic.to_bytes(8, "little")
+    return bytes(buf)
+
+
+def test_realm_streaming_form_resolves_via_footer(
+    tmp_path: Path, realm_fixture: Path,
+) -> None:
+    """Group::write() streaming form must not decode as an empty schema.
+
+    Reported by the issue #55 reporter (abrignoni), 2026-09-02: his own
+    generator initially used Group::write() (producing the streaming form
+    -- top_ref[0] a sentinel, real top ref in an end-of-file footer) rather
+    than SharedGroup + WriteTransaction::commit() (the normal on-disk form
+    an app actually leaves behind). Before this fix, the parser read
+    top_ref[0]'s literal sentinel value as an offset, which is always out
+    of bounds, so _extract_schema silently returned []  -- read by him as
+    "the generator failed" when the file was in fact valid, just in a form
+    this parser didn't yet resolve. Realm Studio's file-export feature can
+    also produce this form, so it's a form real examiners will encounter,
+    not just a generator quirk.
+    """
+    streaming_bytes = _to_streaming_form(realm_fixture.read_bytes())
+    streaming_path = tmp_path / "streaming.realm"
+    streaming_path.write_bytes(streaming_bytes)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "streaming.realm")
+
+    result = RealmParser().parse(node, vfs)
+
+    # minimal.realm's own known-output schema (see realm_fixture/its known-
+    # output test) -- must resolve identically once routed through the
+    # streaming-form footer instead of the normal two-slot header.
+    assert result.data["schema"] == ["metadata", "class_Evidence"]
+    assert result.data["streaming_form"] == {
+        "top_ref": 96, "footer_valid": True,
+    }
+    assert "resolved from end-of-file footer" in result.metadata["Streaming form"]
+
+
+def test_realm_streaming_form_corrupt_footer_marked_explicit(
+    tmp_path: Path, realm_fixture: Path,
+) -> None:
+    """A streaming-form file with a missing/corrupt footer must surface an
+    explicit status, never a silent empty schema indistinguishable from a
+    genuinely empty database (see feedback_explicit_unsupported_marking).
+    """
+    corrupt_bytes = _to_streaming_form(realm_fixture.read_bytes(), corrupt_magic=True)
+    corrupt_path = tmp_path / "streaming_corrupt.realm"
+    corrupt_path.write_bytes(corrupt_bytes)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "streaming_corrupt.realm")
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.data["schema"] == []
+    assert result.data["streaming_form"] == {"top_ref": None, "footer_valid": False}
+    assert "could not be resolved" in result.metadata["Streaming form"]
+    assert result.metadata["Tables found"] == "Unresolved (see Streaming form)"
+
+
+def test_realm_pre_cluster_mixed_column(tmp_path: Path) -> None:
+    """Pre-Cluster (file format < 10) Mixed column decode -- the one old
+    ColumnType with zero real-file coverage (neither of the two real format
+    9 samples used for this branch's other tests contains a Mixed column),
+    so this is the only verification for it.
+
+    Slot layout (MixedColumn::create(), column_mixed.cpp @ v5.23.8 -- the
+    exact realm-core version realm-java 6.1.0, the last release to write
+    format 9, bundled): 0=m_types, 1=m_data, 2=m_binary_data,
+    3=m_timestamp_data (unused here, m_timestamp_data ref left 0).
+
+    Exercises the trickiest verified-from-source detail: get_value()
+    (column_mixed_tpl.hpp) is `uint64_t(m_data.get(ndx)) >> 1` -- plain
+    64-bit modular arithmetic, no separate sign-magnitude split despite
+    first appearances -- so the IntNeg/DoubleNeg rows below are encoded
+    exactly as MixedColumn::set_int64 would (`(value << 1) + 1`, wrapped
+    to 64 bits), not as "shifted absolute value", to prove the decode
+    side's inverse operation is exactly right rather than only
+    self-consistent with a wrong encoding.
+    """
+    U64 = (1 << 64) - 1
+
+    def tag(v: int) -> int:
+        """Mirrors MixedColumn::set_int64/set_value: (value << 1) + 1, wrapped to int64."""
+        return ((v << 1) + 1) & U64
+
+    def string_short_entry(content: bytes, width: int) -> bytes:
+        pad = (width - 1) - len(content)
+        return content + b"\x00" * pad + bytes([pad])
+
+    def string_short_array(strings: list[str], width: int = 32) -> bytes:
+        hdr = b"\x41\x41\x41\x41\x06" + len(strings).to_bytes(3, "big")  # has_refs=0, width_ndx=6 -> 32
+        return hdr + b"".join(string_short_entry(s.encode(), width) for s in strings)
+
+    def refs_array(refs: list[int], width_ndx: int = 6) -> bytes:
+        width = [0, 1, 2, 4, 8, 16, 32, 64][width_ndx]
+        flags = 0b01000000 | width_ndx  # has_refs=1
+        eb = width // 8
+        payload = b"".join((r & U64).to_bytes(eb, "little") for r in refs)
+        payload += b"\x00" * ((-len(payload)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([flags]) + len(refs).to_bytes(3, "big") + payload
+
+    def int_leaf(values: list[int], width: int = 64) -> bytes:
+        width_ndx = [0, 1, 2, 4, 8, 16, 32, 64].index(width)
+        n = len(values)
+        buf = bytearray((width * n + 7) // 8)
+        for i, v in enumerate(values):
+            bitpos = i * width
+            bytepos, bitoff = divmod(bitpos, 8)
+            raw = v & (U64 if width == 64 else ((1 << width) - 1))
+            for b in range((width + 7) // 8):
+                if bytepos + b < len(buf):
+                    buf[bytepos + b] |= (raw >> (b * 8)) & 0xFF
+        buf += b"\x00" * ((-len(buf)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([width_ndx]) + n.to_bytes(3, "big") + bytes(buf)
+
+    # 7 rows, one of each numeric/string variant that exercises a distinct
+    # get_value() code path: Int, IntNeg, Bool, Float, Double, DoubleNeg, String.
+    mixtypes = [0, 12, 1, 9, 10, 11, 2]
+    float_bits = struct.unpack("<I", struct.pack("<f", 2.5))[0]
+    double_pos_bits = struct.unpack("<Q", struct.pack("<d", 1.25))[0]
+    double_neg_bits = struct.unpack("<Q", struct.pack("<d", -1.25))[0] & ((1 << 63) - 1)
+    data_values = [tag(100), tag(-100), tag(1), tag(float_bits), tag(double_pos_bits), tag(double_neg_bits), tag(0)]
+
+    types_bytes = int_leaf(mixtypes, width=8)
+    data_bytes = int_leaf(data_values, width=64)
+
+    blob_str = b"hi\x00"  # trailing NUL per array_string_long.hpp
+
+    ROOT_OFFSET = 24
+    TABLE_NAMES_OFFSET = ROOT_OFFSET + 16
+    table_names_bytes = string_short_array(["TestTable"])
+    TABLES_OFFSET = TABLE_NAMES_OFFSET + len(table_names_bytes)
+    TABLE_OFFSET = TABLES_OFFSET + 16
+    SPEC_OFFSET = TABLE_OFFSET + 16
+    TYPES_OFFSET = SPEC_OFFSET + 24
+    spec_types_bytes = int_leaf([6], width=8)  # 1 column, type_code=6 (Mixed)
+    NAMES_OFFSET = TYPES_OFFSET + len(spec_types_bytes)
+    names_bytes = string_short_array(["mixedCol"])
+    ATTR_OFFSET = NAMES_OFFSET + len(names_bytes)
+    attr_bytes = int_leaf([0], width=8)
+    COLUMNS_OFFSET = ATTR_OFFSET + len(attr_bytes)
+
+    MIXED_COL_OFFSET = COLUMNS_OFFSET + 16
+    MIXED_TYPES_OFFSET = MIXED_COL_OFFSET + 24
+    MIXED_DATA_OFFSET = MIXED_TYPES_OFFSET + len(types_bytes)
+    MIXED_BINARY_OFFSET = MIXED_DATA_OFFSET + len(data_bytes)
+    BLOB_ARRAY_OFFSET = MIXED_BINARY_OFFSET + 16
+    offsets_bytes = int_leaf([len(blob_str)], width=64)
+    BLOB_DATA_OFFSET = BLOB_ARRAY_OFFSET + len(offsets_bytes)
+    blob_data_bytes = b"\x41\x41\x41\x41\x01" + len(blob_str).to_bytes(3, "big") + blob_str
+    blob_data_bytes += b"\x00" * ((-len(blob_data_bytes)) % 8)
+
+    root_array = refs_array([TABLE_NAMES_OFFSET, TABLES_OFFSET])
+    tables_array = refs_array([TABLE_OFFSET])
+    table_array = refs_array([SPEC_OFFSET, COLUMNS_OFFSET])
+    spec_array = refs_array([TYPES_OFFSET, NAMES_OFFSET, ATTR_OFFSET])
+    columns_array = refs_array([MIXED_COL_OFFSET])
+    mixed_top_array = refs_array([MIXED_TYPES_OFFSET, MIXED_DATA_OFFSET, MIXED_BINARY_OFFSET, 0])
+    binary_top_bytes = refs_array([BLOB_ARRAY_OFFSET, BLOB_DATA_OFFSET])
+
+    file_hdr = (
+        (0).to_bytes(8, "little")
+        + ROOT_OFFSET.to_bytes(8, "little")
+        + b"T-DB"
+        + bytes([9, 9, 0, 0x01])
+    )
+
+    total = BLOB_DATA_OFFSET + len(blob_data_bytes)
+    buf = bytearray(total)
+
+    def place(offset: int, data: bytes) -> None:
+        buf[offset : offset + len(data)] = data
+
+    place(0, file_hdr)
+    place(ROOT_OFFSET, root_array)
+    place(TABLE_NAMES_OFFSET, table_names_bytes)
+    place(TABLES_OFFSET, tables_array)
+    place(TABLE_OFFSET, table_array)
+    place(SPEC_OFFSET, spec_array)
+    place(TYPES_OFFSET, spec_types_bytes)
+    place(NAMES_OFFSET, names_bytes)
+    place(ATTR_OFFSET, attr_bytes)
+    place(COLUMNS_OFFSET, columns_array)
+    place(MIXED_COL_OFFSET, mixed_top_array)
+    place(MIXED_TYPES_OFFSET, types_bytes)
+    place(MIXED_DATA_OFFSET, data_bytes)
+    place(MIXED_BINARY_OFFSET, binary_top_bytes)
+    place(BLOB_ARRAY_OFFSET, offsets_bytes)
+    place(BLOB_DATA_OFFSET, blob_data_bytes)
+
+    realm_path = tmp_path / "mixed.realm"
+    realm_path.write_bytes(bytes(buf))
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "mixed.realm")
+    result = RealmParser().parse(node, vfs)
+
+    table = result.data["tables"][0]
+    assert table["columns"][0] == [100, -100, True, 2.5, 1.25, -1.25, "hi"]
+
+
+def test_realm_pre_cluster_string_enum_column(tmp_path: Path) -> None:
+    """Pre-Cluster (file format < 10) StringEnum column decode -- the other
+    old ColumnType with zero real-file coverage (neither IFTTT nor
+    McDonald's uses it).
+
+    m_enumkeys (Spec slot 4, spec.cpp Spec::get_enumkeys_ndx) is itself an
+    array of refs -- one per StringEnum column, indexed by a running count
+    over prior StringEnum columns only -- each pointing to that column's
+    own shared keys StringColumn. A first attempt at this fixture treated
+    Spec slot 4 as pointing *directly* at the keys column, skipping that
+    wrapper array, and silently read the wrong bytes (a corrupted-looking
+    huge ref) instead of failing loudly -- worth remembering when building
+    similar fixtures: the indirection level matters even when "just a
+    ref" looks obviously right.
+
+    3 unique keys, 5 rows with repeated indices, so the dedup itself
+    (not just a 1:1 index) is actually exercised.
+    """
+    U64 = (1 << 64) - 1
+
+    def string_short_entry(content: bytes, width: int) -> bytes:
+        pad = (width - 1) - len(content)
+        return content + b"\x00" * pad + bytes([pad])
+
+    def string_short_array(strings: list[str], width: int = 32) -> bytes:
+        hdr = b"\x41\x41\x41\x41\x06" + len(strings).to_bytes(3, "big")  # has_refs=0
+        return hdr + b"".join(string_short_entry(s.encode(), width) for s in strings)
+
+    def refs_array(refs: list[int], width_ndx: int = 6) -> bytes:
+        width = [0, 1, 2, 4, 8, 16, 32, 64][width_ndx]
+        flags = 0b01000000 | width_ndx  # has_refs=1
+        eb = width // 8
+        payload = b"".join((r & U64).to_bytes(eb, "little") for r in refs)
+        payload += b"\x00" * ((-len(payload)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([flags]) + len(refs).to_bytes(3, "big") + payload
+
+    def int_leaf(values: list[int], width: int = 64) -> bytes:
+        width_ndx = [0, 1, 2, 4, 8, 16, 32, 64].index(width)
+        n = len(values)
+        buf = bytearray((width * n + 7) // 8)
+        for i, v in enumerate(values):
+            bytepos = (i * width) // 8
+            raw = v & (U64 if width == 64 else ((1 << width) - 1))
+            for b in range((width + 7) // 8):
+                if bytepos + b < len(buf):
+                    buf[bytepos + b] |= (raw >> (b * 8)) & 0xFF
+        buf += b"\x00" * ((-len(buf)) % 8)
+        return b"\x41\x41\x41\x41" + bytes([width_ndx]) + n.to_bytes(3, "big") + bytes(buf)
+
+    keys = ["active", "inactive", "pending"]
+    indices = [0, 1, 0, 2, 1]
+    keys_bytes = string_short_array(keys)
+    indices_bytes = int_leaf(indices, width=8)
+
+    ROOT_OFFSET = 24
+    TABLE_NAMES_OFFSET = ROOT_OFFSET + 16
+    table_names_bytes = string_short_array(["TestTable"])
+    TABLES_OFFSET = TABLE_NAMES_OFFSET + len(table_names_bytes)
+    TABLE_OFFSET = TABLES_OFFSET + 16
+    SPEC_OFFSET = TABLE_OFFSET + 16
+    # Spec array: 5 slots (types, names, attr, subspecs[unused=0], enumkeys)
+    # -> payload 5*4=20 bytes, aligned 24 -> header(8)+24=32
+    TYPES_OFFSET = SPEC_OFFSET + 32
+    spec_types_bytes = int_leaf([3], width=8)  # 1 column, type_code=3 (StringEnum)
+    NAMES_OFFSET = TYPES_OFFSET + len(spec_types_bytes)
+    names_bytes = string_short_array(["statusCol"])
+    ATTR_OFFSET = NAMES_OFFSET + len(names_bytes)
+    attr_bytes = int_leaf([0], width=8)
+    COLUMNS_OFFSET = ATTR_OFFSET + len(attr_bytes)
+
+    ENUM_COL_OFFSET = COLUMNS_OFFSET + 16  # columns array: 1 ref
+    ENUMKEYS_ARRAY_OFFSET = ENUM_COL_OFFSET + len(indices_bytes)  # m_enumkeys wrapper: 1 ref
+    KEYS_OFFSET = ENUMKEYS_ARRAY_OFFSET + 16
+
+    root_array = refs_array([TABLE_NAMES_OFFSET, TABLES_OFFSET])
+    tables_array = refs_array([TABLE_OFFSET])
+    table_array = refs_array([SPEC_OFFSET, COLUMNS_OFFSET])
+    spec_array = refs_array([TYPES_OFFSET, NAMES_OFFSET, ATTR_OFFSET, 0, ENUMKEYS_ARRAY_OFFSET])
+    columns_array = refs_array([ENUM_COL_OFFSET])
+    enumkeys_array = refs_array([KEYS_OFFSET])
+
+    file_hdr = (
+        (0).to_bytes(8, "little")
+        + ROOT_OFFSET.to_bytes(8, "little")
+        + b"T-DB"
+        + bytes([9, 9, 0, 0x01])
+    )
+
+    total = KEYS_OFFSET + len(keys_bytes)
+    buf = bytearray(total)
+
+    def place(offset: int, data: bytes) -> None:
+        buf[offset : offset + len(data)] = data
+
+    place(0, file_hdr)
+    place(ROOT_OFFSET, root_array)
+    place(TABLE_NAMES_OFFSET, table_names_bytes)
+    place(TABLES_OFFSET, tables_array)
+    place(TABLE_OFFSET, table_array)
+    place(SPEC_OFFSET, spec_array)
+    place(TYPES_OFFSET, spec_types_bytes)
+    place(NAMES_OFFSET, names_bytes)
+    place(ATTR_OFFSET, attr_bytes)
+    place(COLUMNS_OFFSET, columns_array)
+    place(ENUM_COL_OFFSET, indices_bytes)
+    place(ENUMKEYS_ARRAY_OFFSET, enumkeys_array)
+    place(KEYS_OFFSET, keys_bytes)
+
+    realm_path = tmp_path / "stringenum.realm"
+    realm_path.write_bytes(bytes(buf))
+
+    vfs = DirectoryVFS(tmp_path)
+    node = next(c for c in vfs.root().children if c.name == "stringenum.realm")
+    result = RealmParser().parse(node, vfs)
+
+    table = result.data["tables"][0]
+    assert table["column_types"] == ["string_enum"]
+    assert table["columns"][0] == ["active", "inactive", "active", "pending", "inactive"]
+    assert table["unsupported_columns"] == []
 
 
 def test_realm_parser_decrypts_with_correct_key(tmp_path: Path) -> None:
@@ -544,6 +903,22 @@ def test_realm_parser_decrypts_with_correct_key(tmp_path: Path) -> None:
         parser.parse(node, vfs, password=os.urandom(64).hex())
 
 
+def test_extract_table_data_reports_reason_when_table_refs_missing() -> None:
+    """_extract_table_data (Cluster/format >=10 path) must surface a
+    concrete reason when it comes back with zero tables, not just an
+    unexplained empty list -- mirrors the pre-Cluster path's own
+    (result, reason) contract (_extract_pre_cluster_tables_data). Same
+    underlying gap as the one found on minimal_format9.realm (a Group top
+    array with only 1 child, no table-refs slot at index 1), just for the
+    modern path this time."""
+    from crush.parsers.realm_parser import _extract_table_data
+
+    raw = _array_hdr(0x46, 1) + _pad8((0).to_bytes(4, "little"))
+    tables, reason = _extract_table_data(raw, 0, ["class_Foo"], len(raw))
+    assert tables == []
+    assert reason == "Group top array has no table-refs slot (fewer than 2 children)"
+
+
 def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> None:
     """When a leaf's key slot (child[0]) is unreadable (e.g. corruption),
     row_count falls back to _derive_row_count and the table is flagged
@@ -588,7 +963,7 @@ def test_extract_table_data_flags_estimated_row_count_on_corrupt_key_slot() -> N
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -671,7 +1046,7 @@ def test_extract_table_data_decodes_dictionary_column() -> None:
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Dict"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Dict"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -841,6 +1216,35 @@ def test_read_array_bool_null_is_exactly_three() -> None:
     raw = _array_hdr(0x02, 4) + _pad8(bytes([0b01110100]))
     assert _read_array_bool(raw, 0, len(raw), nullable=True) == [False, True, None, True]
     assert _read_array_bool(raw, 0, len(raw), nullable=False) == [False, True, True, True]
+
+
+def test_decode_column_values_int_width1_stays_int_not_bool() -> None:
+    """Modern (Cluster, format >=10) Int-column dispatch must not decode a
+    1-bit-wide leaf as bool. Realm sizes an array's storage width from the
+    largest value it ever held, so an Int column whose values all happen to
+    fit in one bit (e.g. a small counter, or plain 0/1 values) legitimately
+    uses the same 1-bit encoding as a real Bool column -- confusing the two
+    made such a column display as True/False instead of 0/1 (found by the
+    issue #55 reporter, @abrignoni, on a real-world file; see
+    test_realm_pre_cluster equivalents and _read_scalar_leaf's own
+    docstring for the pre-Cluster side of this same bug class).
+
+    Exercises the actual dispatch path a Cluster leaf goes through
+    (_decode_column_values -> type_code == 0 -> _read_scalar_leaf), not
+    just the shared low-level reader in isolation, and checks real `int`
+    type -- not just `== 0`/`== 1`, which a Python bool would also satisfy.
+    """
+    from crush.parsers.realm_parser import _decode_column_values
+
+    # 4 values, 1 bit each: 0, 1, 0, 1 -> byte = 0b0000_1010 = 0x0A
+    raw = _array_hdr(0x01, 4) + _pad8(bytes([0b00001010]))
+    info = {
+        "is_dictionary": False, "type_code": 0, "nullable": False,
+        "is_list": False, "is_set": False,
+    }
+    result = _decode_column_values(raw, 0, len(raw), info)
+    assert result == [0, 1, 0, 1]
+    assert all(type(v) is int for v in result)
 
 
 def test_read_array_string_short_inline() -> None:
@@ -1035,7 +1439,7 @@ def test_extract_table_data_multi_leaf_concatenates_rows() -> None:
     ))
 
     data = bytes(buf)
-    tables = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
+    tables, _ = _extract_table_data(data, root_ref, ["class_Foo"], len(data))
 
     assert len(tables) == 1
     t = tables[0]
@@ -1231,7 +1635,7 @@ def test_link_column_resolves_target_table_name() -> None:
     table_key_map = _build_table_key_map(data, root_ref, schema, len(data))
     assert table_key_map == {5: "class_A", 9: "class_B"}
 
-    tables = _extract_table_data(data, root_ref, schema, len(data), table_key_map)
+    tables, _ = _extract_table_data(data, root_ref, schema, len(data), table_key_map)
     table_b = next(t for t in tables if t["name"] == "class_B")
     assert table_b["column_names"] == ["link_to_a"]
     assert table_b["column_target_tables"] == ["class_A"]
