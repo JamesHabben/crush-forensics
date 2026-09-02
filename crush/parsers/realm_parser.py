@@ -690,17 +690,7 @@ def _read_collection_column(
         values: list[Any] = []
         for leaf_ref, _off in _walk_bplustree_leaves(data, row_ref, file_size):
             if is_link_element:
-                # _read_scalar_leaf returns Python bool for width=1 leaves
-                # (it doubles as the generic bit-packed reader, including
-                # for genuine Bool columns) -- a small ObjKey range (0/1)
-                # can legitimately be stored at that width, so cast back to
-                # a plain int here rather than let a row index display as
-                # True/False.
-                raw_leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
-                leaf_vals = (
-                    [None if v is None else int(v) for v in raw_leaf_vals]
-                    if raw_leaf_vals is not None else None
-                )
+                leaf_vals = _read_scalar_leaf(data, leaf_ref, file_size)
             else:
                 leaf_vals = _decode_column_values(data, leaf_ref, file_size, element_info)
             if leaf_vals:
@@ -977,12 +967,20 @@ def _read_scalar_leaf(
     data: bytes,
     col_offset: int,
     file_size: int,
-) -> list[int | bool | None] | None:
+) -> list[int | None] | None:
     """Parse a flat, non-nullable Realm scalar array (ArrayInteger / boolean
     bit-packed / any plain has_refs=False integer array — also reused as the
     generic reader for colkeys, type codes, offsets, and key arrays).
 
-        width=1, scheme=0  → 1 bit per row (0/1)
+        width=1, scheme=0  → 1 bit per row, returned as plain int (0/1) --
+          width is a storage-size detail (Realm sizes an array from the
+          largest value it ever held), not the column's declared type, so
+          an Int column can legitimately end up 1-bit wide too. Callers
+          that want real Bool semantics convert explicitly themselves
+          (see type_code == 1 in _decode_column_values /
+          _decode_pre_cluster_column_values) -- this function never
+          decides that on the caller's behalf (issue #55: a 1-bit-wide
+          Int column was decoding as True/False, found on a real file).
         width=2/4, scheme=0 → packed sub-byte unsigned integers
         width=8/16/32/64, scheme=0 or scheme=1 → little-endian integers
           (byte-aligned widths are reinterpreted as signed int64_t, matching
@@ -1009,11 +1007,22 @@ def _read_scalar_leaf(
             return [0] * count
         payload = data[payload_start : payload_start + hdr["Payload bytes (raw)"]]
         if width == 1:
-            result: list[int | bool | None] = []
+            # Width is a storage detail, not the column's declared type --
+            # Realm sizes an integer array from the largest value it has
+            # ever had to hold, so an Int column whose values all happen
+            # to fit in one bit gets a 1-bit array too. Returning bool()
+            # here unconditionally used to make every 1-bit-wide Int
+            # column decode as True/False instead of 1/0 (found on a real
+            # Houseparty app file, issue #55 -- e.g. a minute-counter
+            # column silently becoming "True"). Callers that actually want
+            # bool (the real Bool column dispatch) already wrap the
+            # result in bool() themselves; this stays a plain int so every
+            # *other* caller isn't silently mistyped.
+            result: list[int | None] = []
             for i in range(count):
                 byte_i, bit_i = divmod(i, 8)
                 if byte_i < len(payload):
-                    result.append(bool((payload[byte_i] >> bit_i) & 1))
+                    result.append((payload[byte_i] >> bit_i) & 1)
                 else:
                     result.append(None)
             return result
