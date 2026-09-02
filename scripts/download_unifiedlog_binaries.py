@@ -128,7 +128,12 @@ def _extract_binary_from_zip(archive: Path, target: Path) -> None:
 def main() -> None:
     _BIN_DIR.mkdir(parents=True, exist_ok=True)
 
+    version_file = _BIN_DIR / "VERSION.txt"
+    up_to_date = version_file.is_file() and version_file.read_text().strip() == VERSION
+
     errors: list[str] = []
+    downloaded: list[str] = []
+    skipped: list[str] = []
 
     for asset_name, target_name, expected_sha256 in _ASSETS:
         target = _BIN_DIR / target_name
@@ -137,8 +142,9 @@ def main() -> None:
 
         print(f"\n[{target_name}]")
 
-        if target.exists():
-            print("  Already present — skipping (delete to re-download)")
+        if target.exists() and up_to_date:
+            print(f"  Already present at v{VERSION} — skipping (delete to re-download)")
+            skipped.append(target_name)
             continue
 
         try:
@@ -160,6 +166,7 @@ def main() -> None:
                 target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
             print(f"  -> {target}")
+            downloaded.append(target_name)
 
         except Exception as exc:  # noqa: BLE001
             print(f"  ERROR: {exc}")
@@ -175,7 +182,10 @@ def main() -> None:
             print(f"  {e}")
         sys.exit(1)
     else:
-        print("All binaries downloaded successfully.")
+        print(
+            f"Done — {len(downloaded)} downloaded, {len(skipped)} already up to date "
+            f"at v{VERSION}."
+        )
 
 
 if __name__ == "__main__":
