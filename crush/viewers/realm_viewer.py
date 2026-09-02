@@ -534,6 +534,7 @@ class RealmViewer(QWidget):
             tabs.addTab(lbl, "Header")
 
         unsupported_row_format = self._data.get("unsupported_row_format")
+        streaming_form = self._data.get("streaming_form")
 
         # --- Schema ---
         schema: list[str] = self._data.get("schema", [])
@@ -572,6 +573,19 @@ class RealmViewer(QWidget):
             tabs.addTab(
                 TreeViewer({f"Tables ({len(schema)})": schema_tree}, tabs), "Schema"
             )
+        elif streaming_form is not None and not streaming_form.get("footer_valid"):
+            # Group::write() "streaming form" file whose end-of-file footer
+            # is missing/corrupt, so the real top ref could not be resolved
+            # — an empty schema here means "unresolvable", not "zero tables".
+            lbl = QLabel(
+                "This file is in Realm's streaming form (e.g. a Group::write() "
+                "export), but the end-of-file footer is missing or its magic "
+                "cookie doesn't match, so the real top reference could not be "
+                "resolved and no schema could be decoded. See Properties panel "
+                "→ Streaming form."
+            )
+            lbl.setWordWrap(True)
+            tabs.addTab(lbl, "Schema")
 
         # --- Top Refs ---
         top_refs = self._data.get("top_refs", {})

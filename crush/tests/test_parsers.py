@@ -495,6 +495,99 @@ def test_realm_schema_extraction_format9_big_blobs(tmp_path: Path) -> None:
     assert "9" in result.metadata["Row data"]
 
 
+def _to_streaming_form(data: bytes, *, corrupt_magic: bool = False) -> bytes:
+    """Rewrite a normal-form Realm file's bytes into Group::write() streaming
+    form (alloc_slab.hpp/.cpp SlabAlloc::is_file_on_streaming_form /
+    StreamingFooter, verified against realm-core v5.23.9 source): top_ref[0]
+    becomes the sentinel 0xFFFFFFFFFFFFFFFF, top_ref[1]/flags/reserved become
+    0, and the real (previously active) top ref moves into a 16-byte footer
+    appended at the end of the file, followed by the magic cookie
+    0x3034125237E526C8. Body bytes are untouched -- every array still lives
+    at its original absolute offset, only the header's own top-ref encoding
+    changes, exactly as a real streaming-form export would.
+    """
+    buf = bytearray(data)
+    top_ref0 = int.from_bytes(buf[0:8], "little")
+    top_ref1 = int.from_bytes(buf[8:16], "little")
+    fmt0, fmt1, flags = buf[20], buf[21], buf[23]
+    active = flags & 1
+    active_ref = top_ref1 if active else top_ref0
+    active_fmt = fmt1 if active else fmt0
+
+    buf[0:8] = (0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
+    buf[8:16] = (0).to_bytes(8, "little")
+    buf[20] = active_fmt
+    buf[21] = 0
+    buf[22] = 0
+    buf[23] = 0  # select bit cleared -> slot_selector 0, matching the sentinel check
+
+    magic = 0x3034125237E526C8
+    if corrupt_magic:
+        magic ^= 0xFF
+    buf += active_ref.to_bytes(8, "little") + magic.to_bytes(8, "little")
+    return bytes(buf)
+
+
+def test_realm_streaming_form_resolves_via_footer(
+    tmp_path: Path, realm_fixture: Path,
+) -> None:
+    """Group::write() streaming form must not decode as an empty schema.
+
+    Reported by the issue #55 reporter (abrignoni), 2026-09-02: his own
+    generator initially used Group::write() (producing the streaming form
+    -- top_ref[0] a sentinel, real top ref in an end-of-file footer) rather
+    than SharedGroup + WriteTransaction::commit() (the normal on-disk form
+    an app actually leaves behind). Before this fix, the parser read
+    top_ref[0]'s literal sentinel value as an offset, which is always out
+    of bounds, so _extract_schema silently returned []  -- read by him as
+    "the generator failed" when the file was in fact valid, just in a form
+    this parser didn't yet resolve. Realm Studio's file-export feature can
+    also produce this form, so it's a form real examiners will encounter,
+    not just a generator quirk.
+    """
+    streaming_bytes = _to_streaming_form(realm_fixture.read_bytes())
+    streaming_path = tmp_path / "streaming.realm"
+    streaming_path.write_bytes(streaming_bytes)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "streaming.realm")
+
+    result = RealmParser().parse(node, vfs)
+
+    # minimal.realm's own known-output schema (see realm_fixture/its known-
+    # output test) -- must resolve identically once routed through the
+    # streaming-form footer instead of the normal two-slot header.
+    assert result.data["schema"] == ["metadata", "class_Evidence"]
+    assert result.data["streaming_form"] == {
+        "top_ref": 96, "footer_valid": True,
+    }
+    assert "resolved from end-of-file footer" in result.metadata["Streaming form"]
+
+
+def test_realm_streaming_form_corrupt_footer_marked_explicit(
+    tmp_path: Path, realm_fixture: Path,
+) -> None:
+    """A streaming-form file with a missing/corrupt footer must surface an
+    explicit status, never a silent empty schema indistinguishable from a
+    genuinely empty database (see feedback_explicit_unsupported_marking).
+    """
+    corrupt_bytes = _to_streaming_form(realm_fixture.read_bytes(), corrupt_magic=True)
+    corrupt_path = tmp_path / "streaming_corrupt.realm"
+    corrupt_path.write_bytes(corrupt_bytes)
+
+    vfs = DirectoryVFS(tmp_path)
+    root = vfs.root()
+    node = next(c for c in root.children if c.name == "streaming_corrupt.realm")
+
+    result = RealmParser().parse(node, vfs)
+
+    assert result.data["schema"] == []
+    assert result.data["streaming_form"] == {"top_ref": None, "footer_valid": False}
+    assert "could not be resolved" in result.metadata["Streaming form"]
+    assert result.metadata["Tables found"] == "Unresolved (see Streaming form)"
+
+
 def test_realm_pre_cluster_mixed_column(tmp_path: Path) -> None:
     """Pre-Cluster (file format < 10) Mixed column decode -- the one old
     ColumnType with zero real-file coverage (neither of the two real format

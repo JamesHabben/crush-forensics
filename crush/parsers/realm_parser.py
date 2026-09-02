@@ -74,6 +74,18 @@ from crush.parsers.base import AbstractParser, ParseResult
 _HEADER_SIZE = 24
 _MNEMONIC = b"T-DB"
 
+# Realm's "streaming form" (alloc_slab.hpp/.cpp SlabAlloc::is_file_on_streaming_form
+# / StreamingFooter, verified against realm-core v5.23.9 source): Group::write()
+# — used by e.g. Realm Studio's file-export feature, not the normal
+# SharedGroup-driven form an app leaves on disk — writes top_ref[0] as this
+# sentinel with the select-bit flag left unset, and puts the real top ref in a
+# 16-byte footer at the very end of the file (8 bytes top ref, then 8 bytes
+# magic cookie). See issue #55 follow-up: a streaming-form file was silently
+# decoding to schema: [] because top_ref[0]'s literal value (the sentinel) was
+# being read as an offset.
+_STREAMING_SENTINEL = 0xFFFFFFFFFFFFFFFF
+_STREAMING_FOOTER_MAGIC = 0x3034125237E526C8
+
 # File format 10 introduced the Cluster/ClusterTree row layout this module's
 # row/table decoders are written against; older formats use a structurally
 # different layout they can't read. See issue #55.
@@ -164,6 +176,34 @@ def _parse_realm_header(data: bytes) -> dict[str, Any] | None:
         "Flags": f"0x{flags:02x}",
         "Active top reference": active,
     }
+
+
+def _resolve_streaming_form(
+    data: bytes, top_ref0: int, active_idx: int,
+) -> dict[str, Any] | None:
+    """Detect and resolve Realm's "streaming form" top ref, if this file is one.
+
+    Only meaningful when active_idx == 0 (slot_selector == 0) and top_ref0 is
+    the sentinel — a streaming file has no second/inactive top ref at all
+    (SlabAlloc::init_streaming_header sets top_ref[1]=0, format[1]=0, so
+    top_ref1 is not a real alternative version, just padding).
+
+    Returns None when the file is not in streaming form. Otherwise returns
+    {"top_ref": int | None, "footer_valid": bool} — footer_valid is False
+    when the file is too short for a 16-byte footer or the magic cookie
+    doesn't match (corrupt/truncated), which must not be treated the same
+    as "zero tables" (see feedback_explicit_unsupported_marking).
+    """
+    if not (active_idx == 0 and top_ref0 == _STREAMING_SENTINEL):
+        return None
+    if len(data) < _HEADER_SIZE + 16:
+        return {"top_ref": None, "footer_valid": False}
+    footer = data[-16:]
+    top_ref = int.from_bytes(footer[0:8], "little")
+    magic = int.from_bytes(footer[8:16], "little")
+    if magic != _STREAMING_FOOTER_MAGIC:
+        return {"top_ref": None, "footer_valid": False}
+    return {"top_ref": top_ref, "footer_valid": True}
 
 
 # ---------------------------------------------------------------------------
@@ -2930,49 +2970,90 @@ class RealmParser(AbstractParser):
         inactive_schema: list[str] = []
         inactive_ref_idx: int = 0
         active_idx = 0
+        streaming_form: dict[str, Any] | None = None
 
         if header_info:
             top_ref0_val = int.from_bytes(full_data[0:8], "little")
             top_ref1_val = int.from_bytes(full_data[8:16], "little")
             active_idx = header_info["Active top reference"]
 
-            hdr0 = _parse_array_header(full_data, top_ref0_val)
-            hdr1 = _parse_array_header(full_data, top_ref1_val)
-            children0 = _extract_root_children(full_data, top_ref0_val, file_size)
-            children1 = _extract_root_children(full_data, top_ref1_val, file_size)
+            streaming_form = _resolve_streaming_form(full_data, top_ref0_val, active_idx)
 
-            top_refs = {
-                "top_ref_0": {
-                    "offset": top_ref0_val,
-                    "active": active_idx == 0,
-                    "array_header": hdr0,
-                    "children": children0,
-                },
-                "top_ref_1": {
-                    "offset": top_ref1_val,
-                    "active": active_idx == 1,
-                    "array_header": hdr1,
-                    "children": children1,
-                },
-                "active_index": active_idx,
-            }
+            if streaming_form is not None:
+                # Group::write() streaming form: no second/inactive version
+                # exists (top_ref1 is unused padding, always 0), and the real
+                # top ref lives in the footer, not in top_ref0's literal value.
+                resolved_ref = streaming_form["top_ref"]
+                footer_valid = streaming_form["footer_valid"]
+                display_offset = resolved_ref if footer_valid else top_ref0_val
+                hdr0 = _parse_array_header(full_data, display_offset) if footer_valid else None
+                children0 = (
+                    _extract_root_children(full_data, display_offset, file_size)
+                    if footer_valid else []
+                )
+                top_refs = {
+                    "top_ref_0": {
+                        "offset": display_offset,
+                        "active": True,
+                        "array_header": hdr0,
+                        "children": children0,
+                    },
+                    "top_ref_1": {
+                        "offset": top_ref1_val,
+                        "active": False,
+                        "array_header": None,
+                        "children": [],
+                    },
+                    "active_index": 0,
+                    "streaming_form": streaming_form,
+                }
 
-            active_offset = top_ref1_val if active_idx == 1 else top_ref0_val
-            inactive_offset = top_ref0_val if active_idx == 1 else top_ref1_val
-            inactive_ref_idx = 0 if active_idx == 1 else 1
-            # Each top ref carries its own format byte (fmt0/fmt1) rather than
-            # a single file-wide value: mid-upgrade, Realm briefly writes the
-            # new format to one ref while the other still reads the old one.
-            active_format = (
-                header_info["File format (top ref 1)"] if active_idx == 1
-                else header_info["File format (top ref 0)"]
-            )
-            inactive_format = (
-                header_info["File format (top ref 0)"] if active_idx == 1
-                else header_info["File format (top ref 1)"]
-            )
-            schema = _extract_schema(full_data, active_offset, file_size)
-            inactive_schema = _extract_schema(full_data, inactive_offset, file_size)
+                active_offset = display_offset if footer_valid else -1
+                inactive_offset = -1
+                inactive_ref_idx = 0
+                active_format = header_info["File format (top ref 0)"]
+                inactive_format = 0
+                schema = _extract_schema(full_data, active_offset, file_size) if footer_valid else []
+                inactive_schema = []
+            else:
+                hdr0 = _parse_array_header(full_data, top_ref0_val)
+                hdr1 = _parse_array_header(full_data, top_ref1_val)
+                children0 = _extract_root_children(full_data, top_ref0_val, file_size)
+                children1 = _extract_root_children(full_data, top_ref1_val, file_size)
+
+                top_refs = {
+                    "top_ref_0": {
+                        "offset": top_ref0_val,
+                        "active": active_idx == 0,
+                        "array_header": hdr0,
+                        "children": children0,
+                    },
+                    "top_ref_1": {
+                        "offset": top_ref1_val,
+                        "active": active_idx == 1,
+                        "array_header": hdr1,
+                        "children": children1,
+                    },
+                    "active_index": active_idx,
+                }
+
+                active_offset = top_ref1_val if active_idx == 1 else top_ref0_val
+                inactive_offset = top_ref0_val if active_idx == 1 else top_ref1_val
+                inactive_ref_idx = 0 if active_idx == 1 else 1
+                # Each top ref carries its own format byte (fmt0/fmt1) rather
+                # than a single file-wide value: mid-upgrade, Realm briefly
+                # writes the new format to one ref while the other still
+                # reads the old one.
+                active_format = (
+                    header_info["File format (top ref 1)"] if active_idx == 1
+                    else header_info["File format (top ref 0)"]
+                )
+                inactive_format = (
+                    header_info["File format (top ref 0)"] if active_idx == 1
+                    else header_info["File format (top ref 1)"]
+                )
+                schema = _extract_schema(full_data, active_offset, file_size)
+                inactive_schema = _extract_schema(full_data, inactive_offset, file_size)
 
         strings = _scan_strings(full_data)
 
@@ -3064,6 +3145,7 @@ class RealmParser(AbstractParser):
             "strings": strings,
             "freed_blocks": freed_blocks,
             "unsupported_row_format": unsupported_row_format,
+            "streaming_form": streaming_form,
         }
 
         meta: dict[str, Any] = {
@@ -3080,8 +3162,27 @@ class RealmParser(AbstractParser):
                 f"{header_info['File format (top ref 1)']}"
             )
             meta["Active top ref"] = str(active_idx)
+            if streaming_form is not None:
+                # Group::write() "streaming" form (e.g. a Realm Studio file
+                # export) — top_ref[0] is a sentinel, not an offset; see
+                # _resolve_streaming_form. Always state this explicitly,
+                # since a corrupt footer must not read the same as "decoded,
+                # zero tables".
+                if streaming_form["footer_valid"]:
+                    meta["Streaming form"] = (
+                        f"Yes — top ref resolved from end-of-file footer "
+                        f"(offset {streaming_form['top_ref']})"
+                    )
+                else:
+                    meta["Streaming form"] = (
+                        "Yes — but the footer is missing or its magic cookie "
+                        "doesn't match; top ref could not be resolved "
+                        "(truncated or corrupt file)"
+                    )
             if schema:
                 meta["Tables found"] = str(len(schema))
+            elif streaming_form is not None and not streaming_form["footer_valid"]:
+                meta["Tables found"] = "Unresolved (see Streaming form)"
             if unsupported_row_format is not None:
                 pc_tables = tables + inactive_tables
                 gaps = {
