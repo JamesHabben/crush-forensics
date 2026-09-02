@@ -1200,6 +1200,35 @@ def test_read_array_bool_null_is_exactly_three() -> None:
     assert _read_array_bool(raw, 0, len(raw), nullable=False) == [False, True, True, True]
 
 
+def test_decode_column_values_int_width1_stays_int_not_bool() -> None:
+    """Modern (Cluster, format >=10) Int-column dispatch must not decode a
+    1-bit-wide leaf as bool. Realm sizes an array's storage width from the
+    largest value it ever held, so an Int column whose values all happen to
+    fit in one bit (e.g. a small counter, or plain 0/1 values) legitimately
+    uses the same 1-bit encoding as a real Bool column -- confusing the two
+    made such a column display as True/False instead of 0/1 (found by the
+    issue #55 reporter, @abrignoni, on a real-world file; see
+    test_realm_pre_cluster equivalents and _read_scalar_leaf's own
+    docstring for the pre-Cluster side of this same bug class).
+
+    Exercises the actual dispatch path a Cluster leaf goes through
+    (_decode_column_values -> type_code == 0 -> _read_scalar_leaf), not
+    just the shared low-level reader in isolation, and checks real `int`
+    type -- not just `== 0`/`== 1`, which a Python bool would also satisfy.
+    """
+    from crush.parsers.realm_parser import _decode_column_values
+
+    # 4 values, 1 bit each: 0, 1, 0, 1 -> byte = 0b0000_1010 = 0x0A
+    raw = _array_hdr(0x01, 4) + _pad8(bytes([0b00001010]))
+    info = {
+        "is_dictionary": False, "type_code": 0, "nullable": False,
+        "is_list": False, "is_set": False,
+    }
+    result = _decode_column_values(raw, 0, len(raw), info)
+    assert result == [0, 1, 0, 1]
+    assert all(type(v) is int for v in result)
+
+
 def test_read_array_string_short_inline() -> None:
     """ArrayStringShort: pad byte == width -> NULL; else content length is
     (width-1)-pad (array_string_short.hpp)."""
