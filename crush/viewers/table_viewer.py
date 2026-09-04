@@ -84,6 +84,14 @@ from crush.viewers.blob_inspector import BlobInspector
 _MAX_COL_WIDTH = 400
 _QUERY_ROW_LIMIT = 10_000
 _COLUMN_SIZE_SAMPLE = 250
+_VIRTUAL_PATH_BAD_CHARS = re.compile(r"[\\/:\x00-\x1f]+")
+
+
+def _virtual_path_component(value: object, fallback: str) -> str:
+    text = str(value or "").strip()
+    text = _VIRTUAL_PATH_BAD_CHARS.sub("_", text)
+    text = text.strip(" .")
+    return text or fallback
 
 
 class _QueryResultModel(QAbstractTableModel):
@@ -487,9 +495,11 @@ class TableViewer(QWidget):
         parent: QWidget | None = None,
         show_db_tabs: bool = True,
         summary_nav_table: str | None = None,
+        source_name: str = "sqlite",
     ) -> None:
         super().__init__(parent)
         self._data = data
+        self._source_name = source_name
         self._show_db_tabs = show_db_tabs
         self._summary_nav_table = summary_nav_table
         self._col_ts_formats: dict[int, str] = {}
@@ -2363,20 +2373,31 @@ class TableViewer(QWidget):
                 col_header = self._table_view.model().headerData(
                     index.column(), Qt.Orientation.Horizontal
                 ) or "blob"
+                artifact_path = self._virtual_cell_path(index, col_header)
                 if action == open_tab_auto:
-                    self.open_bytes_requested.emit(data_to_open, str(col_header))
+                    self.open_bytes_requested.emit(data_to_open, artifact_path)
                 elif action == open_tab_hex:
                     self.open_bytes_with_format_requested.emit(
-                        data_to_open, str(col_header), "__hex__"
+                        data_to_open, artifact_path, "__hex__"
                     )
                 elif action == open_tab_text:
                     self.open_bytes_with_format_requested.emit(
-                        data_to_open, str(col_header), "__text__"
+                        data_to_open, artifact_path, "__text__"
                     )
                 elif action == open_tab_proto:
                     self.open_bytes_with_format_requested.emit(
-                        data_to_open, str(col_header), "Protobuf (schema-less)"
+                        data_to_open, artifact_path, "Protobuf (schema-less)"
                     )
+
+    def _virtual_cell_path(self, index: QModelIndex, col_header: object) -> str:
+        db_name = _virtual_path_component(self._source_name, "sqlite")
+        table_name = "query" if self._query_results_active else self._table_combo.currentText()
+        table = _virtual_path_component(table_name, "table")
+        column = _virtual_path_component(col_header, "column")
+        row_index = self._table_view.model().index(index.row(), 0)
+        row_value = self._table_view.model().data(row_index, Qt.ItemDataRole.DisplayRole)
+        row = _virtual_path_component(row_value, str(index.row() + 1))
+        return f"/virtual/{db_name}/{table}/{column}/{row}"
 
     def _on_header_context_menu(self, pos: object) -> None:
         header = self._table_view.horizontalHeader()
