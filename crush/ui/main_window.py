@@ -1387,6 +1387,21 @@ class MainWindow(QMainWindow):
             self._viewer_tabs.addTab(viewer, "hex")
             self._viewer_tabs.setCurrentIndex(self._viewer_tabs.count() - 1)
             return
+        if parser_display_name == "__text__":
+            from crush.parsers.base import ParseResult
+            from crush.core.vfs import BytesVFS
+
+            vfs = BytesVFS(data, name=filename_hint)
+            node = vfs.root()
+            try:
+                text = data.decode("utf-8")
+            except Exception:
+                text = data.decode("utf-8", errors="replace")
+            result = ParseResult(viewer_type="text", data=text)
+            self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata, vfs)
+            self._status.showMessage(f"Opened artifact: {filename_hint}  [Text]")
+            return
 
         vfs = BytesVFS(data, name=filename_hint)
         node = vfs.root()
@@ -1748,6 +1763,8 @@ class MainWindow(QMainWindow):
         base_view = make_viewer(result, node, vfs, self)
         if hasattr(base_view, "open_bytes_requested"):
             base_view.open_bytes_requested.connect(self._open_bytes_as_artifact)
+        if hasattr(base_view, "open_bytes_with_format_requested"):
+            base_view.open_bytes_with_format_requested.connect(self._open_bytes_with_format)
         if hasattr(base_view, "open_table_requested"):
             base_view.open_table_requested.connect(self._open_table_as_tab)
         possibly_encrypted = result.metadata.get("Possibly Encrypted")

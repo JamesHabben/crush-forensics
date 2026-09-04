@@ -479,6 +479,8 @@ class TableViewer(QWidget):
         }
     """
     open_bytes_requested = Signal(bytes, str)
+    open_bytes_with_format_requested = Signal(bytes, str, object)
+
     def __init__(
         self,
         data: dict[str, Any],
@@ -2305,18 +2307,21 @@ class TableViewer(QWidget):
         blob_preview = menu.addAction("Inspect Cell…")
         blob_hex = menu.addAction("Open in Hex")
         blob_export = menu.addAction("Export…")
-        open_tab = menu.addAction("Open as new tab")
+        open_tab_menu = menu.addMenu("Open as new tab")
+        open_tab_auto = open_tab_menu.addAction("Auto-detect")
+        open_tab_hex = open_tab_menu.addAction("Hex")
+        open_tab_text = open_tab_menu.addAction("Text")
+        open_tab_proto = open_tab_menu.addAction("Protobuf")
         blob_bytes = _coerce_blob(blob)
         display_val = self._table_view.model().data(index, Qt.ItemDataRole.DisplayRole)
         display_str = str(display_val) if display_val is not None else ""
         has_display = bool(display_str)
         is_blob_placeholder = display_str.startswith("<BLOB ") and display_str.endswith(" B>")
         if blob_bytes is None and not has_display:
-            open_tab.setEnabled(False)
+            open_tab_menu.setEnabled(False)
             blob_preview.setEnabled(False)
             blob_hex.setEnabled(False)
             blob_export.setEnabled(False)
-            open_tab.setEnabled(False)
         if blob_bytes is None and has_display:
             blob_preview.setEnabled(True)
             blob_hex.setEnabled(True)
@@ -2350,7 +2355,7 @@ class TableViewer(QWidget):
                 self._export_blob(blob_bytes)
             elif has_display:
                 self._export_blob(str(display_val).encode("utf-8", errors="replace"))
-        elif action == open_tab:
+        elif action in {open_tab_auto, open_tab_hex, open_tab_text, open_tab_proto}:
             data_to_open = blob_bytes
             if data_to_open is None and has_display:
                 data_to_open = str(display_val).encode("utf-8", errors="replace")
@@ -2358,7 +2363,20 @@ class TableViewer(QWidget):
                 col_header = self._table_view.model().headerData(
                     index.column(), Qt.Orientation.Horizontal
                 ) or "blob"
-                self.open_bytes_requested.emit(data_to_open, str(col_header))
+                if action == open_tab_auto:
+                    self.open_bytes_requested.emit(data_to_open, str(col_header))
+                elif action == open_tab_hex:
+                    self.open_bytes_with_format_requested.emit(
+                        data_to_open, str(col_header), "__hex__"
+                    )
+                elif action == open_tab_text:
+                    self.open_bytes_with_format_requested.emit(
+                        data_to_open, str(col_header), "__text__"
+                    )
+                elif action == open_tab_proto:
+                    self.open_bytes_with_format_requested.emit(
+                        data_to_open, str(col_header), "Protobuf (schema-less)"
+                    )
 
     def _on_header_context_menu(self, pos: object) -> None:
         header = self._table_view.horizontalHeader()
