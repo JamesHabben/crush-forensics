@@ -1153,12 +1153,22 @@ def find_sibling(node: VFSNode, vfs: VFS, name_suffix: str) -> "VFSNode | None":
 
 
 def _find_node_by_path(node: VFSNode, path: str) -> "VFSNode | None":
+    """Descend by matching path segments — touches only the nodes on the direct
+    path from the root to the target (roughly tree depth), not every node in
+    the tree. The previous version recursed into every child unconditionally,
+    so looking up one sibling file cost a full traversal of the whole VFS —
+    unnoticeable on a small source, but a real hit on a full filesystem
+    extraction with hundreds of thousands of nodes."""
     if node.path == path:
         return node
+    node_prefix = node.path if node.path.endswith("/") else node.path + "/"
+    if node.path != "/" and not path.startswith(node_prefix):
+        return None  # target isn't under this subtree at all
+    remainder = path[len(node_prefix):] if node.path != "/" else path.lstrip("/")
+    next_name = remainder.split("/", 1)[0]
     for child in node.children:
-        result = _find_node_by_path(child, path)
-        if result is not None:
-            return result
+        if child.name == next_name:
+            return _find_node_by_path(child, path)
     return None
 
 

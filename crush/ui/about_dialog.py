@@ -63,6 +63,12 @@ your support makes this project possible.</p>
     <td><a href="https://github.com/cclgroupltd/ccl-leveldb">CCL Forensics</a></td>
   </tr>
   <tr class="alt">
+    <td><b>mmkv-parser</b></td>
+    <td>MMKV key-value store reader</td>
+    <td class="lic">MIT</td>
+    <td><a href="https://github.com/abrignoni/mmkv-parser">Alexis Brignoni</a></td>
+  </tr>
+  <tr>
     <td><b>{ul_label}</b></td>
     <td>Apple Unified Log (.tracev3 / .logarchive) converter — bundled in portable builds; when running from source, place the binary under <code>crush/bin/unifiedlog_iterator/</code></td>
     <td class="lic">Apache 2.0</td>

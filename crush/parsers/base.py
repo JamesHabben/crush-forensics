@@ -22,6 +22,7 @@ ViewerType = Literal[
     "realm",
     "leveldb",
     "pdf",
+    "mmkv",
 ]
 
 
