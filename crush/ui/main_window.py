@@ -1198,6 +1198,24 @@ class MainWindow(QMainWindow):
                 self._status.showMessage(f"Protobuf parse error: {exc}")
                 QMessageBox.warning(self, "Protobuf parse error", str(exc))
             return
+        if mode == "mmkv":
+            self._hash_node_if_integrity(node, vfs)
+            from crush.parsers.mmkv_parser import MMKVParser
+            parser = MMKVParser()
+            try:
+                result = parser.parse(node, vfs)
+                result = self._enrich_with_format_info(parser, node, vfs, result)
+                self._show_result(node, result, vfs)
+                self._props_panel.update_properties(node, result.metadata, vfs)
+                self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME}]")
+            except Exception as exc:
+                self._status.showMessage(f"MMKV parse error: {exc}")
+                QMessageBox.warning(self, "MMKV parse error", str(exc))
+            return
+        if mode == "mmkv_encrypted":
+            self._hash_node_if_integrity(node, vfs)
+            self._open_encrypted_mmkv(node, vfs)
+            return
         if mode == "realm_encrypted":
             self._hash_node_if_integrity(node, vfs)
             self._open_encrypted_realm(node, vfs)
@@ -1270,6 +1288,38 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._status.showMessage(f"Realm decrypt error: {exc}")
             QMessageBox.warning(self, "Realm decrypt error", str(exc))
+            return
+
+        result = self._enrich_with_format_info(parser, node, vfs, result)
+        self._show_result(node, result, vfs)
+        self._props_panel.update_properties(node, result.metadata, vfs)
+        self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME} — decrypted]")
+
+    def _open_encrypted_mmkv(self, node: VFSNode, vfs: VFS, was_wrong: bool = False) -> None:
+        from crush.core.passwords import WrongPasswordError
+        from crush.parsers.mmkv_parser import MMKVParser
+        from crush.ui.mmkv_key_dialog import MMKVKeyDialog
+
+        dialog = MMKVKeyDialog(self, was_wrong=was_wrong)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._status.showMessage("Load cancelled: encryption key required")
+            return
+        key_bytes = dialog.key_bytes()
+        if key_bytes is None:
+            self._status.showMessage("Load cancelled: encryption key required")
+            if dialog.is_hex():
+                QMessageBox.warning(self, "MMKV decrypt error", "Not a valid hex string.")
+            return
+
+        parser = MMKVParser()
+        try:
+            result = parser.parse(node, vfs, password=key_bytes, aes256=dialog.is_aes256())
+        except WrongPasswordError:
+            self._open_encrypted_mmkv(node, vfs, was_wrong=True)
+            return
+        except Exception as exc:
+            self._status.showMessage(f"MMKV decrypt error: {exc}")
+            QMessageBox.warning(self, "MMKV decrypt error", str(exc))
             return
 
         result = self._enrich_with_format_info(parser, node, vfs, result)

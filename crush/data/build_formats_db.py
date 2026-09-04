@@ -1067,6 +1067,49 @@ FORMATS: list[dict[str, Any]] = [
         "status": "reviewed",
     },
     {
+        "name": "MMKV Key-Value Store",
+        "short_name": "MMKV",
+        "category": "database",
+        "forensic_relevance": (
+            "Tencent's mmap-backed key-value store (github.com/Tencent/MMKV, BSD-3-Clause), "
+            "used by many Android and iOS apps in place of SharedPreferences or "
+            "NSUserDefaults — including WeChat, TikTok, Temu, SHEIN, Xiaohongshu, Weibo, "
+            "Discord and Coinbase. Usually found as a file named mmkv.default (the "
+            "library's default instance) inside a folder literally named mmkv, alongside "
+            "a same-named <name>.crc sibling file carrying integrity/encryption metadata. "
+            "Has no magic bytes, so it cannot be auto-detected — open via the filesystem "
+            "panel's Open as -> MMKV context menu action. "
+            "The store is append-only between rewrites: setting a key appends a new entry "
+            "rather than editing the old one, so superseded values and removed keys "
+            "(recorded as a zero-length value, not a real deletion) remain recoverable in "
+            "file order until the next full rewrite. Optionally AES-CFB encrypted, with the "
+            "key stored by neither file — decryptable if the app's key is known."
+        ),
+        "platforms": ["Android", "iOS"],
+        "parser_class": "MMKVParser",
+        "magic": [],
+        "extensions": [],
+        "links": [
+            (
+                "Tencent/MMKV (upstream project)",
+                "https://github.com/Tencent/MMKV",
+            ),
+            (
+                "MMKV design deep dive (Tencent/MMKV wiki)",
+                "https://github.com/Tencent/MMKV/wiki/design_eng",
+            ),
+            (
+                "abrignoni/mmkv-parser — reference reader crush's parser is built on (MIT)",
+                "https://github.com/abrignoni/mmkv-parser",
+            ),
+            (
+                "You down with MMKV? (LEAPPs Blog)",
+                "https://leapps.org/blog-post?post=2026-09-04-you-down-with-mmkv",
+            ),
+        ],
+        "status": "reviewed",
+    },
+    {
         "name": "Apple Unified Log Archive (logarchive)",
         "short_name": "logarchive",
         "category": "log",

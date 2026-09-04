@@ -40,6 +40,7 @@ Supported viewers (more planned):
 - SEGB v1/v2 Viewer
 - ABX (Android Binary XML) Viewer
 - LevelDB Viewer (Chrome LevelDB / Android app databases)
+- MMKV Viewer (Tencent's mmap-backed key-value store, Android/iOS; explicit-only via "Open as")
 - Image Viewer
 - Media Viewer (audio/video)
 - Multi-Log Studio (multi-source log analysis, format auto-detection)
@@ -216,6 +217,8 @@ This project builds on the great work of the DFIR community. The following third
 - [ccl_leveldb](https://github.com/cclgroupltd/ccl-leveldb) — LevelDB / Chrome LevelDB module (MIT)
 
 Apple Unified Log (`.tracev3` / `.logarchive`) parsing uses the [macos-UnifiedLogs](https://github.com/mandiant/macos-UnifiedLogs) `unifiedlog_iterator` binary by [Mandiant](https://github.com/mandiant) (Apache License 2.0). The binary is bundled automatically in portable builds. When running from source, run `scripts/download_unifiedlog_binaries.py` to download the platform binaries into `crush/bin/unifiedlog_iterator/` (they are git-ignored and never committed).
+
+MMKV parsing is built on [mmkv-parser](https://github.com/abrignoni/mmkv-parser) by [Alexis Brignoni](https://github.com/abrignoni) (MIT License), vendored unmodified under `crush/third_party/mmkv_parser/`.
 
 **Send to Peach** hands log sources off to [peach-forensics](https://github.com/kalink0/peach-forensics), a sibling forensic log viewer (Apache License 2.0) — tagging, Splunk-style search, no IPC after launch. Sessions aren't persisted for sources Crush had to extract or decrypt first (`--ephemeral-session`), so a handoff never leaves a durable, unencrypted copy of evidence behind. The binary is bundled the same way as `unifiedlog_iterator`; run `scripts/download_peach_binaries.py` when running from source to populate `crush/bin/peach/`.
 
