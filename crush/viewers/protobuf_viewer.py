@@ -186,6 +186,13 @@ _FULLTEXT_ROLE = Qt.ItemDataRole.UserRole + 1
 _ENTRY_ROLE = Qt.ItemDataRole.UserRole + 2  # the field's original decoded entry dict
 
 
+class _EntryRef:
+    """Keep decoded entries opaque to Qt's QVariant conversion."""
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self.entry = entry
+
+
 def _entry_to_jsonable(entry: dict[str, Any]) -> dict[str, Any]:
     """Convert one decoded protobuf entry to a JSON-safe dict.
 
@@ -329,7 +336,7 @@ class ProtobufTreeWidget(QWidget):
             wt_item = QStandardItem(wire_type)
             val_item.setData(raw_bytes, _RAW_ROLE)
             val_item.setData(full_text, _FULLTEXT_ROLE)
-            field_item.setData(entry, _ENTRY_ROLE)
+            field_item.setData(_EntryRef(entry), _ENTRY_ROLE)
             for item in (field_item, val_item, wt_item):
                 item.setEditable(False)
             parent.appendRow([field_item, val_item, wt_item])
@@ -453,7 +460,8 @@ class ProtobufTreeWidget(QWidget):
         value = val_item.data(_FULLTEXT_ROLE)
         value = value if value is not None else val_item.text()
         raw_bytes = val_item.data(_RAW_ROLE)
-        subtree_entry = key_item.data(_ENTRY_ROLE)  # None for interpretation hint rows
+        subtree_ref = key_item.data(_ENTRY_ROLE)  # None for interpretation hint rows
+        subtree_entry = subtree_ref.entry if isinstance(subtree_ref, _EntryRef) else None
 
         menu = QMenu(self)
         inspect_action = menu.addAction("Inspect BLOB…")

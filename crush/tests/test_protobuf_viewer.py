@@ -181,6 +181,18 @@ def test_export_subtree_enabled_only_on_field_rows_not_interpretation_rows(qapp)
         assert interp_key_item.data(_ENTRY_ROLE) is None  # hint row -> not exportable
 
 
+def test_tree_stores_uint64_max_entry_without_qt_int_overflow(qapp) -> None:
+    """Subtree export metadata must not make Qt convert uint64 values to signed ints."""
+    raw = b"\x08" + _varint((1 << 64) - 1)
+    decoded, warning, _ = _decode_message(raw)
+    assert not warning
+
+    widget = ProtobufTreeWidget(decoded)
+    root = widget._model.invisibleRootItem()
+    field_item = root.child(0, 0)
+    assert field_item.data(_ENTRY_ROLE) is not None
+
+
 def test_export_entries_writes_text_file(qapp, tmp_path, monkeypatch) -> None:
     from PySide6.QtWidgets import QFileDialog
 
