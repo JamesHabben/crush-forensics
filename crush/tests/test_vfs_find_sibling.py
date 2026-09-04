@@ -71,6 +71,19 @@ def test_root_level_file() -> None:
     assert find_sibling(target, vfs, "-wal") is sibling
 
 
+def test_finds_sibling_with_windows_style_backslash_paths() -> None:
+    """DirectoryVFS builds node.path from str(Path(...)), which is
+    backslash-separated on Windows — the lookup must still work there
+    (regression for the CI failure where MMKV's .crc lookup silently
+    returned None on Windows runners)."""
+    target = _file("mmkv.default", "C:\\data\\mmkv\\mmkv.default")
+    sibling = _file("mmkv.default.crc", "C:\\data\\mmkv\\mmkv.default.crc")
+    root = _dir("/", "C:\\", [_dir("data", "C:\\data", [_dir("mmkv", "C:\\data\\mmkv", [target, sibling])])])
+    vfs = _FakeVFS(root)
+
+    assert find_sibling(target, vfs, ".crc") is sibling
+
+
 def test_finds_sibling_in_large_tree_without_full_traversal() -> None:
     """Build a wide/deep tree and confirm the lookup still works correctly
     (the actual performance win — only touching nodes on the direct path,
