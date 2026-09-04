@@ -1375,7 +1375,13 @@ class MainWindow(QMainWindow):
         from crush.viewers.value_inspector import ValueInspector
         ValueInspector.inspect("", self)
 
-    def _open_bytes_with_format(self, data: bytes, filename_hint: str, parser_display_name: object) -> None:
+    def _open_bytes_with_format(
+        self,
+        data: bytes,
+        filename_hint: str,
+        parser_display_name: object,
+        source_path: str = "",
+    ) -> None:
         """Open *data* in the appropriate viewer, honouring an explicit format choice."""
         import crush.parsers  # noqa: F401 — ensures all parsers are registered
         from crush.core.registry import ParserRegistry
@@ -1385,6 +1391,8 @@ class MainWindow(QMainWindow):
             from crush.parsers.base import ParseResult
 
             vfs = BytesVFS(data, name=filename_hint)
+            if source_path:
+                setattr(vfs, "source_path", source_path)
             node = vfs.root()
             result = ParseResult(viewer_type="hex", data=data)
             self._show_result(node, result, vfs)
@@ -1396,6 +1404,8 @@ class MainWindow(QMainWindow):
             from crush.core.vfs import BytesVFS
 
             vfs = BytesVFS(data, name=filename_hint)
+            if source_path:
+                setattr(vfs, "source_path", source_path)
             node = vfs.root()
             try:
                 text = data.decode("utf-8")
@@ -1408,6 +1418,8 @@ class MainWindow(QMainWindow):
             return
 
         vfs = BytesVFS(data, name=filename_hint)
+        if source_path:
+            setattr(vfs, "source_path", source_path)
         node = vfs.root()
 
         if parser_display_name is None:
@@ -1430,13 +1442,17 @@ class MainWindow(QMainWindow):
             self._status.showMessage(f"Parse error: {exc}")
             QMessageBox.warning(self, "Parse error", str(exc))
 
-    def _open_bytes_as_artifact(self, data: bytes, name: str) -> None:
+    def _open_bytes_as_artifact(
+        self, data: bytes, name: str, source_path: str = ""
+    ) -> None:
         """Open in-memory bytes (e.g. a BLOB cell) as a new tab using the best parser."""
         import crush.parsers  # noqa: F401 — triggers parser registration
         from crush.core.registry import ParserRegistry
         from crush.core.vfs import BytesVFS
 
         vfs = BytesVFS(data, name=name)
+        if source_path:
+            setattr(vfs, "source_path", source_path)
         node = vfs.root()
         parser = ParserRegistry.best(node, vfs)
         if parser is None:
@@ -1766,9 +1782,17 @@ class MainWindow(QMainWindow):
         from crush.ui.viewer_factory import make_viewer
         base_view = make_viewer(result, node, vfs, self)
         if hasattr(base_view, "open_bytes_requested"):
-            base_view.open_bytes_requested.connect(self._open_bytes_as_artifact)
+            base_view.open_bytes_requested.connect(
+                lambda data, name, source_path=node.path: self._open_bytes_as_artifact(
+                    data, name, source_path
+                )
+            )
         if hasattr(base_view, "open_bytes_with_format_requested"):
-            base_view.open_bytes_with_format_requested.connect(self._open_bytes_with_format)
+            base_view.open_bytes_with_format_requested.connect(
+                lambda data, name, fmt, source_path=node.path: self._open_bytes_with_format(
+                    data, name, fmt, source_path
+                )
+            )
         if hasattr(base_view, "open_table_requested"):
             base_view.open_table_requested.connect(self._open_table_as_tab)
         possibly_encrypted = result.metadata.get("Possibly Encrypted")
@@ -1789,36 +1813,41 @@ class MainWindow(QMainWindow):
                 tabbed.addTab(QLabel("Unable to load hex view."), "Hex")
                 widget = tabbed
 
-        label = node.path
         existing_idx = -1
         for i in range(self._viewer_tabs.count()):
             w = self._viewer_tabs.widget(i)
             if w is None:
                 continue
-            if w.property("crush_path") == node.path and w.property("crush_viewer") == result.viewer_type:
+            if (
+                w.property("crush_path") == node.path
+                and w.property("crush_viewer") == result.viewer_type
+            ):
                 existing_idx = i
                 break
         if existing_idx >= 0:
             self._viewer_tabs.setCurrentIndex(existing_idx)
             return
-        if result.viewer_type == "hex":
-            label = f"{node.path} [Hex]"
-        elif result.viewer_type == "multi_log":
-            label = f"{node.path} [Multi-Log]"
         widget.setProperty("crush_path", node.path)
+        widget.setProperty("crush_name", node.name)
         widget.setProperty("crush_viewer", result.viewer_type)
+        widget.setProperty("crush_display_format", self._display_format_label(result))
+        source_path = self._virtual_source_path(node, vfs)
+        if source_path:
+            widget.setProperty("crush_source_path", source_path)
         widget.setProperty("crush_vfs", vfs)
-        idx = self._viewer_tabs.addTab(widget, label)
-        self._viewer_tabs.setTabToolTip(idx, node.path)
+        idx = self._viewer_tabs.addTab(widget, self._tab_base_label(node))
         self._viewer_tabs.setCurrentIndex(idx)
+        self._refresh_tab_labels()
 
     def _close_tab(self, index: int) -> None:
         self._viewer_tabs.removeTab(index)
         self._props_panel.clear()
+        self._refresh_tab_labels()
 
     def _close_all_tabs(self) -> None:
         self._viewer_tabs.clear()
         self._props_panel.clear()
+        self._refresh_tab_labels()
 
     def _close_other_tabs(self, keep_index: int) -> None:
         keep_widget = self._viewer_tabs.widget(keep_index)
@@ -1826,6 +1855,70 @@ class MainWindow(QMainWindow):
             if self._viewer_tabs.widget(i) is not keep_widget:
                 self._viewer_tabs.removeTab(i)
         self._props_panel.clear()
+        self._refresh_tab_labels()
+
+    def _display_format_label(self, result: ParseResult) -> str:
+        if result.viewer_type == "hex":
+            return "Hex"
+        if result.viewer_type == "text":
+            return "Text"
+        if result.viewer_type == "multi_log":
+            return "Multi-Log"
+        if result.viewer_type == "protobuf":
+            return "Protobuf (schema-less)"
+        if result.metadata.get("Format"):
+            return str(result.metadata["Format"])
+        labels = {
+            "abx": "Android Binary XML (ABX)",
+            "image": "Image",
+            "leveldb": "LevelDB",
+            "log": "Log",
+            "media": "Media",
+            "pdf": "PDF",
+            "realm": "Realm Database",
+            "table": "Table",
+            "tree": "Tree",
+            "tree_text": "Tree/Text",
+        }
+        return labels.get(result.viewer_type, result.viewer_type)
+
+    def _tab_base_label(self, node: VFSNode) -> str:
+        path_name = Path(node.path).name
+        return path_name or node.name or node.path
+
+    def _virtual_source_path(self, node: VFSNode, vfs: VFS) -> str:
+        if not node.path.startswith("/virtual/"):
+            return ""
+        source_path = getattr(vfs, "source_path", "")
+        return str(source_path) if source_path else ""
+
+    def _refresh_tab_labels(self) -> None:
+        path_counts: dict[str, int] = {}
+        for i in range(self._viewer_tabs.count()):
+            widget = self._viewer_tabs.widget(i)
+            if widget is None:
+                continue
+            path = str(widget.property("crush_path") or "")
+            path_counts[path] = path_counts.get(path, 0) + 1
+
+        for i in range(self._viewer_tabs.count()):
+            widget = self._viewer_tabs.widget(i)
+            if widget is None:
+                continue
+            path = str(widget.property("crush_path") or "")
+            label = str(widget.property("crush_name") or Path(path).name or path)
+            display_format = str(widget.property("crush_display_format") or "")
+            if path_counts.get(path, 0) > 1 and display_format:
+                label = f"{label} [{display_format}]"
+            self._viewer_tabs.setTabText(i, label)
+
+            tooltip = [f"Path: {path}"]
+            if display_format:
+                tooltip.append(f"Display format: {display_format}")
+            source_path = str(widget.property("crush_source_path") or "")
+            if source_path:
+                tooltip.append(f"Source: {source_path}")
+            self._viewer_tabs.setTabToolTip(i, "\n".join(tooltip))
 
     def _show_tab_context_menu(self, pos: object) -> None:
         tab_bar = self._viewer_tabs.tabBar()
@@ -1872,6 +1965,8 @@ class MainWindow(QMainWindow):
             if w.property("crush_vfs") is vfs:
                 self._viewer_tabs.removeTab(i)
                 closed += 1
+        if closed:
+            self._refresh_tab_labels()
         return closed
 
     def _close_source(self, vfs: VFS) -> None:
