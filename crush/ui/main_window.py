@@ -1382,10 +1382,14 @@ class MainWindow(QMainWindow):
         from crush.core.vfs import BytesVFS
 
         if parser_display_name == "__hex__":
-            from crush.viewers.hex_viewer import HexViewer
-            viewer = HexViewer(data, self)
-            self._viewer_tabs.addTab(viewer, "hex")
-            self._viewer_tabs.setCurrentIndex(self._viewer_tabs.count() - 1)
+            from crush.parsers.base import ParseResult
+
+            vfs = BytesVFS(data, name=filename_hint)
+            node = vfs.root()
+            result = ParseResult(viewer_type="hex", data=data)
+            self._show_result(node, result, vfs)
+            self._props_panel.update_properties(node, result.metadata, vfs)
+            self._status.showMessage(f"Opened artifact: {filename_hint}  [Hex]")
             return
         if parser_display_name == "__text__":
             from crush.parsers.base import ParseResult
