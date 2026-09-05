@@ -1914,11 +1914,9 @@ class MainWindow(QMainWindow):
         if source_path:
             widget.setProperty("crush_source_path", source_path)
         widget.setProperty("crush_vfs", vfs)
-        idx = self._viewer_tabs.addTab(widget, self._tab_base_label(node))
         widget.setProperty("crush_node", node)
         widget.setProperty("crush_metadata", result.metadata)
-        idx = self._viewer_tabs.addTab(widget, label)
-        self._viewer_tabs.setTabToolTip(idx, node.path)
+        idx = self._viewer_tabs.addTab(widget, self._tab_base_label(node))
         self._viewer_tabs.setCurrentIndex(idx)
         self._refresh_tab_labels()
 
