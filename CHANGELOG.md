@@ -33,6 +33,10 @@ All notable changes to Crush will be documented in this file.
 
 - Value Inspector and BLOB Inspector added to the README feature list with screenshots — both were long-standing, heavily-used features that were never actually documented there.
 
+### Changed
+
+- Bumped bundled peach from v0.4.1 to v0.6.0: adds Android Intrusion Log support (48-rule tagging pack, for Android 16+'s Advanced Protection Mode spyware-forensics logging), grows the EVTX/journald rule packs, fixes two Built-in Rules dialog bugs, and adds a configurable staging directory (peach's own File → Settings…) for `--ephemeral-session` and Portable Case export/import working files. See peach's own [release notes](https://github.com/kalink0/peach-forensics/releases/tag/v0.6.0) for the full list.
+
 ## v0.17.0 - 2026-08-31
 
 **Focus: Standalone .gz VFS support; SQLite Freelist Recovery refinements; bundled peach updated to v0.4.1.**
