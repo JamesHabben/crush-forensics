@@ -692,7 +692,6 @@ Right-click a `.logarchive` bundle, an iOS full-FS acquisition's `diagnostics/` 
 - **Tools → Peach → Binary Path…** points at a different peach executable instead of the bundled one — useful if Crush hasn't been updated in a while but a newer peach build is available. Leave blank to use the bundled version.
 - **Tools → Peach → Open Peach** launches a plain, empty peach instance with no source pre-filled — for when you just want to work in peach directly (e.g. loading further sources from its own file picker) without sending anything from Crush first.
 - A `.logarchive` bundle is handed to peach as-is. An iOS diagnostics folder is recreated as a temporary `diagnostics/` + `uuidtext/` sibling pair (peach's own raw-acquisition layout) rather than the flattened bundle format `unifiedlog_iterator` needs — the two tools expect different input shapes. Any other file is passed through unchanged (or extracted from an archive/backup first, if needed).
-- Sources materialized from an archive/backup (rather than already sitting on a real filesystem) are passed with `--ephemeral-session`, so peach doesn't leave a durable, unencrypted session copy of temp-extracted or decrypted evidence behind once it closes.
 
 **Sending multiple sources at once**
 

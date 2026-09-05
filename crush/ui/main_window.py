@@ -1636,13 +1636,6 @@ class MainWindow(QMainWindow):
         living on a real filesystem are passed straight through; archive/
         backup-backed sources are extracted to a temp dir first, with
         --cleanup-dir telling peach to remove it once peach closes.
-
-        Extracted sources also get --ephemeral-session: a source that
-        needed materializing from an archive/backup wasn't already sitting
-        on disk in the clear, so peach must not leave a durable, unencrypted
-        session copy of it behind once it closes. A source that was already
-        a real filesystem path doesn't need this — it was already at rest,
-        unencrypted, wherever it lives.
         """
         resolved = self._resolve_peach_source(node, vfs)
         if resolved is None:
@@ -1658,7 +1651,6 @@ class MainWindow(QMainWindow):
                 [source_path],
                 cleanup_dirs=[cleanup_dir] if cleanup_dir else [],
                 override_path=override,
-                ephemeral_session=cleanup_dir is not None,
             )
             self._status.showMessage(f"Sent to Peach: {node.path}")
         except (FileNotFoundError, RuntimeError, OSError) as exc:
@@ -1703,7 +1695,6 @@ class MainWindow(QMainWindow):
                 sources,
                 cleanup_dirs=cleanup_dirs,
                 override_path=override,
-                ephemeral_session=bool(cleanup_dirs),
             )
             msg = f"Sent {len(sources)} source(s) to Peach"
             if failed:
