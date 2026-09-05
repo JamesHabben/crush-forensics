@@ -1381,8 +1381,16 @@ class MainWindow(QMainWindow):
         filename_hint: str,
         parser_display_name: object,
         source_path: str = "",
+        extra_metadata: dict[str, str] | None = None,
     ) -> None:
-        """Open *data* in the appropriate viewer, honouring an explicit format choice."""
+        """Open *data* in the appropriate viewer, honouring an explicit format choice.
+
+        *extra_metadata* (e.g. the originating table/query, column, and row
+        for a SQLite blob cell opened via "Open as new tab") is merged into
+        the Properties panel's fields — kept separate from *filename_hint*
+        (the tab's short, technical dedup path) since a SQL query can be
+        arbitrarily long and shouldn't bloat the path or tab tooltip.
+        """
         import crush.parsers  # noqa: F401 — ensures all parsers are registered
         from crush.core.registry import ParserRegistry
         from crush.core.vfs import BytesVFS
@@ -1395,6 +1403,11 @@ class MainWindow(QMainWindow):
                 setattr(vfs, "source_path", source_path)
             node = vfs.root()
             result = ParseResult(viewer_type="hex", data=data)
+            if extra_metadata:
+                result.metadata.update(extra_metadata)
+                if source_path:
+                    result.metadata["Source file"] = source_path
+                result.metadata["Display format"] = self._display_format_label(result)
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(f"Opened artifact: {filename_hint}  [Hex]")
@@ -1412,6 +1425,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 text = data.decode("utf-8", errors="replace")
             result = ParseResult(viewer_type="text", data=text)
+            if extra_metadata:
+                result.metadata.update(extra_metadata)
+                if source_path:
+                    result.metadata["Source file"] = source_path
+                result.metadata["Display format"] = self._display_format_label(result)
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(f"Opened artifact: {filename_hint}  [Text]")
@@ -1435,6 +1453,11 @@ class MainWindow(QMainWindow):
             return
         try:
             result = parser.parse(node, vfs)
+            if extra_metadata:
+                result.metadata.update(extra_metadata)
+                if source_path:
+                    result.metadata["Source file"] = source_path
+                result.metadata["Display format"] = self._display_format_label(result)
             self._show_result(node, result, vfs)
             self._props_panel.update_properties(node, result.metadata, vfs)
             self._status.showMessage(f"Opened pasted data  [{parser.DISPLAY_NAME}]")
@@ -1789,8 +1812,8 @@ class MainWindow(QMainWindow):
             )
         if hasattr(base_view, "open_bytes_with_format_requested"):
             base_view.open_bytes_with_format_requested.connect(
-                lambda data, name, fmt, source_path=node.path: self._open_bytes_with_format(
-                    data, name, fmt, source_path
+                lambda data, name, fmt, extra_metadata, source_path=node.path: self._open_bytes_with_format(
+                    data, name, fmt, source_path, extra_metadata
                 )
             )
         if hasattr(base_view, "open_table_requested"):
