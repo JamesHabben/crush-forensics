@@ -124,20 +124,12 @@ def launch_peach(
     sources: Sequence[Path],
     cleanup_dirs: Sequence[Path] = (),
     override_path: str = "",
-    ephemeral_session: bool = False,
 ) -> None:
     """Spawn peach with the given source paths, fire-and-forget.
 
     No IPC after launch, by design — matches peach's own "runs completely
     independently" model. Crush never waits for, or tracks, the process
     afterward.
-
-    *ephemeral_session* should be set whenever *sources* came from a temp
-    extraction (i.e. *cleanup_dirs* is non-empty) or another decrypted/
-    otherwise-not-already-durable origin — without it, peach would leave a
-    permanent, unencrypted session copy of the handed-off evidence behind
-    in its own sessions directory, outliving the temp extraction and
-    bypassing whatever protection the original source had.
     """
     binary = find_peach_binary(override_path)
 
@@ -153,8 +145,6 @@ def launch_peach(
                 pass
 
     cmd: list[str] = [str(binary)]
-    if ephemeral_session:
-        cmd.append("--ephemeral-session")
     for src in sources:
         cmd += ["--add-source", str(src)]
     for d in cleanup_dirs:

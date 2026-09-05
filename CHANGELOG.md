@@ -12,9 +12,12 @@ All notable changes to Crush will be documented in this file.
 - Protobuf Viewer's schema-less decode tree now has a selected-value box showing the full value below the tree, and a right-click menu (Copy key / Copy value / Copy key = value / Inspect BLOB…) — matching the other tree-based viewers. Addresses [#60](https://github.com/kalink0/crush-forensics/issues/60), reported by [@JamesHabben](https://github.com/JamesHabben).
 - Protobuf Viewer's schema-less decode tree now has Expand All / Collapse All buttons and a search box that filters to matching field names/values — matching the other tree-based viewers, and matching against each field's full value even when the tree cell shows it truncated. Addresses [#63](https://github.com/kalink0/crush-forensics/issues/63).
 - Protobuf Viewer's schema-less decode tree now has an Export… toolbar button (whole tree, as text or JSON) and a right-click "Export Subtree as Text/JSON…" action for a single field and its children. Both formats always contain a bytes field's complete value — only the tree's on-screen cell still shows the parser's 64-byte display preview. Addresses [#64](https://github.com/kalink0/crush-forensics/issues/64).
+- Added MMKV support (Tencent's mmap-backed key-value store used by many Android/iOS apps) — right-click a file → **Open as** → **MMKV**, or **MMKV (Encrypted)…** for an AES-encrypted store. MMKV has no magic bytes, so this is explicit-only, never auto-detected. Every entry is shown in file order and classified as Live, Superseded, or Removed, since MMKV is append-only between rewrites and superseded/removed values remain physically recoverable — see `crush/docs/format-support.md` for the full details. Built on [abrignoni/mmkv-parser](https://github.com/abrignoni/mmkv-parser) (MIT), with the on-disk format independently re-verified against Tencent/MMKV's own source. Addresses [#68](https://github.com/kalink0/crush-forensics/issues/68), reported by [@abrignoni](https://github.com/abrignoni).
+- *Tools → Log Temp Directory…* lets you point log conversion's intermediate files (currently Apple Unified Log `.tracev3`/`.logarchive` processing) at a directory of your choice instead of the OS default temp location.
 
 ### Bug Fixes
 
+- Fixed `find_sibling()` (used by SQLite's `-wal`/`-shm` discovery, and now also MMKV's `.crc` lookup) recursing into every node of the whole VFS tree to find one sibling file in the same directory, instead of descending by path segment — unnoticeable on a small source, but a real cost on a full filesystem extraction with hundreds of thousands of files.
 - Fixed the LevelDB viewer's Records table sorting the Seq column as text instead of numerically (`1, 10, 100, 2, 20…`) — the table's filter proxy has its own independent sort role, separate from the underlying model's, that was never set to match. Addresses [#61](https://github.com/kalink0/crush-forensics/issues/61), reported by [@JamesHabben](https://github.com/JamesHabben).
 - Fixed Multi-Log Studio's PID column sorting the same way (text, not numeric) — found while auditing the codebase for the same bug class as [#61](https://github.com/kalink0/crush-forensics/issues/61).
 - Fixed the Protobuf parser discarding a length-delimited field's payload past its 64-byte display preview instead of retaining the full bytes — meant a string/bytes/submessage field longer than that was silently missing data from the newly added value box and "Inspect BLOB…" action. Found while implementing [#60](https://github.com/kalink0/crush-forensics/issues/60).
@@ -25,10 +28,15 @@ All notable changes to Crush will be documented in this file.
 - Fixed the Realm parser leaving row/table decode failures unexplained — the Properties panel's "Row data" field now states the parser's own specific diagnosis instead of a generic or missing message.
 - Fixed ABX files with more than one top-level element (e.g. `settings_secure.xml`) failing to build a tree view — these are now wrapped in a synthetic root instead of raising an XML syntax error.
 - Fixed the ABX decoder silently dropping unsupported XML tokens and truncating the rest of the file on any decode error with no indication of scope, and raw XML-illegal control characters (a known real-world occurrence in `settings_secure.xml` values) breaking the reconstruction entirely — all three now produce explicit, visible warnings instead of silent or total data loss.
+- Fixed the Properties panel only ever reflecting whichever viewer tab was most recently opened — switching back to an already-open tab left it showing the previous tab's properties until something in the file tree was clicked. It now refreshes on every tab switch.
 
 ### Documentation
 
 - Value Inspector and BLOB Inspector added to the README feature list with screenshots — both were long-standing, heavily-used features that were never actually documented there.
+
+### Changed
+
+- Bumped bundled peach from v0.4.1 to v0.6.0: adds Android Intrusion Log support (48-rule tagging pack, for Android 16+'s Advanced Protection Mode spyware-forensics logging), grows the EVTX/journald rule packs, fixes two Built-in Rules dialog bugs, and adds a configurable staging directory (peach's own File → Settings…) for `--ephemeral-session` and Portable Case export/import working files. See peach's own [release notes](https://github.com/kalink0/peach-forensics/releases/tag/v0.6.0) for the full list.
 
 ## v0.17.0 - 2026-08-31
 

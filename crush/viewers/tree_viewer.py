@@ -25,6 +25,16 @@ from crush.ui.wheel_scroll import install_horizontal_wheel_scroll
 _USER_ROLE = Qt.ItemDataRole.UserRole
 
 
+class _ObjRef:
+    """Keep the node's original decoded value opaque to Qt's QVariant
+    conversion — a bare dict/list/int stored via setData() gets walked by
+    shiboken looking for a native Qt type, and a value in the uint64 range
+    (e.g. an NSKeyedArchiver UID) raises OverflowError partway through."""
+
+    def __init__(self, obj: Any) -> None:
+        self.obj = obj
+
+
 class TreeViewer(QWidget):
     """Viewer for plist / XML / any nested dict/list structure."""
 
@@ -123,7 +133,7 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(f"({len(display_obj)} keys)")
             type_item = QStandardItem(classname if classname else "dict")
-            key_item.setData(obj, _USER_ROLE)
+            key_item.setData(_ObjRef(obj), _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -135,7 +145,7 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(f"({len(obj)} items)")
             type_item = QStandardItem(type_name)
-            key_item.setData(obj, _USER_ROLE)
+            key_item.setData(_ObjRef(obj), _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -147,7 +157,7 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(f"<BLOB {len(obj):,} B>")
             type_item = QStandardItem("bytes")
-            key_item.setData(obj, _USER_ROLE)
+            key_item.setData(_ObjRef(obj), _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -157,7 +167,7 @@ class TreeViewer(QWidget):
             key_item = QStandardItem(str(key))
             val_item = QStandardItem(str(obj))
             type_item = QStandardItem(type_name)
-            key_item.setData(obj, _USER_ROLE)
+            key_item.setData(_ObjRef(obj), _USER_ROLE)
             key_item.setEditable(False)
             val_item.setEditable(False)
             type_item.setEditable(False)
@@ -240,7 +250,9 @@ class TreeViewer(QWidget):
         key_item = self._model.itemFromIndex(self._model.index(row, 0, parent_index))
         if key_item is None:
             return None, ""
-        return key_item.data(_USER_ROLE), key_item.text()
+        ref = key_item.data(_USER_ROLE)
+        obj = ref.obj if isinstance(ref, _ObjRef) else None
+        return obj, key_item.text()
 
     def _on_context_menu(self, pos: object) -> None:
         index = self._tree.indexAt(pos)

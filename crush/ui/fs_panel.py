@@ -469,14 +469,17 @@ class FilesystemPanel(QWidget):
         open_hex_action = open_as_menu.addAction("Hex")
         open_text_action = open_as_menu.addAction("Text")
         open_proto_action = open_as_menu.addAction("Protobuf")
+        open_mmkv_action = open_as_menu.addAction("MMKV")
         open_realm_encrypted_action = None
         open_sqlcipher_action = None
         open_pdf_encrypted_action = None
+        open_mmkv_encrypted_action = None
         if not node.is_dir:
             open_as_menu.addSeparator()
             open_realm_encrypted_action = open_as_menu.addAction("Realm DB (Encrypted)…")
             open_sqlcipher_action = open_as_menu.addAction("SQLite DB (Encrypted)…")
             open_pdf_encrypted_action = open_as_menu.addAction("PDF (Encrypted)…")
+            open_mmkv_encrypted_action = open_as_menu.addAction("MMKV (Encrypted)…")
         open_logs_folder_action = None
         open_multi_log_action   = None
         add_multi_log_action    = None
@@ -552,6 +555,10 @@ class FilesystemPanel(QWidget):
             self.open_requested.emit(node, vfs, "send_to_peach")
         elif action == open_proto_action:
             self.open_requested.emit(node, vfs, "protobuf")
+        elif action == open_mmkv_action:
+            self.open_requested.emit(node, vfs, "mmkv")
+        elif action == open_mmkv_encrypted_action:
+            self.open_requested.emit(node, vfs, "mmkv_encrypted")
         elif action == open_realm_encrypted_action:
             self.open_requested.emit(node, vfs, "realm_encrypted")
         elif action == open_sqlcipher_action:

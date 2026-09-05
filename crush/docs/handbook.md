@@ -73,9 +73,11 @@ The left panel shows the loaded archive or folder as a tree.
     - **Hex** — force raw hex view
     - **Text** — force text view
     - **Protobuf** — schema-less Protobuf decode (optionally load a `.proto` schema)
+    - **MMKV** — open a Tencent MMKV key-value store. MMKV has no magic bytes at all, so — unlike every other format — it can never be auto-detected from content; this is the only way to open one
     - **Realm DB (Encrypted)…** — decrypt and open a Realm database given its 64-byte encryption key (as a hex string). This is the only way to open an encrypted `.realm` file — a normal double-click never prompts for a key, since a header that fails to decode is equally consistent with "encrypted" and "corrupt/non-standard" and can't be told apart from content alone
     - **SQLite DB (Encrypted)…** — open a SQLCipher-encrypted SQLite database given its password or raw key, with optional advanced cipher parameters. Same no-auto-prompt rule as Realm above
     - **PDF (Encrypted)…** — open a password-protected PDF; a wrong password re-prompts instead of failing silently. Same no-auto-prompt rule as Realm above
+    - **MMKV (Encrypted)…** — decrypt and open an AES-CFB-encrypted MMKV store, given the key as text or hex, and AES-128/256. Unlike Realm, an MMKV store's encryption status is unambiguous (its `.crc` meta file's AES vector says so directly), so a wrong key re-prompts rather than the tool ever guessing "encrypted vs. corrupt"
   - **Open in Multi-Log Studio** — structured log viewer with level/time/text filtering and multi-source support
   - **Add to Multi-Log Studio** — adds the file as an additional source to the currently open studio tab
   - **Open External (Default)** — hand off to the OS default application
@@ -357,6 +359,37 @@ Right-click any record row to open the [BLOB Inspector](#blob-inspector) for the
 
 **LOG tabs** — if `LOG` or `LOG.old` files exist in the directory, each gets a dedicated read-only tab showing the complete file content with a *Find* toolbar.
 
+### MMKV Viewer
+
+Opens a Tencent MMKV key-value store (used by many Android/iOS apps in place of `SharedPreferences`/`NSUserDefaults`) via right-click → **Open as** → **MMKV** or **MMKV (Encrypted)…** — see the [Filesystem Panel](#filesystem-panel) section above. MMKV has no magic bytes, so it's never opened by double-click/auto-detection.
+
+**Overview tab** — the store's `.crc` meta file fields (when that companion file is found next to the main file): meta version, sequence (full write-back count), CRC-32 of the data region as recorded, and whether the store is AES-encrypted. Also shows total entry counts by state.
+
+**Records tab** — every entry in file order (not collapsed to one row per key), since MMKV is append-only between rewrites — a changed key appends a new entry rather than editing the old one, so superseded values remain physically present and readable until the next full rewrite:
+
+| Column | Content |
+|---|---|
+| Index | Position of this write in the file |
+| Key | The key string |
+| State | **Live** (the last write for this key), **Superseded** (an earlier write of a key later overwritten), or **Removed** (this write's value container is zero-length, MMKV's own way of representing a removal) |
+| Type | `string`, `int`, `bytes`, or `empty`, from how the value's container decodes — MMKV records a value's type in the app's own code, not in the file, so a container that's exactly a length-prefixed string decodes as text and anything else as a scalar varint |
+| Size (B) | Byte size of the value's complete container |
+| Value | The decoded value, truncated on-screen for very large values (real stores can hold multi-megabyte values, e.g. a cached JSON blob) — the complete value stays reachable via search, CSV export, and **Copy Value** |
+
+Toolbar controls:
+
+| Control | Action |
+|---|---|
+| **All / Live / Superseded / Removed** | Filter records by state |
+| **Search** | Case-insensitive filter across all columns, matching a large value's complete text even where the Value cell shows it truncated |
+| **Export CSV…** | Save currently visible rows, including the value's complete text and complete raw container as hex |
+
+Selecting a row shows the value's complete raw container (untouched, including MMKV's own internal length-prefix byte(s) for a string value) in the hex pane below the table, and the complete decoded value text in the **Value:** field beneath that.
+
+Right-click a row for:
+- **Inspect Value…** — opens the [BLOB Inspector](#blob-inspector) on the value's own bytes, with MMKV's internal length-prefix already removed (unlike the hex pane above, which always shows the complete untouched container) — so a value that's itself JSON/XML/etc. can actually be re-parsed as such, defaulting to the already-decoded text view
+- **Copy Key** / **Copy Value** — copies the key, or the value's complete decoded text, to the clipboard
+
 ### BLOB Inspector
 
 The BLOB Inspector is a shared decode dialog for examining raw binary fields. It opens as a non-modal window — the rest of the UI stays fully accessible and multiple inspector windows can be open at the same time.
@@ -626,6 +659,8 @@ A high-performance log viewer for large files and multi-source correlation. Open
 
 **Parallel conversion** — when loading a `.logarchive` or iOS diagnostics directory, Crush splits the `Persist/*.tracev3` files across multiple `unifiedlog_iterator` processes (one per physical CPU core by default). Results appear in the viewer as each chunk finishes. The benchmark script `scripts/benchmark_unified_log.py` can be used to measure throughput and tune the worker count with `--workers N`.
 
+**Tools → Log Temp Directory…** sets the base directory for the intermediate files created during log conversion — currently used when converting `.tracev3`/`.logarchive` sources (extracted archive contents, per-worker mini-logarchives, and the converter's output CSVs) — useful when the OS default temp location is on a small or slow disk. Leave blank to use the OS default.
+
 **Context menu** (right-click any row):
 
 | Option | Action |
@@ -657,7 +692,6 @@ Right-click a `.logarchive` bundle, an iOS full-FS acquisition's `diagnostics/` 
 - **Tools → Peach → Binary Path…** points at a different peach executable instead of the bundled one — useful if Crush hasn't been updated in a while but a newer peach build is available. Leave blank to use the bundled version.
 - **Tools → Peach → Open Peach** launches a plain, empty peach instance with no source pre-filled — for when you just want to work in peach directly (e.g. loading further sources from its own file picker) without sending anything from Crush first.
 - A `.logarchive` bundle is handed to peach as-is. An iOS diagnostics folder is recreated as a temporary `diagnostics/` + `uuidtext/` sibling pair (peach's own raw-acquisition layout) rather than the flattened bundle format `unifiedlog_iterator` needs — the two tools expect different input shapes. Any other file is passed through unchanged (or extracted from an archive/backup first, if needed).
-- Sources materialized from an archive/backup (rather than already sitting on a real filesystem) are passed with `--ephemeral-session`, so peach doesn't leave a durable, unencrypted session copy of temp-extracted or decrypted evidence behind once it closes.
 
 **Sending multiple sources at once**
 

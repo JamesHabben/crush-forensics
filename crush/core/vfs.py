@@ -1148,20 +1148,41 @@ class BytesVFS(VFS):
 
 
 def find_sibling(node: VFSNode, vfs: VFS, name_suffix: str) -> "VFSNode | None":
-    """Find a sibling VFSNode whose name equals node.name + name_suffix."""
+    """Find a sibling VFSNode whose name equals node.name + name_suffix.
+
+    Path comparisons are done on a "/"-normalized form: ``DirectoryVFS`` builds
+    ``node.path`` from ``str(Path(...))``, which uses backslashes on Windows,
+    while archive-backed VFS implementations always use "/" — normalizing here
+    lets the same lookup work against either.
+    """
     target_name = node.name + name_suffix
-    parent_path = node.path.rsplit("/", 1)[0] or "/"
+    node_path = node.path.replace("\\", "/")
+    parent_path = node_path.rsplit("/", 1)[0] or "/"
     target_path = (parent_path.rstrip("/") + "/" + target_name).replace("//", "/")
     return _find_node_by_path(vfs.root(), target_path)
 
 
 def _find_node_by_path(node: VFSNode, path: str) -> "VFSNode | None":
-    if node.path == path:
+    """Descend by matching path segments — touches only the nodes on the direct
+    path from the root to the target (roughly tree depth), not every node in
+    the tree. The previous version recursed into every child unconditionally,
+    so looking up one sibling file cost a full traversal of the whole VFS —
+    unnoticeable on a small source, but a real hit on a full filesystem
+    extraction with hundreds of thousands of nodes.
+
+    *path* is already "/"-normalized by the caller; node.path is normalized
+    here for comparison (see find_sibling's docstring)."""
+    node_path = node.path.replace("\\", "/")
+    if node_path == path:
         return node
+    node_prefix = node_path if node_path.endswith("/") else node_path + "/"
+    if node_path != "/" and not path.startswith(node_prefix):
+        return None  # target isn't under this subtree at all
+    remainder = path[len(node_prefix):] if node_path != "/" else path.lstrip("/")
+    next_name = remainder.split("/", 1)[0]
     for child in node.children:
-        result = _find_node_by_path(child, path)
-        if result is not None:
-            return result
+        if child.name == next_name:
+            return _find_node_by_path(child, path)
     return None
 
 

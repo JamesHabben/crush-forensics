@@ -693,6 +693,7 @@ class MainWindow(QMainWindow):
         self._integrity_mode_action.toggled.connect(self._set_integrity_mode)
         tools_menu.addAction(self._integrity_mode_action)
         tools_menu.addAction("Indexing Threads…", self._set_prescan_workers)
+        tools_menu.addAction("Log Temp Directory…", self._set_log_temp_dir)
         peach_menu = tools_menu.addMenu("Peach")
         peach_menu.addAction("Open Peach", self._open_peach_standalone)
         peach_menu.addAction("Binary Path…", self._set_peach_binary_path)
@@ -1198,6 +1199,24 @@ class MainWindow(QMainWindow):
                 self._status.showMessage(f"Protobuf parse error: {exc}")
                 QMessageBox.warning(self, "Protobuf parse error", str(exc))
             return
+        if mode == "mmkv":
+            self._hash_node_if_integrity(node, vfs)
+            from crush.parsers.mmkv_parser import MMKVParser
+            parser = MMKVParser()
+            try:
+                result = parser.parse(node, vfs)
+                result = self._enrich_with_format_info(parser, node, vfs, result)
+                self._show_result(node, result, vfs)
+                self._props_panel.update_properties(node, result.metadata, vfs)
+                self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME}]")
+            except Exception as exc:
+                self._status.showMessage(f"MMKV parse error: {exc}")
+                QMessageBox.warning(self, "MMKV parse error", str(exc))
+            return
+        if mode == "mmkv_encrypted":
+            self._hash_node_if_integrity(node, vfs)
+            self._open_encrypted_mmkv(node, vfs)
+            return
         if mode == "realm_encrypted":
             self._hash_node_if_integrity(node, vfs)
             self._open_encrypted_realm(node, vfs)
@@ -1270,6 +1289,38 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._status.showMessage(f"Realm decrypt error: {exc}")
             QMessageBox.warning(self, "Realm decrypt error", str(exc))
+            return
+
+        result = self._enrich_with_format_info(parser, node, vfs, result)
+        self._show_result(node, result, vfs)
+        self._props_panel.update_properties(node, result.metadata, vfs)
+        self._status.showMessage(f"{node.path}  [{parser.DISPLAY_NAME} — decrypted]")
+
+    def _open_encrypted_mmkv(self, node: VFSNode, vfs: VFS, was_wrong: bool = False) -> None:
+        from crush.core.passwords import WrongPasswordError
+        from crush.parsers.mmkv_parser import MMKVParser
+        from crush.ui.mmkv_key_dialog import MMKVKeyDialog
+
+        dialog = MMKVKeyDialog(self, was_wrong=was_wrong)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._status.showMessage("Load cancelled: encryption key required")
+            return
+        key_bytes = dialog.key_bytes()
+        if key_bytes is None:
+            self._status.showMessage("Load cancelled: encryption key required")
+            if dialog.is_hex():
+                QMessageBox.warning(self, "MMKV decrypt error", "Not a valid hex string.")
+            return
+
+        parser = MMKVParser()
+        try:
+            result = parser.parse(node, vfs, password=key_bytes, aes256=dialog.is_aes256())
+        except WrongPasswordError:
+            self._open_encrypted_mmkv(node, vfs, was_wrong=True)
+            return
+        except Exception as exc:
+            self._status.showMessage(f"MMKV decrypt error: {exc}")
+            QMessageBox.warning(self, "MMKV decrypt error", str(exc))
             return
 
         result = self._enrich_with_format_info(parser, node, vfs, result)
@@ -1643,13 +1694,6 @@ class MainWindow(QMainWindow):
         living on a real filesystem are passed straight through; archive/
         backup-backed sources are extracted to a temp dir first, with
         --cleanup-dir telling peach to remove it once peach closes.
-
-        Extracted sources also get --ephemeral-session: a source that
-        needed materializing from an archive/backup wasn't already sitting
-        on disk in the clear, so peach must not leave a durable, unencrypted
-        session copy of it behind once it closes. A source that was already
-        a real filesystem path doesn't need this — it was already at rest,
-        unencrypted, wherever it lives.
         """
         resolved = self._resolve_peach_source(node, vfs)
         if resolved is None:
@@ -1665,7 +1709,6 @@ class MainWindow(QMainWindow):
                 [source_path],
                 cleanup_dirs=[cleanup_dir] if cleanup_dir else [],
                 override_path=override,
-                ephemeral_session=cleanup_dir is not None,
             )
             self._status.showMessage(f"Sent to Peach: {node.path}")
         except (FileNotFoundError, RuntimeError, OSError) as exc:
@@ -1710,7 +1753,6 @@ class MainWindow(QMainWindow):
                 sources,
                 cleanup_dirs=cleanup_dirs,
                 override_path=override,
-                ephemeral_session=bool(cleanup_dirs),
             )
             msg = f"Sent {len(sources)} source(s) to Peach"
             if failed:
@@ -1724,6 +1766,20 @@ class MainWindow(QMainWindow):
                 )
         except (FileNotFoundError, RuntimeError, OSError) as exc:
             QMessageBox.warning(self, "Send to Peach", str(exc))
+
+    def _set_log_temp_dir(self) -> None:
+        current = self._settings.value("log_temp_dir", "", type=str)
+        text, ok = QInputDialog.getText(
+            self,
+            "Log Temp Directory",
+            "Directory to use for intermediate files during log conversion "
+            "(e.g. Apple Unified Log .tracev3 / .logarchive processing) — "
+            "leave blank to use the OS default temp location:",
+            QLineEdit.EchoMode.Normal,
+            current,
+        )
+        if ok:
+            self._settings.setValue("log_temp_dir", text.strip())
 
     def _set_peach_binary_path(self) -> None:
         current = self._settings.value("peach_binary_path", "", type=str)
@@ -1859,6 +1915,10 @@ class MainWindow(QMainWindow):
             widget.setProperty("crush_source_path", source_path)
         widget.setProperty("crush_vfs", vfs)
         idx = self._viewer_tabs.addTab(widget, self._tab_base_label(node))
+        widget.setProperty("crush_node", node)
+        widget.setProperty("crush_metadata", result.metadata)
+        idx = self._viewer_tabs.addTab(widget, label)
+        self._viewer_tabs.setTabToolTip(idx, node.path)
         self._viewer_tabs.setCurrentIndex(idx)
         self._refresh_tab_labels()
 
@@ -2496,7 +2556,14 @@ class MainWindow(QMainWindow):
     def _on_viewer_tab_changed(self, index: int) -> None:
         """Re-apply the live app palette to a viewer tab when it becomes
         visible, catching it up if it wasn't the current tab during a
-        Rainbow/'Merica tick (see _set_palette_everywhere)."""
+        Rainbow/'Merica tick (see _set_palette_everywhere), and refresh the
+        Properties panel to match the now-active tab.
+
+        Without this, the panel only ever reflected whichever tab was most
+        recently *opened* — switching back to an already-open tab left it
+        showing the previous tab's properties until something in the file
+        tree was clicked.
+        """
         if index < 0:
             return
         widget = self._viewer_tabs.widget(index)
@@ -2506,6 +2573,12 @@ class MainWindow(QMainWindow):
         if app is None:
             return
         self._propagate_palette_recursive(widget, app.palette())
+
+        node = widget.property("crush_node")
+        vfs = widget.property("crush_vfs")
+        if node is not None and vfs is not None:
+            metadata = widget.property("crush_metadata") or {}
+            self._props_panel.update_properties(node, metadata, vfs)
 
     def _apply_palette(self, pal: QPalette) -> None:
         """Set the application palette and a matching checkbox/radio-button
